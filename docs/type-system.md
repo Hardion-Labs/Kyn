@@ -60,12 +60,14 @@ A slice stores two values at runtime:
 - a `usize` length.
 
 Slices are aggregate values and may be passed, returned and copied inside Kyn.
-They are rejected at `extern`/`export` C ABI boundaries (`E0410`). A slice is
-constructed with an explicit cast from a pointer to a fixed-size array, or
-with the subslice syntax `slice[start..end]` / `array[start..end]`. `[]const T`
-prevents assignment to the pointed-at elements; `[]T` carries the mutability
-of its source. `slice.len` returns the length as `usize`. Slice indexing and
-subslicing are bounds-checked at runtime.
+`extern`/`export` signatures may use slices if the fields are compatible with a
+C `struct { ptr, usize }`; the boundary lowering uses the System V x86_64
+convention on Linux. A slice is constructed with an explicit cast from a
+pointer to a fixed-size array, or with the subslice syntax
+`slice[start..end]` / `array[start..end]`. `[]const T` prevents assignment to
+the pointed-at elements; `[]T` carries the mutability of its source.
+`slice.len` returns the length as `usize`. Slice indexing and subslicing are
+bounds-checked at runtime.
 
 ### 1.4 Arrays
 
@@ -214,12 +216,15 @@ pointer regardless of how the pointer variable itself was declared.
 
 - Struct and array values are constructed in place.
 - Struct and array values may be passed as aggregate arguments, returned from
-  internal Kyn functions and assigned/copied when source and destination have
-  the same type.
+  functions and assigned/copied when source and destination have the same
+  type.
 - Aggregate copies lower to contiguous loads/stores; LLVM's optimizer may
   promote or lower them according to the internal ABI.
-- `extern` and `export` functions reject aggregate parameters and returns
-  (`E0410`) in v0.1; pass a pointer across the C ABI.
+- `extern`/`export` functions pass integer-like aggregates ≤16 bytes by value
+  using the System V x86_64 calling convention on Linux. They are rejected
+  (`E0410`) on other hosts or when a field is not integer-like.
+- Slices may also cross the C ABI boundary when their layout matches a C
+  `struct { ptr, usize }`.
 - A pointer to an aggregate remains the preferred way to avoid large copies.
 
 ## 9. Explicit casts

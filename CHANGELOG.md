@@ -28,8 +28,9 @@ principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha
 - C ABI interoperability through `extern fn` / `export fn`, including a
   verified Kyn + C + Zig example.
 - Aggregate parameters and returns by value inside Kyn, aggregate assignment
-  and aggregate copies. `extern`/`export` functions reject aggregates in v0.1;
-  pass pointers across the C ABI.
+  and aggregate copies. `extern`/`export` functions pass integer-like
+  aggregates ≤16 bytes by value on x86_64-linux; arrays and floating-point
+  aggregates are rejected (`E0410`).
 - Global scalar and aggregate constants, including nested structs/arrays and
   enum globals, emitted as LLVM constants.
 - Runtime bounds checks for fixed arrays and runtime integer division traps.

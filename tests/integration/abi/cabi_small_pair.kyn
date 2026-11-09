@@ -1,0 +1,16 @@
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+extern fn c_sum(pair: Pair) i64;
+extern fn c_wrap() i64;
+
+export fn kyn_make(a: i64, b: i64) Pair {
+    return Pair { a: a, b: b };
+}
+
+fn main() i32 {
+    let direct: i64 = c_sum(Pair { a: 10, b: 20 });
+    return direct as i32 + c_wrap() as i32;
+}

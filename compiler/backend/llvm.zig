@@ -12,6 +12,7 @@ const types = @import("../types.zig");
 const diagnostics = @import("../diagnostics.zig");
 const analyzer = @import("../analyzer.zig");
 const symbol = @import("../symbol.zig");
+const sema_mod = @import("../sema.zig");
 
 pub const Error = error{OutOfMemory};
 
@@ -22,12 +23,20 @@ const FnCtx = struct {
     continue_stack: std.ArrayList(u32) = .empty,
 };
 
+const BoundaryClass = enum {
+    none,
+    small_1,
+    small_2,
+    memory,
+};
+
 pub const Lowering = struct {
     allocator: std.mem.Allocator,
     reporter: *diagnostics.Reporter,
     module: *ir.Module,
     globals: std.StringHashMap(u32),
     ctx: ?*FnCtx = null,
+    current_fd: ?*ast.FnDecl = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -96,12 +105,6 @@ pub const Lowering = struct {
     fn createFunction(self: *Lowering, fd: *ast.FnDecl) Error!void {
         const fn_ty = fd.ty orelse return;
         const info = fn_ty.fn_type;
-        var params = try self.allocator.alloc(ir.Param, fd.params.len);
-        for (fd.params, 0..) |param, i| {
-            const sym = param.sym orelse continue;
-            params[i] = .{ .local = sym.id, .ty = info.params[i] };
-        }
-
         const linkage: ir.Linkage = if (fd.is_extern)
             .declaration
         else if (fd.is_export or std.mem.eql(u8, fd.name, "main"))
@@ -109,12 +112,92 @@ pub const Lowering = struct {
         else
             .internal;
 
+        if (!fd.is_extern and !fd.is_export) {
+            var params = try self.allocator.alloc(ir.Param, fd.params.len);
+            for (fd.params, 0..) |param, i| {
+                const sym = param.sym orelse continue;
+                params[i] = .{ .local = sym.id, .ty = info.params[i] };
+            }
+            const function = try self.allocator.create(ir.Function);
+            function.* = .{
+                .name = fd.name,
+                .params = params,
+                .ret = info.ret,
+                .linkage = linkage,
+            };
+            try self.module.functions.append(self.allocator, function);
+            return;
+        }
+
+        var params_list: std.ArrayList(ir.Param) = .empty;
+        var hidden_id: u32 = 100_000;
+        const void_ty = try self.simpleType(.void);
+        const ptr_ty = try self.makePointer(void_ty, false);
+        const i64_ty = try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } });
+        const i128_ty = try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
+
+        const ret_expr = fd.ret_expr;
+        const ret_aggregate: bool = if (ret_expr) |re| blk: {
+            const ty = re.resolved orelse break :blk false;
+            break :blk ty.isAggregate();
+        } else false;
+        const ret_class: BoundaryClass = if (ret_aggregate)
+            self.aggregateBoundaryParam(ret_expr.?.resolved.?)
+        else
+            BoundaryClass.none;
+
+        var sret_info: ?*types.StructInfo = null;
+        if (ret_class == .memory) {
+            if (ret_expr) |re| {
+                if (re.resolved) |ty| {
+                    if (ty.* == .struct_type) sret_info = ty.struct_type;
+                }
+            }
+            try params_list.append(self.allocator, .{ .local = hidden_id, .ty = ptr_ty });
+            hidden_id += 1;
+        }
+
+        for (fd.params) |param| {
+            const ty = param.ty orelse (try self.simpleType(.invalid));
+            const class = self.aggregateBoundaryParam(ty);
+            switch (class) {
+                .small_2 => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = i64_ty });
+                    try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = i64_ty });
+                    hidden_id += 2;
+                },
+                .memory => {
+                    const struct_info = if (ty.* == .struct_type) ty.struct_type else null;
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = ptr_ty, .byval_type = struct_info });
+                    hidden_id += 1;
+                },
+                .small_1 => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = i64_ty });
+                    hidden_id += 1;
+                },
+                .none => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = ty });
+                    hidden_id += 1;
+                },
+            }
+        }
+        const params = try params_list.toOwnedSlice(self.allocator);
+
+        const ret_ty = switch (ret_class) {
+            .memory => void_ty,
+            .none => if (fd.ret_expr == null) void_ty else info.ret,
+            .small_1 => i64_ty,
+            .small_2 => i128_ty,
+        };
+
         const function = try self.allocator.create(ir.Function);
         function.* = .{
             .name = fd.name,
             .params = params,
-            .ret = info.ret,
+            .ret = ret_ty,
             .linkage = linkage,
+            .sret = ret_class == .memory,
+            .sret_type = sret_info,
         };
         try self.module.functions.append(self.allocator, function);
     }
@@ -123,8 +206,36 @@ pub const Lowering = struct {
         return self.ctx.?.function;
     }
 
-    fn addLocal(self: *Lowering, id: u32, name: []const u8, ty: *types.Type) Error!void {
-        try self.currentFunction().addLocal(self.allocator, id, name, ty);
+    fn simpleType(self: *Lowering, value: types.Type) Error!*types.Type {
+        const ty = try self.allocator.create(types.Type);
+        ty.* = value;
+        return ty;
+    }
+
+    fn aggregateBoundaryParam(self: *Lowering, ty: *types.Type) BoundaryClass {
+        _ = self;
+        if (!ty.isAggregate()) return .none;
+        const class = sema_mod.aggregateBoundaryClass(ty) orelse return .none;
+        return switch (class) {
+            .small_1 => .small_1,
+            .small_2 => .small_2,
+            .memory => .memory,
+        };
+    }
+
+    fn aggregateBoundaryRet(self: *Lowering, ret_expr: ?*ast.TypeExpr) BoundaryClass {
+        const expr = ret_expr orelse return .none;
+        const ty = expr.resolved orelse return .none;
+        return self.aggregateBoundaryParam(ty);
+    }
+
+    fn addLocal(self: *Lowering, id: u32, name: []const u8, ty: *types.Type, padding: ?u16) Error!void {
+        const hidden_padding: u16 = padding orelse blk: {
+            if (!ty.isAggregate()) break :blk 0;
+            const size = self.aggregateSize(ty) orelse break :blk 0;
+            break :blk if (size <= 8) 8 else if (size <= 16) 16 else @intCast(size);
+        };
+        try self.currentFunction().addLocal(self.allocator, id, name, ty, hidden_padding);
     }
 
     fn newBlock(self: *Lowering) Error!u32 {
@@ -359,23 +470,66 @@ pub const Lowering = struct {
         try self.emitTrapBranch(cond);
     }
 
-    fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {
-        const function = findFunction(self.module, fd.name) orelse return;
+    fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {        const function = findFunction(self.module, fd.name) orelse return;
         const ctx = try self.allocator.create(FnCtx);
         ctx.* = .{ .function = function };
         self.ctx = ctx;
+        self.current_fd = fd;
         defer self.ctx = null;
+        defer self.current_fd = null;
 
         _ = try self.newBlock();
 
-        for (fd.params, 0..) |param, i| {
+        const boundary = fd.is_extern or fd.is_export;
+        var visible_index: usize = if (boundary and self.aggregateBoundaryRet(fd.ret_expr) == .memory) 1 else 0;
+        for (fd.params) |param| {
             const sym = param.sym orelse continue;
-            try self.addLocal(sym.id, sym.name, function.params[i].ty);
-            try self.emit(.{ .store = .{
-                .ptr = .{ .local = sym.id },
-                .value = .{ .param = sym.id },
-                .ty = function.params[i].ty,
-            } });
+            const class = if (boundary) self.aggregateBoundaryParam(sym.ty) else BoundaryClass.none;
+            const padding: ?u16 = switch (class) {
+                .small_1, .small_2 => @intCast(self.aggregateSize(sym.ty) orelse 8),
+                .memory => @intCast(self.aggregateSize(sym.ty) orelse 16),
+                .none => null,
+            };
+            try self.addLocal(sym.id, sym.name, sym.ty, padding);
+
+            if (class != .none) {
+                const class_size = self.aggregateSize(sym.ty) orelse 0;
+                switch (class) {
+                    .small_1 => {
+                        if (function.params.len <= visible_index) break;
+                        const base = function.params[visible_index].local;
+                        try self.lowerPackedAggregate(.{ .local = sym.id }, class_size, .{ .param = base }, 0);
+                        visible_index += 1;
+                    },
+                    .small_2 => {
+                        if (function.params.len <= visible_index + 1) break;
+                        const lo = function.params[visible_index].local;
+                        const hi = function.params[visible_index + 1].local;
+                        try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 8, .{ .param = lo }, 0);
+                        try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 16, .{ .param = hi }, 8);
+                        visible_index += 2;
+                    },
+                    .memory => {
+                        if (function.params.len <= visible_index) break;
+                        const base = function.params[visible_index].local;
+                        try self.emit(.{ .copy_bytes = .{
+                            .destination = .{ .local = sym.id },
+                            .source = .{ .param = base },
+                            .length = @intCast(class_size),
+                        } });
+                        visible_index += 1;
+                    },
+                    else => unreachable,
+                }
+            } else {
+                if (function.params.len <= visible_index) break;
+                try self.emit(.{ .store = .{
+                    .ptr = .{ .local = sym.id },
+                    .value = .{ .param = function.params[visible_index].local },
+                    .ty = function.params[visible_index].ty,
+                } });
+                visible_index += 1;
+            }
         }
 
         try self.lowerBlock(body);
@@ -387,6 +541,46 @@ pub const Lowering = struct {
                 try self.emit(.{ .unreachable_ = {} });
             }
         }
+    }
+
+    fn aggregateSize(self: *Lowering, ty: *types.Type) ?usize {
+        _ = self;
+        const layout = sema_mod.aggregateLayoutGuess(ty) orelse return null;
+        return @intCast(layout.size);
+    }
+
+    fn lowerPackedAggregate(
+        self: *Lowering,
+        destination: ir.Value,
+        size: usize,
+        source: ir.Value,
+        offset: usize,
+    ) Error!void {
+        if (size <= offset) return;
+        const i64_ty = try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } });
+        const temp = self.module.ephemeral();
+        try self.addLocal(temp, "pack", i64_ty, null);
+        try self.emit(.{ .store = .{
+            .ptr = .{ .local = temp },
+            .value = source,
+            .ty = i64_ty,
+        } });
+
+        var destination_value = destination;
+        if (offset > 0) {
+            const offset_reg = try self.reg(i64_ty);
+            try self.emit(.{ .byte_offset = .{
+                .dst = offset_reg,
+                .base = destination,
+                .offset = @intCast(offset),
+            } });
+            destination_value = .{ .reg = offset_reg };
+        }
+        try self.emit(.{ .copy_bytes = .{
+            .destination = destination_value,
+            .source = .{ .local = temp },
+            .length = @intCast(@min(@as(usize, 8), size - offset)),
+        } });
     }
 
     // ------------------------------------------------------------------
@@ -410,7 +604,47 @@ pub const Lowering = struct {
             .return_stmt => |ret_stmt| {
                 if (ret_stmt.value) |expr| {
                     const value = try self.lowerExpr(expr);
-                    try self.emit(.{ .ret = .{ .value = value } });
+                    const function = self.currentFunction();
+                    const boundary = if (self.current_fd) |fd| fd.is_extern or fd.is_export else false;
+                    const ret_class = if (self.current_fd) |fd| blk: {
+                        const ret = fd.ret_expr orelse break :blk BoundaryClass.none;
+                        const ret_ty = ret.resolved orelse break :blk BoundaryClass.none;
+                        if (!boundary) break :blk BoundaryClass.none;
+                        break :blk self.aggregateBoundaryParam(ret_ty);
+                    } else BoundaryClass.none;
+                    const hidden_sret = boundary and ret_class == .memory;
+                    if (hidden_sret) {
+                        try self.emit(.{ .store = .{
+                            .ptr = .{ .param = function.params[0].local },
+                            .value = value,
+                            .ty = expr.ty.?,
+                        } });
+                        try self.emit(.{ .ret = .{ .value = null } });
+                    } else {
+                        if (ret_class == .small_1 or ret_class == .small_2) {
+                            const storage_ty = if (ret_class == .small_1)
+                                try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } })
+                            else
+                                try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
+                            const temp = self.module.ephemeral();
+                            try self.addLocal(temp, "pack", storage_ty, null);
+                            const storage_value_ty = expr.ty orelse try self.simpleType(.invalid);
+                            try self.emit(.{ .store = .{
+                                .ptr = .{ .local = temp },
+                                .value = value,
+                                .ty = storage_value_ty,
+                            } });
+                            const loaded = try self.reg(storage_ty);
+                            try self.emit(.{ .load = .{
+                                .dst = loaded,
+                                .ptr = .{ .local = temp },
+                                .ty = storage_ty,
+                            } });
+                            try self.emit(.{ .ret = .{ .value = .{ .reg = loaded } } });
+                        } else {
+                            try self.emit(.{ .ret = .{ .value = value } });
+                        }
+                    }
                 } else {
                     try self.emit(.{ .ret = .{ .value = null } });
                 }
@@ -430,7 +664,7 @@ pub const Lowering = struct {
     fn lowerVarDecl(self: *Lowering, vd: *ast.VarDecl) Error!void {
         const sym = vd.sym orelse return;
         const ty = vd.ty orelse return;
-        try self.addLocal(sym.id, sym.name, ty);
+        try self.addLocal(sym.id, sym.name, ty, null);
         const init_value = vd.init orelse return;
 
         if (ty.isAggregate() and isAggregateInitializer(init_value)) {
@@ -530,8 +764,8 @@ pub const Lowering = struct {
             .slice => |slice| try self.lowerSlice(expr, slice),
             .struct_init, .array_lit => blk: {
                 const ty = expr.ty orelse return .none;
-                const id = self.module.temp();
-                try self.addLocal(id, "tmp.agg", ty);
+                const id = self.module.ephemeral();
+                try self.addLocal(id, "tmp.agg", ty, null);
                 try self.lowerAggregateInto(.{ .local = id }, ty, expr);
                 const dst = try self.reg(ty);
                 try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = id }, .ty = ty } });
@@ -658,8 +892,8 @@ pub const Lowering = struct {
         _ = expr;
         const bool_ty = try self.allocator.create(types.Type);
         bool_ty.* = .bool;
-        const slot = self.module.temp();
-        try self.addLocal(slot, "tmp.cond", bool_ty);
+        const slot = self.module.ephemeral();
+        try self.addLocal(slot, "tmp.cond", bool_ty, null);
         const default_value: ir.Value = .{ .boolean = binary.op == .logical_or };
         try self.emit(.{ .store = .{ .ptr = .{ .local = slot }, .value = default_value, .ty = bool_ty } });
 
@@ -772,29 +1006,154 @@ pub const Lowering = struct {
             return .none;
         }
         const name = callee_sym.?.name;
-        const ret = expr.ty orelse return .none;
-        var args = try self.allocator.alloc(ir.Value, call.args.len);
-        var arg_types = try self.allocator.alloc(*types.Type, call.args.len);
-        for (call.args, 0..) |arg, i| {
-            args[i] = try self.lowerExpr(arg);
-            arg_types[i] = arg.ty orelse return .none;
+        const call_result = expr.ty orelse return .none;
+        const callee_boundary = callee_sym.?.is_extern or callee_sym.?.is_export;
+
+        if (!callee_boundary) {
+            const ret = expr.ty orelse return .none;
+            var args = try self.allocator.alloc(ir.Value, call.args.len);
+            var arg_types = try self.allocator.alloc(*types.Type, call.args.len);
+            for (call.args, 0..) |arg, i| {
+                args[i] = try self.lowerExpr(arg);
+                arg_types[i] = arg.ty orelse return .none;
+            }
+            var dst: ?u32 = null;
+            if (ret.* != .void) dst = try self.reg(ret);
+            try self.emit(.{ .call = .{
+                .dst = dst,
+                .name = name,
+                .args = args,
+                .arg_types = arg_types,
+                .ret = ret,
+            } });
+            return if (dst) |id| .{ .reg = id } else .none;
         }
+
+        const ret_class = self.aggregateBoundaryParam(call_result);
+
+        var byval_list: std.ArrayList(?*types.StructInfo) = .empty;
+        var args_list: std.ArrayList(ir.Value) = .empty;
+        var types_list: std.ArrayList(*types.Type) = .empty;
+        const i64_ty = try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } });
+        const i128_ty = try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
+        const void_ty = try self.simpleType(.void);
+        const ptr_ty = try self.makePointer(void_ty, false);
+
+        if (ret_class == .memory) {
+            const temp = self.module.ephemeral();
+            try self.addLocal(temp, "tmp.aggregate", call_result, null);
+            try args_list.append(self.allocator, .{ .local = temp });
+            try types_list.append(self.allocator, ptr_ty);
+            try byval_list.append(self.allocator, null);
+        }
+
+        for (call.args) |arg| {
+            const ty = arg.ty orelse try self.simpleType(.invalid);
+            switch (self.aggregateBoundaryParam(ty)) {
+                .none => {
+                    try args_list.append(self.allocator, try self.lowerExpr(arg));
+                    try types_list.append(self.allocator, ty);
+                    try byval_list.append(self.allocator, null);
+                },
+                .small_1 => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const loaded = try self.reg(i64_ty);
+                    try self.emit(.{ .load = .{ .dst = loaded, .ptr = slot, .ty = i64_ty } });
+                    try args_list.append(self.allocator, .{ .reg = loaded });
+                    try types_list.append(self.allocator, i64_ty);
+                    try byval_list.append(self.allocator, null);
+                },
+                .small_2 => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const elem_i8 = try self.simpleType(.char);
+                    const p0 = try self.byteOffset(slot, 0, elem_i8);
+                    const p8 = try self.byteOffset(slot, 8, elem_i8);
+                    const lo = try self.reg(i64_ty);
+                    const hi = try self.reg(i64_ty);
+                    try self.emit(.{ .load = .{ .dst = lo, .ptr = p0, .ty = i64_ty } });
+                    try self.emit(.{ .load = .{ .dst = hi, .ptr = p8, .ty = i64_ty } });
+                    try args_list.append(self.allocator, .{ .reg = lo });
+                    try args_list.append(self.allocator, .{ .reg = hi });
+                    try types_list.append(self.allocator, i64_ty);
+                    try types_list.append(self.allocator, i64_ty);
+                    try byval_list.append(self.allocator, null);
+                    try byval_list.append(self.allocator, null);
+                },
+                .memory => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    try args_list.append(self.allocator, slot);
+                    try types_list.append(self.allocator, ptr_ty);
+                    if (ty.* == .struct_type) {
+                        try byval_list.append(self.allocator, ty.struct_type);
+                    } else {
+                        try byval_list.append(self.allocator, null);
+                    }
+                },
+            }
+        }
+
+        const visible_types = try types_list.toOwnedSlice(self.allocator);
+        const args = try args_list.toOwnedSlice(self.allocator);
+        const byval_types = try byval_list.toOwnedSlice(self.allocator);
+        const value_ty = switch (ret_class) {
+            .small_1 => i64_ty,
+            .small_2 => i128_ty,
+            .memory, .none => void_ty,
+        };
+
         var dst: ?u32 = null;
-        if (ret.* != .void) dst = try self.reg(ret);
+        if (ret_class != .memory and ret_class != .none) dst = try self.reg(value_ty);
+        if (ret_class == .none and call_result.* != .void) dst = try self.reg(call_result);
+
         try self.emit(.{ .call = .{
             .dst = dst,
             .name = name,
             .args = args,
-            .arg_types = arg_types,
-            .ret = ret,
+            .arg_types = visible_types,
+            .ret = if (ret_class == .none) call_result else value_ty,
+            .sret = ret_class == .memory,
+            .sret_type = if (ret_class == .memory) blk: {
+                const ty = call_result;
+                if (ty.* == .struct_type) break :blk ty.struct_type;
+                break :blk null;
+            } else null,
+            .byval_types = byval_types,
         } });
-        return if (dst) |id| .{ .reg = id } else .none;
+
+        switch (ret_class) {
+            .none => return if (dst) |id| .{ .reg = id } else .none,
+            .small_1, .small_2 => {
+                const temp = self.module.ephemeral();
+                try self.addLocal(temp, "tmp.aggregate", call_result, null);
+                try self.emit(.{ .store = .{
+                    .ptr = .{ .local = temp },
+                    .value = .{ .reg = dst.? },
+                    .ty = value_ty,
+                } });
+                const result = try self.reg(call_result);
+                try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = temp }, .ty = call_result } });
+                return .{ .reg = result };
+            },
+            .memory => {
+                const hidden_ptr = args_list.items[0].local;
+                const result = try self.reg(call_result);
+                try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = hidden_ptr }, .ty = call_result } });
+                return .{ .reg = result };
+            },
+        }
+    }
+
+    fn byteOffset(self: *Lowering, base: ir.Value, offset: usize, elem_i8: *types.Type) Error!ir.Value {
+        _ = elem_i8;
+        const id = self.module.temp();
+        try self.emit(.{ .byte_offset = .{ .dst = id, .base = base, .offset = @intCast(offset) } });
+        return .{ .reg = id };
     }
 
     fn lowerSliceCast(self: *Lowering, target: *types.Type, source: *types.Type, value: ir.Value) Error!ir.Value {
         const array = source.pointer.elem.array;
-        const id = self.module.temp();
-        try self.addLocal(id, "tmp.slice", target);
+        const id = self.module.ephemeral();
+        try self.addLocal(id, "tmp.slice", target, null);
 
         const elem_ty = target.slice.elem;
         const pointer_slot_ty = try self.makePointer(elem_ty, false);
@@ -820,8 +1179,8 @@ pub const Lowering = struct {
             else => return lowered,
         }
         const value = try self.lowerExpr(expr);
-        const id = self.module.temp();
-        try self.addLocal(id, "tmp.agg", ty);
+        const id = self.module.ephemeral();
+        try self.addLocal(id, "tmp.agg", ty, null);
         try self.emit(.{ .store = .{ .ptr = .{ .local = id }, .value = value, .ty = ty } });
         return .{ .local = id };
     }
@@ -985,8 +1344,8 @@ pub const Lowering = struct {
     }
 
     fn makeSlice(self: *Lowering, target: *types.Type, pointer: ir.Value, length: ir.Value) Error!ir.Value {
-        const id = self.module.temp();
-        try self.addLocal(id, "tmp.slice", target);
+        const id = self.module.ephemeral();
+        try self.addLocal(id, "tmp.slice", target, null);
 
         const elem_ty = target.slice.elem;
         const element_slot = try self.makePointer(elem_ty, false);
@@ -1100,8 +1459,8 @@ pub const Lowering = struct {
             },
             .struct_init, .array_lit => blk: {
                 const ty = expr.ty orelse return .none;
-                const id = self.module.temp();
-                try self.addLocal(id, "tmp.agg", ty);
+                const id = self.module.ephemeral();
+                try self.addLocal(id, "tmp.agg", ty, null);
                 try self.lowerAggregateInto(.{ .local = id }, ty, expr);
                 break :blk .{ .local = id };
             },
@@ -1418,6 +1777,7 @@ pub const Emitter = struct {
         try writer.writeAll("; ModuleID = 'kyn'\n");
         try writer.writeAll("; Generated by the Kyn compiler. Do not edit.\n\n");
         try writer.writeAll("declare void @llvm.trap() noreturn nounwind\n\n");
+        try writer.writeAll("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n\n");
         try writer.writeAll("%kyn.slice = type { ptr, i64 }\n");
         if (self.module.structs.items.len > 0) try writer.writeByte('\n');
         for ([_]u16{ 8, 16, 32, 64, 128 }) |bits| {
@@ -1461,10 +1821,7 @@ pub const Emitter = struct {
         for (self.module.functions.items) |function| {
             if (function.linkage == .declaration) {
                 try writer.print("declare {s} @{s}(", .{ try self.typeString(function.ret), function.name });
-                for (function.params, 0..) |param, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    try self.emitType(writer, param.ty);
-                }
+                try self.emitParameters(writer, function);
                 try writer.writeAll(")\n");
             } else {
                 try self.emitFunction(writer, function);
@@ -1472,14 +1829,56 @@ pub const Emitter = struct {
         }
     }
 
+    fn emitParameters(self: *Emitter, writer: *std.Io.Writer, function: *ir.Function) !void {
+        for (function.params, 0..) |param, i| {
+            if (i > 0) try writer.writeAll(", ");
+            if (function.sret and i == 0) {
+                const info = function.sret_type orelse return error.OutOfMemory;
+                try writer.print("ptr sret(%struct.{s}) noalias writable %arg{d}", .{ info.name, param.local });
+                continue;
+            }
+            if (param.byval_type) |info| {
+                try writer.print("ptr byval(%struct.{s}) align {d} %arg{d}", .{ info.name, aggregateAlign(info), param.local });
+                continue;
+            }
+            try writer.print("{s} %arg{d}", .{ try self.typeString(param.ty), param.local });
+        }
+    }
+
+    fn aggregateAlign(info: *types.StructInfo) usize {
+        var alignment: u16 = 1;
+        for (info.fields) |field| {
+            alignment = @max(alignment, llvmAlignmentOfType(field.ty));
+        }
+        return alignment;
+    }
+
+    fn llvmAlignmentOfType(ty: *types.Type) u16 {
+        return switch (ty.*) {
+            .bool => 1,
+            .char => 4,
+            .int => |info| @min(@as(u16, @intCast(info.bits / 8)), 16),
+            .float => |bits| if (bits <= 32) 4 else 8,
+            .pointer => 8,
+            .enum_type => |info| llvmAlignmentOfType(info.backing),
+            .array => |array| llvmAlignmentOfType(array.elem),
+            .struct_type => |info| blk: {
+                var alignment: u16 = 1;
+                for (info.fields) |field| {
+                    alignment = @max(alignment, llvmAlignmentOfType(field.ty));
+                }
+                break :blk alignment;
+            },
+            .slice => 8,
+            else => 8,
+        };
+    }
+
     fn emitFunction(self: *Emitter, writer: *std.Io.Writer, function: *ir.Function) !void {
         self.current_ret_ty = function.ret;
         const linkage = if (function.linkage == .internal) "internal " else "dso_local ";
         try writer.print("define {s}{s} @{s}(", .{ linkage, try self.typeString(function.ret), function.name });
-        for (function.params, 0..) |param, i| {
-            if (i > 0) try writer.writeAll(", ");
-            try writer.print("{s} %arg{d}", .{ try self.typeString(param.ty), param.local });
-        }
+        try self.emitParameters(writer, function);
         try writer.writeAll(") {\n");
 
         for (function.blocks.items, 0..) |block, index| {
@@ -1490,7 +1889,11 @@ pub const Emitter = struct {
             }
             if (index == 0) {
                 for (function.locals.items) |local| {
-                    try writer.print("  %v{d} = alloca {s}\n", .{ local.id, try self.typeString(local.ty) });
+                    if (local.padding > 0) {
+                        try writer.print("  %v{d} = alloca [{d} x i8]\n", .{ local.id, local.padding });
+                    } else {
+                        try writer.print("  %v{d} = alloca {s}\n", .{ local.id, try self.typeString(local.ty) });
+                    }
                 }
             }
             for (block.insts.items) |inst| try self.emitInst(writer, inst);
@@ -1600,13 +2003,38 @@ pub const Emitter = struct {
                 try self.emitValue(writer, cast.value, cast.from);
                 try writer.print(" to {s}\n", .{to});
             },
+            .byte_offset => |offset| {
+                try writer.print("  %t{d} = getelementptr i8, ptr ", .{offset.dst});
+                try self.emitValue(writer, offset.base, null);
+                try writer.print(", i64 {d}\n", .{offset.offset});
+            },
+            .copy_bytes => |copy| {
+                try writer.writeAll("  call void @llvm.memcpy.p0.p0.i64(ptr ");
+                try self.emitValue(writer, copy.destination, null);
+                try writer.writeAll(", ptr ");
+                try self.emitValue(writer, copy.source, null);
+                try writer.print(", i64 {d}, i1 false)\n", .{copy.length});
+            },
             .call => |call| {
                 if (call.dst) |dst| try writer.print("  %t{d} = ", .{dst}) else try writer.writeAll("  ");
                 try writer.print("call {s} @{s}(", .{ try self.typeString(call.ret), call.name });
                 for (call.args, 0..) |arg, i| {
                     if (i > 0) try writer.writeAll(", ");
-                    try writer.print("{s} ", .{try self.typeString(call.arg_types[i])});
-                    try self.emitValue(writer, arg, call.arg_types[i]);
+                    const byval_type = if (i < call.byval_types.len) call.byval_types[i] else null;
+                    const local_id = switch (arg) {
+                        .local => |id| id,
+                        else => 0,
+                    };
+                    if (call.sret and i == 0) {
+                        const info = call.sret_type orelse return error.OutOfMemory;
+                        try writer.print("ptr sret(%struct.{s}) noalias writable %v{d}", .{ info.name, local_id });
+                    } else if (byval_type) |info| {
+                        const alignment = aggregateAlign(info);
+                        try writer.print("ptr byval(%struct.{s}) align {d} %v{d}", .{ info.name, alignment, local_id });
+                    } else {
+                        try writer.print("{s} ", .{try self.typeString(call.arg_types[i])});
+                        try self.emitValue(writer, arg, call.arg_types[i]);
+                    }
                 }
                 try writer.writeAll(")\n");
             },

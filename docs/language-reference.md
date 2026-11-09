@@ -147,9 +147,12 @@ fn log_message() {
 
 - Parameters are `name: Type`, separated by commas.
 - The return type follows the parameter list. Omitted means `void`.
-- Aggregate parameters and aggregate return types use the internal Kyn ABI.
-  They are not supported across `extern`/`export` C ABI boundaries in v0.1;
-  pass a pointer instead. Arrays are also not valid C prototypes.
+- Aggregate parameters and aggregate return types use the internal Kyn ABI by
+  default. In `extern`/`export` signatures, integer-like aggregates ≤16 bytes
+  are passed by value following the System V x86_64 calling convention on
+  Linux. Slice types (`[]T`, `[]const T`) may be used in boundary signatures if
+  the fields match the C struct's layout (`ptr` followed by `usize`). Arrays by
+  value and floating-point aggregates at boundaries are rejected (`E0410`).
 - A function with a non-void return type must return on every path; otherwise
   `E0414`.
 - `return;` is valid only in a `void` function.
@@ -384,8 +387,8 @@ let sum: i32 = add(1, 2);
   its parameter type.
 - Arguments are evaluated left to right.
 - Aggregate arguments by value are passed by value within Kyn. `extern` and
-  `export` functions reject aggregate arguments and returns in v0.1; pass a
-  pointer instead.
+  `export` functions pass integer-like aggregates ≤16 bytes by value on
+  x86_64-linux; they are rejected (`E0410`) otherwise.
 
 ### 5.7 Casts
 
@@ -489,7 +492,8 @@ The following are rejected or simply not part of v0.1:
 - const-polymorphic slice constructors and additional slice ergonomics;
 - generics, traits, interfaces, operator overloading;
 - variadic functions and variadic `extern` declarations;
-- aggregate parameters/returns across `extern`/`export` C ABI boundaries;
+- arrays as value parameters/returns; aggregates containing floating-point
+  fields across `extern`/`export` boundaries;
 - indirect calls and first-class function values;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;

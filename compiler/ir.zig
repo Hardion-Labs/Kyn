@@ -48,12 +48,14 @@ pub const StringConst = struct {
 pub const Param = struct {
     local: u32,
     ty: *Type,
+    byval_type: ?*types.StructInfo = null,
 };
 
 pub const Local = struct {
     id: u32,
     name: []const u8,
     ty: *Type,
+    padding: u16 = 0,
 };
 
 pub const UnOp = enum {
@@ -144,12 +146,25 @@ pub const Inst = union(enum) {
         to: *Type,
         value: Value,
     },
+    byte_offset: struct {
+        dst: u32,
+        base: Value,
+        offset: u64,
+    },
+    copy_bytes: struct {
+        destination: Value,
+        source: Value,
+        length: u32,
+    },
     call: struct {
         dst: ?u32,
         name: []const u8,
         args: []Value,
         arg_types: []*Type,
         ret: *Type,
+        sret: bool = false,
+        sret_type: ?*types.StructInfo = null,
+        byval_types: []const ?*types.StructInfo = &.{},
     },
     slice_field_ptr: struct {
         dst: u32,
@@ -206,15 +221,18 @@ pub const Function = struct {
     params: []Param,
     ret: *Type,
     linkage: Linkage,
+    sret: bool = false,
+    sret_type: ?*types.StructInfo = null,
+    byval_params: []bool = &.{},
     locals: std.ArrayList(Local) = .empty,
     blocks: std.ArrayList(*Block) = .empty,
     current: usize = 0,
 
-    pub fn addLocal(self: *Function, allocator: std.mem.Allocator, id: u32, name: []const u8, ty: *Type) !void {
+    pub fn addLocal(self: *Function, allocator: std.mem.Allocator, id: u32, name: []const u8, ty: *Type, padding: u16) !void {
         for (self.locals.items) |local| {
             if (local.id == id) return;
         }
-        try self.locals.append(allocator, .{ .id = id, .name = name, .ty = ty });
+        try self.locals.append(allocator, .{ .id = id, .name = name, .ty = ty, .padding = padding });
     }
 
     pub fn block(self: *Function, id: u32) *Block {
@@ -231,6 +249,7 @@ pub const Module = struct {
     enums: std.ArrayList(*types.EnumInfo) = .empty,
     next_temp: u32 = 1,
     next_label: u32 = 1,
+    ephemeral_id: u32 = 100_000,
     reg_types: std.AutoHashMap(u32, *Type),
 
     pub fn init(allocator: std.mem.Allocator) Module {
@@ -243,6 +262,12 @@ pub const Module = struct {
     pub fn temp(self: *Module) u32 {
         const id = self.next_temp;
         self.next_temp += 1;
+        return id;
+    }
+
+    pub fn ephemeral(self: *Module) u32 {
+        const id = self.ephemeral_id;
+        self.ephemeral_id += 1;
         return id;
     }
 

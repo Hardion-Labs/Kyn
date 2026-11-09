@@ -26,8 +26,9 @@ version number yet. Milestones below are directions, not release promises.
 
 ## Next direction
 
-- Decide and specify C ABI lowering for aggregates and slices before exposing
-  them across `extern`/`export`.
+- Decide and specify general-purpose C ABI lowering for every aggregate type,
+  including floating-point members and cross-compilation targets, before
+  exposing them across `extern`/`export` unconditionally.
 - Add const-polymorphic slicing and additional slice ergonomics.
 - Add remaining runtime policy for traps: null dereference is checked in every
   profile, but profile-specific policies remain intentionally unimplemented.

@@ -1,0 +1,17 @@
+struct Big {
+    a: i64,
+    b: i64,
+    c: i64,
+}
+
+extern fn c_sum(big: Big) i64;
+extern fn c_wrap() i64;
+
+export fn kyn_make(a: i64, b: i64, c: i64) Big {
+    return Big { a: a, b: b, c: c };
+}
+
+fn main() i32 {
+    let direct: i64 = c_sum(Big { a: 10, b: 20, c: 30 });
+    return direct as i32 + c_wrap() as i32;
+}

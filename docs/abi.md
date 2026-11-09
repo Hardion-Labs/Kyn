@@ -17,9 +17,11 @@ extern fn free(ptr: *u8);
 - The Kyn name is used verbatim as the linker symbol. There is no mangling.
 - Parameters and return types must have a C-compatible representation.
 - Calls use the default C calling convention.
-- Aggregate parameters and aggregate return types, including slices, are not
-  supported across the C ABI in v0.1 (`E0410`); pass a pointer plus length, or
-  use a plain C struct/pointer ABI instead.
+- Aggregate parameters and aggregate return types, including slices, are
+  supported when every field is integer-like and the size is ≤16 bytes. Arrays
+  and floating-point aggregates are rejected (`E0410`). Slice boundaries
+  require a matching C struct `{ ptr, usize }`.
+- Only the x86_64 System V calling convention is supported in v0.1.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
 
@@ -62,7 +64,7 @@ available. Other `fn` declarations use internal linkage.
 | `usize`/`isize` | `size_t`/`ssize_t` (currently 64-bit) | `i64` |
 | `*T`, `*const T` | `T *`, `const T *` | `ptr` |
 | `[N]T` | `T[N]` (layout only) | `[N x T]` |
-| `struct S` | `struct S` (layout only) | `%struct.S` |
+| `struct S` | `struct S` (layout only; by value where supported) | `%struct.S` |
 | `enum E: U` | integer backing type `U` | backing integer |
 
 Caveats:
@@ -74,11 +76,12 @@ Caveats:
   `u8`/`i32` in `extern` signatures when interoperating with code that is
   sensitive to this.
 - `usize`/`isize` are currently fixed at 64 bits; see the type-system document.
-- Arrays and structs are compatible in layout for plain C declarations, but
-  v0.1 cannot pass or return them by value across the C ABI. Slices are also
-  not C-compatible aggregates. Use pointers.
-  Internal Kyn functions can use aggregates and slices by value; those ABIs
-  are not C ABI contracts.
+- Plain C-layout structs are passed by value up to 16 bytes on x86_64-linux
+  when every field is integer-like. Larger aggregates use the hidden-pointer
+  `byval`/`sret` form, matching the System V calling convention. Arrays are
+  not allowed by value in C prototypes; pass a pointer instead.
+- Slices are passed by value as pointer+length, matching a C
+  `struct { ptr base; size_t len; }` layout.
 - Enums are passed as their backing integer, but a C enum's width is
   implementation-defined. Declare the same backing width explicitly on both
   sides.

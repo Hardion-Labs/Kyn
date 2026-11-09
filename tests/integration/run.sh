@@ -205,10 +205,47 @@ fi
 
 echo "interop (Kyn + C + Zig)"
 
+fixture_dir="$ROOT/tests/integration/abi"
+CC=${CC:-clang}
+
 interop_dir="$TMP/hybrid"
 mkdir -p "$interop_dir"
 cp -R "$ROOT/examples/hybrid/src" "$ROOT/examples/hybrid/zig" "$interop_dir/"
 cp "$ROOT/examples/hybrid/kyn.build" "$interop_dir/kyn.build"
+for case_file in "$fixture_dir"/*.kyn; do
+    name=$(basename "$case_file" .kyn)
+    expected_exit=0
+    if [ -f "${case_file%.kyn}.exit" ]; then
+        expected_exit=$(tr -d '[:space:]' <"${case_file%.kyn}.exit")
+    fi
+
+    c_file="${case_file%.kyn}.c"
+
+    kyn_obj="$TMP/$name-kyn.o"
+    c_obj="$TMP/$name-c.o"
+    executable="$TMP/$name-fixture"
+    fixture_status=0
+
+    "$KYNC" emit-obj "$case_file" -o "$kyn_obj" >/dev/null 2>"$TMP/$name-kyn.stderr" || fixture_status=$?
+    if [ "$fixture_status" -eq 0 ]; then
+        "$CC" -c "$c_file" -o "$c_obj" 2>"$TMP/$name-c.stderr" || fixture_status=$?
+    fi
+    if [ "$fixture_status" -eq 0 ]; then
+        "$CC" "$kyn_obj" "$c_obj" -o "$executable" 2>"$TMP/$name-link.stderr" || fixture_status=$?
+    fi
+
+    if [ "$fixture_status" -eq 0 ]; then
+        run_status=0
+        "$executable" >/dev/null 2>&1 || run_status=$?
+        if [ "$run_status" -eq "$expected_exit" ]; then
+            ok "$name (exit $expected_exit)"
+        else
+            bad "$name: expected exit $expected_exit, got $run_status" "$(cat "$TMP/$name-kyn.stderr" "$TMP/$name-c.stderr" "$TMP/$name-link.stderr")"
+        fi
+    else
+        bad "$name: compile or link failed" "$(cat "$TMP/$name-kyn.stderr" "$TMP/$name-c.stderr" "$TMP/$name-link.stderr")"
+    fi
+done
 
 build_log="$TMP/interop-build.log"
 status=0

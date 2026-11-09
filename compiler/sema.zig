@@ -12,6 +12,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const types = @import("types.zig");
+const builtin = @import("builtin");
 const symbol = @import("symbol.zig");
 const diagnostics = @import("diagnostics.zig");
 const source = @import("source.zig");
@@ -249,8 +250,8 @@ pub const Sema = struct {
             param.sym = param_sym;
             if (ty.* == .void) {
                 try self.reporter.err("E0410", param.span, "parameter '{s}' cannot have type 'void'", .{param.name});
-            } else if (is_c_boundary and ty.isAggregate()) {
-                try self.reporter.err("E0410", param.span, "aggregate parameter '{s}' is not supported across the C ABI yet; pass a pointer", .{param.name});
+            } else if (is_c_boundary and ty.isAggregate() and aggregateBoundaryClass(ty) == null) {
+                try self.reporter.err("E0410", param.span, "aggregate parameter '{s}' is not supported across the C ABI; pass a pointer or use integer-like scalar fields", .{param.name});
             }
             params[i] = ty;
         }
@@ -260,8 +261,8 @@ pub const Sema = struct {
             break :blk ty;
         } else self.prims.void;
 
-        if (is_c_boundary and ret.isAggregate()) {
-            try self.reporter.err("E0410", fd.span, "aggregate return type is not supported across the C ABI yet; return a pointer", .{});
+        if (is_c_boundary and ret.isAggregate() and aggregateBoundaryClass(ret) == null) {
+            try self.reporter.err("E0410", fd.span, "aggregate return type is not supported across the C ABI; return a pointer or use integer-like scalar fields", .{});
         }
         const fn_ty = try types.makeFn(self.allocator, params, ret);
         fd.ty = fn_ty;
@@ -1365,6 +1366,50 @@ pub fn literalIntValue(expr: *ast.Expr) ?i128 {
     return analyzer_mod.constInt(expr);
 }
 
+pub const BoundaryClass = enum {
+    small_1,
+    small_2,
+    memory,
+};
+
+pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
+    if (builtin.target.os.tag != .linux or builtin.target.cpu.arch != .x86_64) return null;
+    const layout = aggregateLayoutGuess(ty) orelse return null;
+    if (layout.size <= 8) return .small_1;
+    if (layout.size <= 16) return .small_2;
+    return .memory;
+}
+
+pub const AggregateLayout = struct {
+    size: u64,
+    align_: u64,
+};
+
+pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
+    return switch (ty.*) {
+        .slice => .{ .size = 16, .align_ = 8 },
+        .struct_type => |info| blk: {
+            var size: u64 = 0;
+            var align_: u64 = 1;
+            for (info.fields) |field| {
+                const field_layout = aggregateLayoutGuess(field.ty) orelse return null;
+                size = std.mem.alignForward(u64, size, field_layout.align_);
+                size += field_layout.size;
+                align_ = @max(align_, field_layout.align_);
+            }
+            size = std.mem.alignForward(u64, size, align_);
+            break :blk .{ .size = size, .align_ = align_ };
+        },
+        .bool => .{ .size = 1, .align_ = 1 },
+        .char => .{ .size = 4, .align_ = 4 },
+        .int => |info| .{ .size = @intCast(info.bits / 8), .align_ = @intCast(@min(@as(u64, info.bits / 8), 16)) },
+        .float => null,
+        .pointer => .{ .size = 8, .align_ = 8 },
+        .enum_type => |info| aggregateLayoutGuess(info.backing),
+        else => null,
+    };
+}
+
 pub fn isConstInitializer(expr: *ast.Expr) bool {
     return switch (expr.kind) {
         .int_lit, .float_lit, .bool_lit, .char_lit, .string_lit, .null_lit => true,
@@ -1613,20 +1658,20 @@ test "aggregate parameters and returns are supported within Kyn" {
     );
 }
 
-test "external functions reject aggregate parameters and returns" {
-    try expectSemanticError(
+test "external functions accept aggregate parameters and returns in the C ABI" {
+    try expectClean(
         \\struct Point { x: i32, y: i32 }
         \\extern fn c_sum(p: Point) i32;
         \\fn main() i32 { return 0; }
-    , "E0410");
+    );
 
-    try expectSemanticError(
+    try expectClean(
         \\struct Point { x: i32, y: i32 }
         \\export fn kyn_make(x: i32, y: i32) Point {
         \\    return Point { x: x, y: y };
         \\}
         \\fn main() i32 { return 0; }
-    , "E0410");
+    );
 }
 
 test "global enum and aggregate constants are accepted" {
@@ -1650,7 +1695,7 @@ test "global initializer with a function call is rejected" {
     , "E0412");
 }
 
-test "slices are accepted inside Kyn and rejected at C ABI boundaries" {
+test "slices are accepted at C ABI boundaries with pointer+length layout" {
     try expectClean(
         \\fn sum(values: []i32) i32 {
         \\    var total: i32 = 0;
@@ -1667,10 +1712,10 @@ test "slices are accepted inside Kyn and rejected at C ABI boundaries" {
         \\}
     );
 
-    try expectSemanticError(
+    try expectClean(
         \\extern fn c_sum(values: []i32) i32;
         \\fn main() i32 { return 0; }
-    , "E0410");
+    );
 }
 
 test "const slices can be created from immutable arrays and read" {

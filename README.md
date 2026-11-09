@@ -121,7 +121,7 @@ fn main() i32 {
 - Field access through pointers uses `->`; field access on values uses `.`.
 - Conditions must be `bool`.
 - Numeric conversions require `as`.
-- Kyn and C can call each other through the C ABI; v0.1 supports the scalar call surface, not variadics or aggregate-by-value extern arguments.
+- Kyn and C can call each other through the C ABI; v0.1 supports the scalar call surface, integer-like aggregates up to 16 bytes by value, and slices by value when represented as `struct { ptr, usize }`. Variadics and floating-point aggregates in boundary signatures are not supported yet.
 
 ---
 
@@ -200,11 +200,14 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ❌ Runtime checks for raw pointers and arbitrary indexing | No bounds metadata |
 | ❌ Standard library and runtime | Planned |
 
-Aggregate by-value support exists **inside Kyn only**:
+Aggregate by-value support across the C ABI is limited:
 
 - Struct and array parameters/returns inside Kyn: ✅
 - Aggregate assignment and copies inside Kyn: ✅
-- Aggregate parameters/returns across `extern`/`export` C ABI boundaries: ❌ (`E0410`); pass a pointer
+- Integer-like aggregates ≤16 bytes by value across `extern`/`export`: ✅ (`E0410` rejected; `x86_64`-Linux)
+- Aggregate types containing floating-point fields across `extern`/`export`: ❌ (`E0410`)
+- Arrays by value across `extern`/`export`: ❌ (`E0410`); pass a pointer
+- Slices by value (`[]T`, `[]const T`) across `extern`/`export`: ✅ (`{ ptr, usize }` layout)
 
 Unsupported constructs are rejected with diagnostics, rather than silently compiled as undefined behavior.
 See [Diagnostic codes](docs/diagnostics.md) for the stable codes.
@@ -250,7 +253,7 @@ The integration suite covers:
 - Version metadata consistency across build files and installed tools
 - `emit-llvm` and `emit-obj` smoke tests
 - A Kyn + C + Zig executable built by `kyn-build`
-- Aggregate by-value behavior inside Kyn
+- Aggregate by-value behavior inside Kyn and across the C ABI boundary
 
 Release readiness can be audited without creating a tag or release:
 
@@ -281,7 +284,7 @@ build.zig            Builds the toolchain and wires test steps
 | Milestone | Status |
 |:---|:---|
 | `v0.1.0-alpha.1` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1) |
-| C ABI lowering for aggregates and slices | 🔜 Planned |
+| C ABI lowering for integer-like aggregates and slices | ✅ In `main`, not in `v0.1.0-alpha.1` |
 | Const-polymorphic slicing and subslice syntax | 🔜 Planned |
 | Modules and package manifest | 🔜 Planned |
 
