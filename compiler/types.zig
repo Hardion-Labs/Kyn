@@ -63,6 +63,8 @@ pub const SliceInfo = struct {
 
 pub const StructInfo = struct {
     name: []const u8,
+    owner_module_id: u32 = 0,
+    is_public: bool = true,
     fields: []Field = &.{},
     /// Set once the declaration has been fully checked, to reject recursion by value.
     complete: bool = false,
@@ -77,6 +79,8 @@ pub const Variant = struct {
 
 pub const EnumInfo = struct {
     name: []const u8,
+    owner_module_id: u32 = 0,
+    is_public: bool = true,
     backing: *Type,
     variants: []Variant = &.{},
     complete: bool = false,

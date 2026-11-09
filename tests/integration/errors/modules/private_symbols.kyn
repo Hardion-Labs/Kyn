@@ -1,0 +1,2 @@
+private struct HiddenType { value: i32 }
+private fn hidden_function() i32 { return 1; }

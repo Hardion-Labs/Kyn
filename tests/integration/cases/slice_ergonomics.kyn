@@ -1,0 +1,65 @@
+enum Sign {
+    Neg = -2,
+    Zero = 0,
+    Pos = 3,
+}
+
+struct Pair {
+    a: i32,
+    b: i32,
+}
+
+const FIXED: [5]i32 = [2, 4, 6, 8, 10];
+const FIXED_LEN: usize = FIXED.len;
+
+fn sum_const(xs: []const i32) i32 {
+    var acc: i32 = 0;
+    var i: usize = 0;
+    while (i < xs.len) {
+        acc += xs[i];
+        i += 1;
+    }
+    return acc;
+}
+
+fn bump_tail(xs: []i32) {
+    let p: *i32 = xs.ptr;
+    var i: usize = 0;
+    while (i < xs.len) {
+        *(p + (i as isize)) += 1;
+        i += 1;
+    }
+}
+
+fn main() i32 {
+    var data: [FIXED.len]i32 = [1, 2, 3, 4, 5];
+
+    let all_mut: []i32 = data[..];
+    bump_tail(all_mut[3..]);
+
+    let s_from_mut: i32 = sum_const(all_mut);
+    let s_head: i32 = sum_const(data[..2]);
+    let s_const: i32 = sum_const(FIXED[1..][..3]);
+    let empty1: []const i32 = FIXED[5..];
+    let empty2: []const i32 = data[..0];
+
+    let view: []const i32 = FIXED[..];
+    let vp: *const []const i32 = &view;
+    let ap: *const [5]i32 = &FIXED;
+    var pairs: [3]Pair = [
+        Pair { a: 1, b: 2 },
+        Pair { a: 3, b: 4 },
+        Pair { a: 7, b: 8 }
+    ];
+    let p0: *Pair = &pairs[0];
+    let p2: *Pair = p0 + 2;
+    let dist: i32 = (p2 - p0) as i32;
+    let p2a: i32 = p2->a;
+
+    let meta: i32 = (FIXED_LEN as i32) + (vp->len as i32) + (ap->len as i32)
+        + (*(vp->ptr)) + (empty1.len as i32) + (empty2.len as i32);
+
+    let sign_delta: i32 = (Sign.Pos as i32) + (Sign.Neg as i32);
+
+    return s_from_mut + s_head + s_const + dist + p2a + meta + sign_delta;
+}

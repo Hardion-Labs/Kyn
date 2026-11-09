@@ -1,0 +1,2 @@
+import "modules/private_return_api.kyn";
+fn main() i32 { let value = make_hidden(); return 0; }

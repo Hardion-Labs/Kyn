@@ -1,0 +1,6 @@
+fn main() i32 {
+    var values: [3]i32 = [1, 2, 3];
+    var s: []i32 = values[..];
+    s.len = 10;
+    return s.len as i32;
+}

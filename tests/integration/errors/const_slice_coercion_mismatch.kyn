@@ -1,0 +1,6 @@
+fn main() i32 {
+    let values: [3]i32 = [1, 2, 3];
+    let ro: []const i32 = values[..];
+    let rw: []i32 = ro;
+    return rw[0];
+}

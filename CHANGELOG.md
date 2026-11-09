@@ -4,6 +4,45 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
+## [Unreleased]
+
+### Added
+
+- Explicit relative-path Kyn imports with deterministic dependency-first loading, once-only module graph traversal, source-aware diagnostics, and cycle/missing-file checks. Imports may declare aliases for qualified function/value/type references. Declarations still share one global name namespace; top-level `private` declarations are enforced across source files.
+- Transitive `.kyn` import contents are included in `kyn-build` SHA-256 cache stamps.
+- Open-ended and bounded slice expressions (`base[..]`, `base[start..]`,
+  `base[..end]`, `base[start..end]`) across fixed arrays, pointers to fixed
+  arrays, and slices, with a zero-branch fast path for `base[..]`.
+- Const-polymorphic slicing and one-way implicit `[]T -> []const T`
+  assignability when `T` matches exactly, while keeping `[]const T`
+  non-assignable to `[]T` and nested slice/pointer element types invariant.
+- Read-only `slice.ptr` (`*T` / `*const T`), `array.len` (`usize`, usable in
+  constant expressions on fixed-array identifiers and constant array literals),
+  and `->len` / `->ptr` through pointers to slices and arrays.
+- Diagnostic `E0464` rejecting `&` on non-lvalue expressions, plus accurate
+  compound type formatting (`[]T`, `[]const T`, `*T`, `*const T`, `[N]T`) in
+  semantic diagnostics.
+- Compile-time bounds checking (`E0502`) on constant slice ranges and negative
+  constant slice indices, and provable/runtime `null` checks (`E0506` / trap)
+  when slicing or slice-casting pointers to arrays.
+- Executable C ABI slice and `< 8`-byte global aggregate interoperability test
+  (`tests/integration/abi/cabi_slice.{kyn,c}`) and persistent continuity record
+  ([docs/continuity.md](docs/continuity.md)).
+
+### Fixed
+
+- Non-lvalue enforcement on `.len` and `.ptr` properties (`E0441` instead of
+  reaching LLVM lvalue lowering).
+- Immutable `const` and `let` global mutability tracking (`E0442` on mutation,
+  `*const` / `[]const` on address-of and slicing).
+- Default `enum` backing type aligned with the specification (`i32`).
+- Pointer arithmetic with integer literals (`p + 1`, `p - 1`) and non-integer
+  pointee types, plus pointer difference (`p - q`) on struct and slice
+  pointers.
+- Safe zero-padded register packing for `< 8`-byte and `< 16`-byte aggregates
+  in `extern`/`export` C ABI calls and explicit natural alignment on padded
+  aggregate `alloca` stack slots.
+
 ## [0.1.0-alpha.2] - 2026-11-09
 
 C ABI boundary support for integer-like aggregates.

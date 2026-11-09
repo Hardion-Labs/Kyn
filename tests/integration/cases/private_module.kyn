@@ -1,0 +1,2 @@
+import "modules/private_api.kyn";
+fn main() i32 { return public_api(); }

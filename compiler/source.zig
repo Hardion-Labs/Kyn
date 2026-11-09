@@ -1,6 +1,6 @@
 //! Source file management and offset/line/column conversion.
 //!
-//! A `Source` owns the bytes of one compilation unit and a lazily-built table
+//! A `Source` owns one source file's bytes and a lazily-built table
 //! of line start offsets. All compiler stages address source text by byte
 //! offset; only diagnostics and tooling convert those offsets to line/column.
 
@@ -9,6 +9,7 @@ const std = @import("std");
 pub const Span = struct {
     start: u32,
     end: u32,
+    source_id: u32 = 0,
 
     pub fn init(start: usize, end: usize) Span {
         return .{ .start = @intCast(start), .end = @intCast(end) };
@@ -20,7 +21,7 @@ pub const Span = struct {
     }
 
     pub fn join(a: Span, b: Span) Span {
-        return .{ .start = @min(a.start, b.start), .end = @max(a.end, b.end) };
+        return .{ .start = @min(a.start, b.start), .end = @max(a.end, b.end), .source_id = a.source_id };
     }
 };
 
@@ -34,8 +35,13 @@ pub const Source = struct {
     text: []const u8,
     line_starts: []const u32,
     allocator: std.mem.Allocator,
+    source_id: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8, text: []const u8) !Source {
+        return initWithId(allocator, path, text, 0);
+    }
+
+    pub fn initWithId(allocator: std.mem.Allocator, path: []const u8, text: []const u8, source_id: u32) !Source {
         var starts: std.ArrayList(u32) = .empty;
         errdefer starts.deinit(allocator);
 
@@ -51,7 +57,12 @@ pub const Source = struct {
             .text = text,
             .line_starts = try starts.toOwnedSlice(allocator),
             .allocator = allocator,
+            .source_id = source_id,
         };
+    }
+
+    pub fn span(self: *const Source, start: usize, end: usize) Span {
+        return .{ .start = @intCast(start), .end = @intCast(end), .source_id = self.source_id };
     }
 
     pub fn deinit(self: *Source) void {

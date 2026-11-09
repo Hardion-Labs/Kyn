@@ -17,6 +17,11 @@
 //! SHA-256 of its configuration and every input file matches the stored stamp.
 
 const std = @import("std");
+const compiler_frontend = @import("kyn_compiler_frontend");
+const source_mod = compiler_frontend.source;
+const diagnostics_mod = compiler_frontend.diagnostics;
+const lexer_mod = compiler_frontend.lexer;
+const parser_mod = compiler_frontend.parser;
 
 const version = "0.1.0-alpha.2";
 
@@ -194,6 +199,9 @@ fn buildTarget(
     for (target.kyn_sources.items) |source| {
         hasher.update(source);
         try hashFile(arena, io, &hasher, project_dir, source);
+        var visited = std.StringHashMap(void).init(arena);
+        const absolute = try std.fs.path.resolve(arena, &.{ project_dir, source });
+        try hashKynImports(arena, io, &hasher, absolute, &visited, false);
     }
     for (target.c_sources.items) |source| {
         hasher.update(source);
@@ -379,6 +387,42 @@ fn hashFile(
         return error.FileNotFound;
     };
     hasher.update(data);
+}
+
+fn hashKynImports(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    hasher: *std.crypto.hash.sha2.Sha256,
+    path: []const u8,
+    visited: *std.StringHashMap(void),
+    hash_self: bool,
+) !void {
+    if (visited.contains(path)) return;
+    try visited.put(path, {});
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 * 1024 * 1024)) catch |err| {
+        std.debug.print("kyn-build: cannot read Kyn source '{s}': {s}\n", .{ path, @errorName(err) });
+        return error.FileNotFound;
+    };
+    if (hash_self) {
+        hasher.update(path);
+        hasher.update(text);
+    }
+    const src = try source_mod.Source.init(arena, path, text);
+    const reporter = try arena.create(diagnostics_mod.Reporter);
+    reporter.* = diagnostics_mod.Reporter.init(arena, &src);
+    var lex = lexer_mod.Lexer.init(arena, &src, reporter);
+    const tokens = try lex.tokenize();
+    var parser = parser_mod.Parser.init(arena, tokens, reporter);
+    const program = try parser.parse();
+    // The real kync invocation remains responsible for reporting source errors.
+    // Continue with imports recovered by the parser so diagnostics are not masked.
+    const dir = std.fs.path.dirname(path) orelse ".";
+    for (program.imports) |imp| {
+        const imported = try std.fs.path.resolve(arena, &.{ dir, imp.path });
+        hasher.update("KynImport\x00");
+        hasher.update(imported);
+        try hashKynImports(arena, io, hasher, imported, visited, true);
+    }
 }
 
 fn fileExists(io: std.Io, path: []const u8) bool {

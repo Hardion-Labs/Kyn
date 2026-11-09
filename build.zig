@@ -14,14 +14,17 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    const builder = b.addExecutable(.{
-        .name = "kyn-build",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("build-system/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const builder_module = b.createModule(.{
+        .root_source_file = b.path("build-system/main.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+    builder_module.addImport("kyn_compiler_frontend", b.createModule(.{
+        .root_source_file = b.path("compiler/modules.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const builder = b.addExecutable(.{ .name = "kyn-build", .root_module = builder_module });
     b.installArtifact(builder);
 
     const run_cmd = b.addRunArtifact(exe);

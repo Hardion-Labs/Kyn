@@ -13,10 +13,19 @@ pub const Type = types.Type;
 
 pub const Program = struct {
     decls: []*Decl,
+    imports: []ImportDecl = &.{},
+};
+
+pub const ImportDecl = struct {
+    span: Span,
+    path: []const u8,
+    alias: ?[]const u8 = null,
+    target_module_id: u32 = 0,
 };
 
 pub const Decl = struct {
     span: Span,
+    is_public: bool = true,
     kind: Kind,
 
     pub const Kind = union(enum) {
@@ -274,6 +283,7 @@ pub const Expr = struct {
             is_enum_variant: bool = false,
             variant_value: i128 = 0,
             through_pointer: bool = false,
+            sym: ?*symbol.Symbol = null,
         };
 
         pub const Index = struct {
@@ -283,8 +293,8 @@ pub const Expr = struct {
 
         pub const SliceAccess = struct {
             base: *Expr,
-            start: *Expr,
-            end: *Expr,
+            start: ?*Expr,
+            end: ?*Expr,
         };
 
         pub const StructInit = struct {

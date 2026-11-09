@@ -629,6 +629,11 @@ pub const Lowering = struct {
                                 try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
                             const temp = self.module.ephemeral();
                             try self.addLocal(temp, "pack", storage_ty, null);
+                            try self.emit(.{ .store = .{
+                                .ptr = .{ .local = temp },
+                                .value = .{ .int = 0 },
+                                .ty = storage_ty,
+                            } });
                             const storage_value_ty = expr.ty orelse try self.simpleType(.invalid);
                             try self.emit(.{ .store = .{
                                 .ptr = .{ .local = temp },
@@ -743,10 +748,48 @@ pub const Lowering = struct {
             .cast => |cast| try self.lowerCast(expr, cast),
             .field => |field| blk: {
                 if (field.is_enum_variant) break :blk .{ .int = field.variant_value };
+                if (field.sym) |sym| {
+                    if (sym.kind == .global) {
+                        const index = self.globals.get(sym.name) orelse return .none;
+                        const ty = expr.ty orelse sym.ty;
+                        const dst = try self.reg(ty);
+                        try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .global = index }, .ty = ty } });
+                        break :blk .{ .reg = dst };
+                    }
+                    break :blk .none;
+                }
                 if (field.base.ty) |base_ty| {
-                    if (base_ty.* == .slice and std.mem.eql(u8, field.name, "len")) {
+                    if (base_ty.* == .slice) {
                         const slice_ptr = try self.lowerAggregateBase(field.base, base_ty);
-                        break :blk try self.loadSliceLength(slice_ptr);
+                        if (std.mem.eql(u8, field.name, "len")) {
+                            break :blk try self.loadSliceLength(slice_ptr);
+                        }
+                        if (std.mem.eql(u8, field.name, "ptr")) {
+                            break :blk try self.loadSliceData(slice_ptr, base_ty.slice.elem);
+                        }
+                    }
+                    if (field.through_pointer and base_ty.* == .pointer and base_ty.pointer.elem.* == .slice) {
+                        const slice_ptr = try self.lowerExpr(field.base);
+                        try self.emitNullCheck(base_ty, slice_ptr);
+                        const slice_ty = base_ty.pointer.elem;
+                        if (std.mem.eql(u8, field.name, "len")) {
+                            break :blk try self.loadSliceLength(slice_ptr);
+                        }
+                        if (std.mem.eql(u8, field.name, "ptr")) {
+                            break :blk try self.loadSliceData(slice_ptr, slice_ty.slice.elem);
+                        }
+                    }
+                    if (base_ty.* == .array and std.mem.eql(u8, field.name, "len")) {
+                        if (field.base.kind != .ident) {
+                            const lv = try self.lowerLvalue(field.base);
+                            if (lv == .none) _ = try self.lowerExpr(field.base);
+                        }
+                        break :blk .{ .int = @intCast(base_ty.array.len) };
+                    }
+                    if (field.through_pointer and base_ty.* == .pointer and base_ty.pointer.elem.* == .array and std.mem.eql(u8, field.name, "len")) {
+                        const arr_ptr = try self.lowerExpr(field.base);
+                        try self.emitNullCheck(base_ty, arr_ptr);
+                        break :blk .{ .int = @intCast(base_ty.pointer.elem.array.len) };
                     }
                 }
                 const ptr = try self.lowerLvalue(expr);
@@ -826,13 +869,14 @@ pub const Lowering = struct {
         const lhs_ty = binary.lhs.ty orelse return .none;
         const rhs_ty = binary.rhs.ty orelse return .none;
 
-        if (lhs_ty.* == .pointer and lhs_ty.pointer.elem.isInteger() and (binary.op == .add or binary.op == .sub)) {
+        if (lhs_ty.* == .pointer and rhs_ty.isInteger() and (binary.op == .add or binary.op == .sub)) {
+            const base = try self.lowerExpr(binary.lhs);
             var index = try self.lowerExpr(binary.rhs);
             if (binary.op == .sub) index = try self.negateIndex(index, rhs_ty);
             const dst = try self.reg(lhs_ty);
             try self.emit(.{ .elem_ptr = .{
                 .dst = dst,
-                .base = try self.lowerExpr(binary.lhs),
+                .base = base,
                 .container = lhs_ty,
                 .index = index,
                 .index_ty = rhs_ty,
@@ -1000,6 +1044,7 @@ pub const Lowering = struct {
     fn lowerCall(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!ir.Value {
         const callee_sym = switch (call.callee.kind) {
             .ident => |ident| ident.sym,
+            .field => |field| field.sym,
             else => null,
         };
         if (callee_sym == null or callee_sym.?.kind != .function) {
@@ -1058,17 +1103,39 @@ pub const Lowering = struct {
                 },
                 .small_1 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
+                    const size = self.aggregateSize(ty) orelse 8;
+                    var pack_ptr = slot;
+                    if (size < 8) {
+                        const pack_id = self.module.ephemeral();
+                        try self.addLocal(pack_id, "tmp.pack1", i64_ty, null);
+                        try self.emit(.{ .store = .{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i64_ty } });
+                        if (size > 0) {
+                            try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(size) } });
+                        }
+                        pack_ptr = .{ .local = pack_id };
+                    }
                     const loaded = try self.reg(i64_ty);
-                    try self.emit(.{ .load = .{ .dst = loaded, .ptr = slot, .ty = i64_ty } });
+                    try self.emit(.{ .load = .{ .dst = loaded, .ptr = pack_ptr, .ty = i64_ty } });
                     try args_list.append(self.allocator, .{ .reg = loaded });
                     try types_list.append(self.allocator, i64_ty);
                     try byval_list.append(self.allocator, null);
                 },
                 .small_2 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
+                    const size = self.aggregateSize(ty) orelse 16;
+                    var pack_ptr = slot;
+                    if (size < 16) {
+                        const pack_id = self.module.ephemeral();
+                        try self.addLocal(pack_id, "tmp.pack2", i128_ty, null);
+                        try self.emit(.{ .store = .{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i128_ty } });
+                        if (size > 0) {
+                            try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(size) } });
+                        }
+                        pack_ptr = .{ .local = pack_id };
+                    }
                     const elem_i8 = try self.simpleType(.char);
-                    const p0 = try self.byteOffset(slot, 0, elem_i8);
-                    const p8 = try self.byteOffset(slot, 8, elem_i8);
+                    const p0 = try self.byteOffset(pack_ptr, 0, elem_i8);
+                    const p8 = try self.byteOffset(pack_ptr, 8, elem_i8);
                     const lo = try self.reg(i64_ty);
                     const hi = try self.reg(i64_ty);
                     try self.emit(.{ .load = .{ .dst = lo, .ptr = p0, .ty = i64_ty } });
@@ -1152,6 +1219,7 @@ pub const Lowering = struct {
     }
 
     fn lowerSliceCast(self: *Lowering, target: *types.Type, source: *types.Type, value: ir.Value) Error!ir.Value {
+        try self.emitNullCheck(source, value);
         const array = source.pointer.elem.array;
         const id = self.module.ephemeral();
         try self.addLocal(id, "tmp.slice", target, null);
@@ -1221,18 +1289,11 @@ pub const Lowering = struct {
     fn lowerSlice(self: *Lowering, expr: *ast.Expr, slice_expr: ast.Expr.Kind.SliceAccess) Error!ir.Value {
         const target = expr.ty orelse return .none;
         const elem_ty = target.slice.elem;
-        const start_value = try self.lowerExpr(slice_expr.start);
-        const start_ty = slice_expr.start.ty orelse return .none;
-        const end_value = try self.lowerExpr(slice_expr.end);
-        const end_ty = slice_expr.end.ty orelse return .none;
 
         const i128_ty = try self.i128Type();
         const bool_ty = try self.booleanType();
         const usize_ty = try self.allocator.create(types.Type);
         usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
-
-        const start = try self.castIntegerValue(start_value, start_ty, i128_ty);
-        const end = try self.castIntegerValue(end_value, end_ty, i128_ty);
 
         const base_ty = slice_expr.base.ty orelse return .none;
         var base_len: ir.Value = undefined;
@@ -1248,6 +1309,7 @@ pub const Lowering = struct {
             },
             .pointer => {
                 const base_ptr = try self.lowerExpr(slice_expr.base);
+                try self.emitNullCheck(base_ty, base_ptr);
                 base_len = .{ .int = @intCast(base_ty.pointer.elem.array.len) };
                 base_len_ty = i128_ty;
                 base_data = base_ptr;
@@ -1261,25 +1323,77 @@ pub const Lowering = struct {
             else => return .none,
         }
 
+        // Fast path for full range `base[..]`: start = 0, end = len, no bounds branch needed.
+        if (slice_expr.start == null and slice_expr.end == null) {
+            var full_ptr: ir.Value = undefined;
+            var full_len: ir.Value = undefined;
+            switch (base_ty.*) {
+                .array => {
+                    const dst = try self.reg(try self.makePointer(elem_ty, target.slice.is_const));
+                    try self.emit(.{ .elem_ptr = .{
+                        .dst = dst,
+                        .base = base_data,
+                        .container = base_ty,
+                        .index = .{ .int = 0 },
+                        .index_ty = usize_ty,
+                        .is_array = true,
+                    } });
+                    full_ptr = .{ .reg = dst };
+                    full_len = .{ .int = @intCast(base_ty.array.len) };
+                },
+                .pointer => {
+                    full_ptr = base_data;
+                    full_len = .{ .int = @intCast(base_ty.pointer.elem.array.len) };
+                },
+                .slice => {
+                    full_ptr = base_data;
+                    full_len = base_len;
+                },
+                else => unreachable,
+            }
+            return self.makeSlice(target, full_ptr, full_len);
+        }
+
         const normalized_len = try self.castIntegerValue(base_len, base_len_ty, i128_ty);
+
+        var start: ir.Value = .{ .int = 0 };
+        var start_ty: ?*types.Type = null;
+        if (slice_expr.start) |start_expr| {
+            const start_value = try self.lowerExpr(start_expr);
+            const sty = start_expr.ty orelse return .none;
+            start = try self.castIntegerValue(start_value, sty, i128_ty);
+            start_ty = sty;
+        }
+
+        var end: ir.Value = normalized_len;
+        var end_ty: ?*types.Type = null;
+        if (slice_expr.end) |end_expr| {
+            const end_value = try self.lowerExpr(end_expr);
+            const ety = end_expr.ty orelse return .none;
+            end = try self.castIntegerValue(end_value, ety, i128_ty);
+            end_ty = ety;
+        }
+
         const zero_value: ir.Value = .{ .int = 0 };
         var start_negative: ?u32 = null;
         var end_negative: ?u32 = null;
-        if (start_ty.isInteger() and start_ty.intInfo().signed) {
-            const negative = try self.reg(bool_ty);
-            try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = start, .rhs = zero_value } });
-            start_negative = negative;
+        if (start_ty) |sty| {
+            if (sty.isInteger() and sty.intInfo().signed) {
+                const negative = try self.reg(bool_ty);
+                try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = start, .rhs = zero_value } });
+                start_negative = negative;
+            }
         }
-        if (end_ty.isInteger() and end_ty.intInfo().signed) {
-            const negative = try self.reg(bool_ty);
-            try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = end, .rhs = zero_value } });
-            end_negative = negative;
+        if (end_ty) |ety| {
+            if (ety.isInteger() and ety.intInfo().signed) {
+                const negative = try self.reg(bool_ty);
+                try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = end, .rhs = zero_value } });
+                end_negative = negative;
+            }
         }
 
         const start_gt_end = try self.reg(bool_ty);
         try self.emit(.{ .icmp = .{ .dst = start_gt_end, .op = .gt, .ty = i128_ty, .lhs = start, .rhs = end } });
-        const end_too_large = try self.reg(bool_ty);
-        try self.emit(.{ .icmp = .{ .dst = end_too_large, .op = .gt, .ty = i128_ty, .lhs = end, .rhs = normalized_len } });
 
         var condition = start_gt_end;
         if (start_negative) |negative| {
@@ -1292,9 +1406,14 @@ pub const Lowering = struct {
             try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
             condition = combined;
         }
-        const invalid = try self.reg(bool_ty);
-        try self.emit(.{ .binary = .{ .dst = invalid, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = condition }, .rhs = .{ .reg = end_too_large } } });
-        try self.emitTrapBranch(invalid);
+        if (end_ty != null) {
+            const end_too_large = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = end_too_large, .op = .gt, .ty = i128_ty, .lhs = end, .rhs = normalized_len } });
+            const invalid = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = invalid, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = condition }, .rhs = .{ .reg = end_too_large } } });
+            condition = invalid;
+        }
+        try self.emitTrapBranch(condition);
 
         const start64 = try self.reg(usize_ty);
         try self.emit(.{ .cast = .{ .dst = start64, .kind = .trunc, .from = i128_ty, .to = usize_ty, .value = start } });
@@ -1404,7 +1523,13 @@ pub const Lowering = struct {
             else
                 .none,
             .field => |field| blk: {
+                if (field.sym) |sym| {
+                    if (sym.kind == .global) break :blk .{ .global = self.globals.get(sym.name) orelse return .none };
+                    break :blk .none;
+                }
                 const base_ty = field.base.ty orelse return .none;
+                const target_ty = if (base_ty.* == .pointer) base_ty.pointer.elem else base_ty;
+                if (target_ty.* != .struct_type) break :blk .none;
                 var struct_ty = base_ty;
                 var base_ptr: ir.Value = undefined;
                 if (base_ty.* == .pointer) {
@@ -1413,6 +1538,7 @@ pub const Lowering = struct {
                     try self.emitNullCheck(base_ty, base_ptr);
                 } else {
                     base_ptr = try self.lowerLvalue(field.base);
+                    if (base_ptr == .none) break :blk .none;
                 }
                 const dst = try self.reg(try self.makePointer(struct_ty, base_ty.* == .pointer and base_ty.pointer.is_const));
                 try self.emit(.{ .field_ptr = .{
@@ -1535,7 +1661,14 @@ pub const Lowering = struct {
             .float_lit => |lit| return .{ .float = lit.value },
             .string_lit => |lit| return .{ .string = try self.module.addString(lit.bytes) },
             .null_lit => return .null_ptr,
-            .field => |field| if (field.is_enum_variant) return .{ .int = field.variant_value },
+            .field => |field| {
+                if (field.is_enum_variant) return .{ .int = field.variant_value };
+                if (!field.through_pointer and std.mem.eql(u8, field.name, "len")) {
+                    if (field.base.ty) |bt| {
+                        if (bt.* == .array) return .{ .int = @intCast(bt.array.len) };
+                    }
+                }
+            },
             .unary => |unary| {
                 if (unary.op == .negate) {
                     if (try self.lowerConst(unary.operand, ty)) |value| {
@@ -1755,8 +1888,21 @@ fn sizeInBytes(ty: *types.Type) ?usize {
         .int => |info| @intCast(info.bits / 8),
         .float => |bits| @intCast(bits / 8),
         .pointer => 8,
+        .slice => 16,
         .enum_type => |info| sizeInBytes(info.backing),
         .array => |array| (sizeInBytes(array.elem) orelse return null) * array.len,
+        .struct_type => |info| blk: {
+            var size: usize = 0;
+            var alignment: usize = 1;
+            for (info.fields) |field| {
+                const fsize = sizeInBytes(field.ty) orelse break :blk null;
+                const falign: usize = Emitter.llvmAlignmentOfType(field.ty);
+                size = std.mem.alignForward(usize, size, falign);
+                size += fsize;
+                alignment = @max(alignment, falign);
+            }
+            break :blk std.mem.alignForward(usize, size, alignment);
+        },
         else => null,
     };
 }
@@ -1854,7 +2000,7 @@ pub const Emitter = struct {
         return alignment;
     }
 
-    fn llvmAlignmentOfType(ty: *types.Type) u16 {
+    pub fn llvmAlignmentOfType(ty: *types.Type) u16 {
         return switch (ty.*) {
             .bool => 1,
             .char => 4,
@@ -1891,7 +2037,8 @@ pub const Emitter = struct {
             if (index == 0) {
                 for (function.locals.items) |local| {
                     if (local.padding > 0) {
-                        try writer.print("  %v{d} = alloca [{d} x i8]\n", .{ local.id, local.padding });
+                        const alignment = @max(llvmAlignmentOfType(local.ty), 8);
+                        try writer.print("  %v{d} = alloca [{d} x i8], align {d}\n", .{ local.id, local.padding, alignment });
                     } else {
                         try writer.print("  %v{d} = alloca {s}\n", .{ local.id, try self.typeString(local.ty) });
                     }
@@ -2320,4 +2467,54 @@ test "emitter declares extern functions and escapes strings" {
     try testing.expect(std.mem.indexOf(u8, ll, "\\22") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "\\0A") != null);
     try testing.expect(string_index == 0);
+}
+
+test "lowering open-ended slices, slice.ptr and C ABI small global aggregates" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const text =
+        \\struct Small { x: i32 }
+        \\const G_SMALL: Small = Small { x: 9 };
+        \\extern fn take_small(s: Small) i32;
+        \\fn main() i32 {
+        \\    var arr: [3]i32 = [1, 2, 3];
+        \\    let full = arr[..];
+        \\    let p = full.ptr;
+        \\    return (*p) + take_small(G_SMALL);
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    try testing.expect(std.mem.indexOf(u8, ll, ", align 8") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "@llvm.memcpy.p0.p0.i64") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "call i32 @take_small(i64 ") != null);
 }

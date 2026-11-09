@@ -15,6 +15,8 @@ pub const Kind = enum {
 
     // keywords
     kw_fn,
+    kw_import,
+    kw_private,
     kw_let,
     kw_var,
     kw_const,
@@ -126,6 +128,8 @@ pub const Token = struct {
 
 pub const keywords = std.StaticStringMap(Kind).initComptime(.{
     .{ "fn", .kw_fn },
+    .{ "import", .kw_import },
+    .{ "private", .kw_private },
     .{ "let", .kw_let },
     .{ "var", .kw_var },
     .{ "const", .kw_const },
@@ -175,6 +179,8 @@ pub fn describe(kind: Kind) []const u8 {
         .string_literal => "string literal",
         .char_literal => "character literal",
         .kw_fn => "'fn'",
+        .kw_import => "'import'",
+        .kw_private => "'private'",
         .kw_let => "'let'",
         .kw_var => "'var'",
         .kw_const => "'const'",
