@@ -108,6 +108,8 @@ NamedType   = Identifier
 
 - `*T` is a mutable pointer to `T`.
 - `*const T` is a pointer to immutable `T`; mutation through it is rejected.
+- Dereferencing a pointer exactly `null` traps; invalid non-null pointers are
+  not checked and remain undefined behavior.
 - `[N]T` is a fixed-size array of exactly `N` elements. `N` must be a positive
   constant integer known at compile time.
 - `[]T` is a slice: a fat pointer holding a data pointer and a `usize` length.
@@ -491,7 +493,7 @@ The following are rejected or simply not part of v0.1:
 - indirect calls and first-class function values;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;
-- runtime null, alignment and full initialization checks;
+- runtime alignment and full initialization checks;
 - a preprocessor or macros;
 - threads, atomics and inline assembly syntax.
 

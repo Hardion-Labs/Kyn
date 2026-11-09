@@ -29,8 +29,8 @@ version number yet. Milestones below are directions, not release promises.
 - Decide and specify C ABI lowering for aggregates and slices before exposing
   them across `extern`/`export`.
 - Add const-polymorphic slicing and additional slice ergonomics.
-- Add remaining runtime checks: null dereference and a documented policy for
-  any future profile-specific behavior.
+- Add remaining runtime policy for traps: null dereference is checked in every
+  profile, but profile-specific policies remain intentionally unimplemented.
 - Add modules and a deterministic package manifest.
 - Keep the compiler and docs aligned: grammar, reference, type system, memory,
   safety, ABI, architecture, build system and release notes.

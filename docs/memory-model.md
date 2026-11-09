@@ -87,8 +87,9 @@ but it must not make allocation implicit.
 - `*T` points to a mutable `T`; `*const T` points to an immutable `T`.
 - Pointers are raw addresses. They have no hidden metadata, no bounds, no
   lifetime tag and no nullability state at runtime.
-- `null` is a separate type assignable to pointers; dereferencing `null` is
-  undefined behavior and is not checked in v0.1.
+- `null` is a separate type assignable to pointers; dereferencing `null` traps
+  in v0.1. Dereferencing a dangling or invalid non-null pointer remains
+  undefined behavior.
 - Pointer arithmetic (`p + n`, `p - n`) is scaled by `sizeof(T)`. It is only
   valid within the same allocated object or one past its end.
 - `p - q` requires pointers to the same element type and computes element
@@ -178,7 +179,8 @@ allowed to do for the generated IR.
 The following are not checked at runtime in v0.1 and must be avoided:
 
 - reading uninitialized storage;
-- dereferencing `null` or a dangling pointer;
+- dereferencing a dangling pointer, an invalid pointer, or a pointer whose
+  allocation has ended; null pointers are checked and trap;
 - out-of-bounds pointer arithmetic;
 - pointer arithmetic whose provenance or allocation ownership is invalid;
 - freeing memory twice or using it after `free`;

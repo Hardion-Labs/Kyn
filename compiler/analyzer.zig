@@ -154,6 +154,9 @@ pub const Analyzer = struct {
             .unary => |unary| {
                 // Taking the address of an uninitialized local is allowed.
                 if (unary.op != .address_of) try self.checkExpr(unary.operand);
+                if (unary.op == .dereference and constPointerIsNull(unary.operand)) {
+                    try self.reporter.err("E0506", expr.span, "provable null pointer dereference", .{});
+                }
                 if (unary.op == .negate) try self.checkUnaryOverflow(expr, unary);
             },
             .slice => |slice| {
@@ -181,12 +184,18 @@ pub const Analyzer = struct {
             },
             .cast => |cast| try self.checkExpr(cast.operand),
             .field => |field| {
+                if (field.through_pointer and constPointerIsNull(field.base)) {
+                    try self.reporter.err("E0506", expr.span, "provable null pointer dereference", .{});
+                }
                 if (!field.is_enum_variant) try self.checkExpr(field.base);
             },
             .index => |index| {
                 try self.checkExpr(index.base);
                 try self.checkExpr(index.index);
                 if (index.base.ty) |base_ty| {
+                    if (base_ty.* == .pointer and constPointerIsNull(index.base)) {
+                        try self.reporter.err("E0506", expr.span, "provable null pointer dereference", .{});
+                    }
                     if (base_ty.* == .array) {
                         if (constInt(index.index)) |value| {
                             if (value < 0 or value >= @as(i128, @intCast(base_ty.array.len))) {
@@ -358,6 +367,20 @@ pub fn constInt(expr: *ast.Expr) ?i128 {
     };
 }
 
+fn constPointerIsNull(expr: *ast.Expr) bool {
+    return switch (expr.kind) {
+        .null_lit => true,
+        .cast => |cast| blk: {
+            if (cast.target.resolved) |target_ty| {
+                if (target_ty.* != .pointer) break :blk false;
+                break :blk constPointerIsNull(cast.operand) or (constInt(cast.operand) orelse 1) == 0;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
 fn constBool(expr: *ast.Expr) ?bool {
     return switch (expr.kind) {
         .bool_lit => |value| value,
@@ -514,4 +537,22 @@ test "analyzer warning on constant condition" {
     defer ctx.deinit();
     try ctx.run();
     try testing.expect(ctx.reporter.warning_count > 0);
+}
+
+test "analyzer detects provable null pointer dereference" {
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    return *(null as *i32);
+        \\}
+    , "E0506");
+
+    try expectAnalyzerError(
+        \\struct Point {
+        \\    x: i32,
+        \\    y: i32,
+        \\}
+        \\fn main() i32 {
+        \\    return (null as *Point)->x;
+        \\}
+    , "E0506");
 }

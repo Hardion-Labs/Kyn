@@ -17,8 +17,8 @@ not exist.
 
 Profiles currently control Clang optimization only. Implemented runtime checks
 are enabled in every profile; no profile removes a check silently. The
-remaining missing checks (integer overflow and null dereference) still belong
-in the future runtime-check layer.
+remaining unimplemented categories (for example checked initialization and
+use-after-free) still belong in the future runtime-check layer.
 
 > A profile may change the cost of a check, or make it explicit, but no
 > profile may silently remove a check that the language promises.
@@ -50,6 +50,10 @@ The backend emits checks before the affected operation:
 - Signed integer division and remainder also trap on `INT_MIN / -1`.
 - Dynamic shift amounts are checked against the integer width. A negative or
   out-of-range amount traps.
+- Dereferencing a pointer that is exactly `null` traps. This includes `*p`,
+  `p->field` and `p[index]`. Provable null dereferences are diagnosed at
+  compile time with `E0506`; variable provenance is not tracked yet, so some
+  null cases only trap dynamically.
 
 Traps use LLVM's `llvm.trap()` intrinsic, which lowers to a CPU trap and
 terminates the process. There is no unwinding, recovery or handler in v0.1.
@@ -112,13 +116,20 @@ fail compilation.
 An `if` or `while` condition that folds to a constant boolean is reported as a
 warning. It is not an error.
 
+### 2.8 Provable null dereferences (`E0506`)
+
+When the operand of a dereference, field access through a pointer, or pointer
+index can be proven to be exactly `null` from the expression text, the
+compiler rejects the program. Example: `*(null as *i32)`. The analysis does
+not prove arbitrary runtime pointer provenance, but any pointer exactly `null`
+is trapped dynamically when dereferenced.
+
 ## 3. Checks that do not exist yet
 
 The following are **not** checked at runtime or, in the dynamic case, at
 compile time:
 
 - pointer arithmetic bounds;
-- null pointer dereference;
 - dangling pointer and use-after-free;
 - double free and leaks;
 - pointer alignment;

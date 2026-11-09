@@ -146,6 +146,7 @@ Errors:
 | `E0503` | provable division by zero |
 | `E0504` | constant shift amount out of range |
 | `E0505` | constant expression overflows its type |
+| `E0506` | provable null pointer dereference |
 
 Warnings:
 

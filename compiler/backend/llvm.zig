@@ -187,6 +187,14 @@ pub const Lowering = struct {
         try self.switchBlock(continue_block);
     }
 
+    fn emitNullCheck(self: *Lowering, pointer_ty: *types.Type, pointer: ir.Value) Error!void {
+        if (pointer_ty.* != .pointer) return;
+        const bool_ty = try self.booleanType();
+        const condition = try self.reg(bool_ty);
+        try self.emit(.{ .icmp = .{ .dst = condition, .op = .eq, .ty = pointer_ty, .lhs = pointer, .rhs = .null_ptr } });
+        try self.emitTrapBranch(condition);
+    }
+
     fn emitArrayBoundsCheck(
         self: *Lowering,
         base_ty: *types.Type,
@@ -550,6 +558,7 @@ pub const Lowering = struct {
             .address_of => return self.lowerLvalue(unary.operand),
             .dereference => {
                 const ptr = try self.lowerExpr(unary.operand);
+                if (unary.operand.ty) |pointer_ty| try self.emitNullCheck(pointer_ty, ptr);
                 const ty = expr.ty orelse return .none;
                 const dst = try self.reg(ty);
                 try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
@@ -1041,6 +1050,7 @@ pub const Lowering = struct {
                 if (base_ty.* == .pointer) {
                     struct_ty = base_ty.pointer.elem;
                     base_ptr = try self.lowerExpr(field.base);
+                    try self.emitNullCheck(base_ty, base_ptr);
                 } else {
                     base_ptr = try self.lowerLvalue(field.base);
                 }
@@ -1060,6 +1070,7 @@ pub const Lowering = struct {
                 var is_slice = false;
                 if (base_ty.* == .pointer) {
                     base_ptr = try self.lowerExpr(index.base);
+                    try self.emitNullCheck(base_ty, base_ptr);
                 } else if (base_ty.* == .slice) {
                     is_slice = true;
                 } else {

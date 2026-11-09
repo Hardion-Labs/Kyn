@@ -43,6 +43,9 @@ principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha
   `array[start..end]` subslice syntax, `.len`, internal parameter/return
   passing and runtime slice bounds checks. Slice signatures at C ABI
   boundaries remain rejected.
+- Runtime null dereference checks: `*p`, `p->field` and `p[index]` trap on an
+  exactly-null pointer. Provable null dereferences are rejected at compile
+  time with `E0506`.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,

@@ -170,7 +170,8 @@ the boundary between language semantics and native code generation.
    - `if`/`while` create explicit blocks and branches.
    - `break`/`continue` use explicit block stacks.
    - Short-circuit `&&`/`||` lower to branches.
-   - Dynamic fixed-array and slice indexes are bounds-checked at runtime.
+   - Dynamic fixed-array and slice indexes and pointer dereferences are
+     bounds/null-checked at runtime.
    - Integer division violations lower to explicit branches to `llvm.trap()`.
    - Struct/array literals are stored field by field into their destination.
    - Calls carry argument and return types for the emitter.
