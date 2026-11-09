@@ -34,6 +34,7 @@ pub const Lowering = struct {
     allocator: std.mem.Allocator,
     reporter: *diagnostics.Reporter,
     module: *ir.Module,
+    checks: ir.RuntimeCheckPolicy,
     globals: std.AutoHashMap(u32, u32),
     ctx: ?*FnCtx = null,
     current_fd: ?*ast.FnDecl = null,
@@ -42,11 +43,13 @@ pub const Lowering = struct {
         allocator: std.mem.Allocator,
         reporter: *diagnostics.Reporter,
         module: *ir.Module,
+        checks: ir.RuntimeCheckPolicy,
     ) Lowering {
         return .{
             .allocator = allocator,
             .reporter = reporter,
             .module = module,
+            .checks = checks,
             .globals = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -310,7 +313,7 @@ pub const Lowering = struct {
     }
 
     fn emitNullCheck(self: *Lowering, pointer_ty: *types.Type, pointer: ir.Value) Error!void {
-        if (pointer_ty.* != .pointer) return;
+        if (!self.checks.null_dereference or pointer_ty.* != .pointer) return;
         const bool_ty = try self.booleanType();
         const condition = try self.reg(bool_ty);
         try self.emit(.{ .icmp = .{ .dst = condition, .op = .eq, .ty = pointer_ty, .lhs = pointer, .rhs = .null_ptr } });
@@ -323,6 +326,7 @@ pub const Lowering = struct {
         index_value: ir.Value,
         index_ty: *types.Type,
     ) Error!void {
+        if (!self.checks.bounds) return;
         const usize_ty = try self.allocator.create(types.Type);
         usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
         return self.emitIndexBoundsCheck(index_value, index_ty, .{ .int = @intCast(base_ty.array.len) }, usize_ty);
@@ -335,6 +339,7 @@ pub const Lowering = struct {
         input_len_value: ir.Value,
         len_ty: *types.Type,
     ) Error!void {
+        if (!self.checks.bounds) return;
         const i128_ty = try self.i128Type();
         const bool_ty = try self.booleanType();
         const len_value = try self.castIntegerValue(input_len_value, len_ty, i128_ty);
@@ -371,7 +376,7 @@ pub const Lowering = struct {
         lhs_ty: *types.Type,
         rhs_ty: *types.Type,
     ) Error!void {
-        if (!rhs_ty.isInteger()) return;
+        if (!self.checks.division or !rhs_ty.isInteger()) return;
         const bool_ty = try self.booleanType();
 
         const is_zero = try self.reg(bool_ty);
@@ -425,7 +430,7 @@ pub const Lowering = struct {
         lhs_value = try self.castIntegerValue(lhs_value, lhs_ty, ty);
         rhs_value = try self.castIntegerValue(rhs_value, rhs_ty, ty);
 
-        if (!is_int_op) {
+        if (!is_int_op or !self.checks.integer_overflow) {
             const dst = try self.reg(ty);
             try self.emit(.{ .binary = .{ .dst = dst, .op = op, .ty = ty, .lhs = lhs_value, .rhs = rhs_value } });
             return .{ .reg = dst };
@@ -451,7 +456,7 @@ pub const Lowering = struct {
         rhs: ir.Value,
         rhs_ty: *types.Type,
     ) Error!void {
-        if (!lhs_ty.isInteger() or !rhs_ty.isInteger()) return;
+        if (!self.checks.shifts or !lhs_ty.isInteger() or !rhs_ty.isInteger()) return;
         const i128_ty = try self.i128Type();
         const bool_ty = try self.booleanType();
         const bits: i128 = @intCast(lhs_ty.intInfo().bits);
@@ -1385,46 +1390,48 @@ pub const Lowering = struct {
             end_ty = ety;
         }
 
-        const zero_value: ir.Value = .{ .int = 0 };
-        var start_negative: ?u32 = null;
-        var end_negative: ?u32 = null;
-        if (start_ty) |sty| {
-            if (sty.isInteger() and sty.intInfo().signed) {
-                const negative = try self.reg(bool_ty);
-                try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = start, .rhs = zero_value } });
-                start_negative = negative;
+        if (self.checks.bounds) {
+            const zero_value: ir.Value = .{ .int = 0 };
+            var start_negative: ?u32 = null;
+            var end_negative: ?u32 = null;
+            if (start_ty) |sty| {
+                if (sty.isInteger() and sty.intInfo().signed) {
+                    const negative = try self.reg(bool_ty);
+                    try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = start, .rhs = zero_value } });
+                    start_negative = negative;
+                }
             }
-        }
-        if (end_ty) |ety| {
-            if (ety.isInteger() and ety.intInfo().signed) {
-                const negative = try self.reg(bool_ty);
-                try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = end, .rhs = zero_value } });
-                end_negative = negative;
+            if (end_ty) |ety| {
+                if (ety.isInteger() and ety.intInfo().signed) {
+                    const negative = try self.reg(bool_ty);
+                    try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = end, .rhs = zero_value } });
+                    end_negative = negative;
+                }
             }
-        }
 
-        const start_gt_end = try self.reg(bool_ty);
-        try self.emit(.{ .icmp = .{ .dst = start_gt_end, .op = .gt, .ty = i128_ty, .lhs = start, .rhs = end } });
+            const start_gt_end = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = start_gt_end, .op = .gt, .ty = i128_ty, .lhs = start, .rhs = end } });
 
-        var condition = start_gt_end;
-        if (start_negative) |negative| {
-            const combined = try self.reg(bool_ty);
-            try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
-            condition = combined;
+            var condition = start_gt_end;
+            if (start_negative) |negative| {
+                const combined = try self.reg(bool_ty);
+                try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
+                condition = combined;
+            }
+            if (end_negative) |negative| {
+                const combined = try self.reg(bool_ty);
+                try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
+                condition = combined;
+            }
+            if (end_ty != null) {
+                const end_too_large = try self.reg(bool_ty);
+                try self.emit(.{ .icmp = .{ .dst = end_too_large, .op = .gt, .ty = i128_ty, .lhs = end, .rhs = normalized_len } });
+                const invalid = try self.reg(bool_ty);
+                try self.emit(.{ .binary = .{ .dst = invalid, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = condition }, .rhs = .{ .reg = end_too_large } } });
+                condition = invalid;
+            }
+            try self.emitTrapBranch(condition);
         }
-        if (end_negative) |negative| {
-            const combined = try self.reg(bool_ty);
-            try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
-            condition = combined;
-        }
-        if (end_ty != null) {
-            const end_too_large = try self.reg(bool_ty);
-            try self.emit(.{ .icmp = .{ .dst = end_too_large, .op = .gt, .ty = i128_ty, .lhs = end, .rhs = normalized_len } });
-            const invalid = try self.reg(bool_ty);
-            try self.emit(.{ .binary = .{ .dst = invalid, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = condition }, .rhs = .{ .reg = end_too_large } } });
-            condition = invalid;
-        }
-        try self.emitTrapBranch(condition);
 
         const start64 = try self.reg(usize_ty);
         try self.emit(.{ .cast = .{ .dst = start64, .kind = .trunc, .from = i128_ty, .to = usize_ty, .value = start } });
@@ -2520,7 +2527,7 @@ test "lowering open-ended slices, slice.ptr and C ABI small global aggregates" {
     try testing.expect(!reporter.hasErrors());
 
     var module = ir.Module.init(a);
-    var lowering = Lowering.init(a, &reporter, &module);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
     try lowering.lower(program);
     try testing.expect(!reporter.hasErrors());
 

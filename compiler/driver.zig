@@ -35,7 +35,23 @@ pub const Profile = enum {
             .fast => &.{"-O3"},
         };
     }
+
+    /// Every currently implemented trap is part of Kyn's defined behavior.
+    /// Optimization profiles therefore all retain the full check set.
+    pub fn runtimeCheckPolicy(self: Profile) ir.RuntimeCheckPolicy {
+        return switch (self) {
+            .debug, .safe, .release, .fast => .all,
+        };
+    }
 };
+
+test "all profiles retain the complete runtime-check policy" {
+    const testing = std.testing;
+    try testing.expectEqual(ir.RuntimeCheckPolicy.all, Profile.debug.runtimeCheckPolicy());
+    try testing.expectEqual(ir.RuntimeCheckPolicy.all, Profile.safe.runtimeCheckPolicy());
+    try testing.expectEqual(ir.RuntimeCheckPolicy.all, Profile.release.runtimeCheckPolicy());
+    try testing.expectEqual(ir.RuntimeCheckPolicy.all, Profile.fast.runtimeCheckPolicy());
+}
 
 pub const CompileResult = struct {
     ll: []const u8,
@@ -48,6 +64,7 @@ pub fn compile(
     arena: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
+    profile: Profile,
     src: *source.Source,
     reporter: *diagnostics.Reporter,
     program_out: *?*@import("ast.zig").Program,
@@ -79,7 +96,7 @@ pub fn compile(
     if (had_warnings) renderDiagnostics(reporter);
 
     var module = ir.Module.init(arena);
-    var lowering = llvm.Lowering.init(arena, reporter, &module);
+    var lowering = llvm.Lowering.init(arena, reporter, &module, profile.runtimeCheckPolicy());
     try lowering.lower(program);
     if (reporter.hasErrors()) {
         renderDiagnostics(reporter);

@@ -197,35 +197,45 @@ branch history; this increment does not redo them.
   temporal lifetimes (`free`/dangling pointers) or raw pointer arithmetic
   bounds.
 
-## 9. Next logical task for resumption
+## 9. Runtime-check policy increment
 
-Implement the profile-specific runtime-check policy. First pass an explicit
-profile/check policy from `driver.Profile` through compilation and IR lowering;
-define which checks each profile keeps or removes without silently introducing
-undefined behavior. Preserve the current all-checks-by-default contract until a
-check category has a documented policy and positive/negative tests in every
-relevant profile. Keep C ABI behavior, module visibility and deterministic
-imports independent of optimization profiles.
+- Added `ir.RuntimeCheckPolicy` with independent bounds, integer-overflow,
+  division, shift, and exact-null dereference switches. All switches default to
+  enabled and `driver.Profile.runtimeCheckPolicy()` explicitly returns the full
+  policy for `debug`, `safe`, `release`, and `fast`.
+- `compiler.main` passes the selected profile to `driver.compile`; compilation
+  passes its policy to `llvm.Lowering`. Trap-emission paths consult the
+  corresponding policy category. Direct lowering unit construction explicitly
+  uses `.all`.
+- Extended the profile matrix to exercise overflow, fixed-array bounds, slice
+  bounds, division, shift-range, null dereference, and null slicing traps in
+  every profile. Existing profiles and all checks remain behaviorally unchanged.
+- Updated `docs/safety-model.md` to document the explicit policy and its tested
+  scope. This increment does not introduce a check-removal mode or alter module
+  visibility, C ABI behavior, or optimization flags.
 
 ## 10. Latest validation and Git state
 
 - Toolchain: Zig `0.17.0`; Clang `22.1.8` through `zig cc`.
-- `zig fmt --check build.zig compiler build-system`: passed.
-- `zig build`, `zig build test`, and `zig build -Doptimize=ReleaseSafe`: passed.
-- `tests/integration/run.sh`: `97 passed, 0 failed` against the Debug build and
-  `97 passed, 0 failed` against the ReleaseSafe build. New module coverage checks
-  same-name functions/globals/types across modules, private helpers, open-import
-  shadowing, transitive and diamond imports, ambiguity, alias-only visibility,
-  and extern/export linkage. Existing profiles, ABI interop, 900 robustness
-  cases, imported diagnostics and cache invalidation also passed.
-- Documentation gates: 126 diagnostic codes synchronized; 19 Markdown files
-  link-checked; version metadata remains `0.1.0-alpha.2`.
+- `zig fmt` on modified Zig files, `zig build`, and `zig build test`: passed.
+- `zig build -Doptimize=ReleaseSafe`: passed.
+- `tests/integration/run.sh`: `125 passed, 0 failed` against the Debug build and
+  `125 passed, 0 failed` against ReleaseSafe. This includes all four profile
+  trap regressions, diagnostic/docs gates, version metadata, 900 robustness
+  cases, LLVM/object generation, Kyn+C+Zig ABI integration, and cache tests.
+- Documentation gates report 126 diagnostic codes synchronized; version
+  metadata remains `0.1.0-alpha.2`. A full Markdown link check was not rerun
+  for this increment.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
-  gate. Static/dynamic regression coverage is the existing unit, integration,
-  ABI and robustness suites.
-- Git: branch `arena/2b67c8fb-kyn`; module isolation is committed as
-  `2cd25da` (`feat(sema): isolate module namespaces and name linkage`). Earlier
-  aliases/visibility, imports and slicing work remains in branch history,
-  including merge reconciliation `f31533e`. The implementation and continuity
-  commits are pushed to `origin/arena/2b67c8fb-kyn`; the working tree is clean.
-  No `main` merge or release/version change was made.
+  gate. The runtime checks and profile matrix demonstrate covered behavior only.
+- Git branch is `arena/2b67c8fb-kyn`. The runtime-policy changes are presently
+  uncommitted and not yet pushed. Earlier module isolation remains committed
+  and pushed on this branch; no `main` merge or release/version change was made.
+
+## 11. Next logical task for resumption
+
+Continue compiler development from the runtime-policy increment: inspect the
+working tree and validate the documentation/format gates, then commit and push
+only to `arena/2b67c8fb-kyn`. Future check-policy changes must be independently
+justified by a documented language decision and profile-specific regression;
+otherwise keep every implemented check enabled.

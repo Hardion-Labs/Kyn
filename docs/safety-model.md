@@ -15,10 +15,12 @@ not exist.
 | `release` | `-O3`        | always on       | always on      |
 | `fast`    | `-O3`        | always on       | always on      |
 
-Profiles currently control Clang optimization only. Implemented runtime checks
-are enabled in every profile; no profile removes a check silently. The
-remaining unimplemented categories (for example checked initialization and
-use-after-free) still belong in the future runtime-check layer.
+Profiles control Clang optimization and explicitly select an LLVM-lowering
+runtime-check policy. All implemented check categories are enabled in every
+profile; no profile removes a check silently. The policy is passed from
+`driver.Profile` through `driver.compile` into backend lowering. The remaining
+unimplemented categories (for example checked initialization and
+use-after-free) are not implied by this policy.
 
 > A profile may change the cost of a check, or make it explicit, but no
 > profile may silently remove a check that the language promises.
@@ -176,26 +178,32 @@ Diagnostic ranges:
 | `E05xx` / `W05xx` | static analyzer errors / warnings |
 | `E06xx` | compiler-internal backend errors |
 
-## 5. Runtime check design (planned)
+## 5. Runtime-check policy and lowering
 
-The planned runtime-check layer must satisfy these constraints:
+`driver.Profile.runtimeCheckPolicy()` explicitly selects the policy carried
+through `driver.compile` into `llvm.Lowering`. The policy has separate switches
+for bounds, integer overflow, division, shifts, and exact-null dereferences.
+All four current profiles select all five categories:
 
-1. **Explicit policy.** Each check category (bounds, overflow, division,
-   null/deref, initialization) has a documented profile policy.
-2. **Predictable lowering.** Checks lower to ordinary branches and a trap or
-   call to a documented handler; no hidden unwinding through user frames.
-3. **Observable removal.** If a profile removes a check, the removal is
-   documented and testable; it is never an undocumented optimization.
-4. **No silent UB introduction.** A profile that claims a check keeps it,
-   unless the operation is already statically proven safe.
-5. **Testable.** Every check category gets positive (traps) and negative
-   (proven-safe) integration tests in each profile that enables it.
+| Profile | Bounds | Integer overflow | Division | Shifts | Exact-null dereference |
+| ------- | ------ | ---------------- | -------- | ------ | ---------------------- |
+| `debug` | enabled | enabled | enabled | enabled | enabled |
+| `safe` | enabled | enabled | enabled | enabled | enabled |
+| `release` | enabled | enabled | enabled | enabled | enabled |
+| `fast` | enabled | enabled | enabled | enabled | enabled |
 
-Implemented runtime checks (fixed-array and slice indexing/subslicing bounds,
-signed and unsigned integer addition/subtraction/multiplication, checked
-negation, checked division, shift bounds, and exact-`null` pointer checks) are
-emitted in every profile. Dereferencing a dangling, misaligned or wild
-non-null pointer remains undefined behavior.
+This is an explicit implementation of the existing contract, not a
+profile-specific safety reduction. A future policy change requires a
+documented language decision and profile regressions before any category can
+be disabled.
+
+Checks lower to branches and LLVM's `llvm.trap()` intrinsic, without hidden
+unwinding through user frames. Runtime traps for integer addition,
+bounds/subslice ranges, division, shifts, and exact-null dereferences are
+exercised in all four profiles by the integration suite. Other operations
+within those categories share the corresponding lowering helpers and broader
+integration fixtures. Dereferencing a dangling, misaligned or wild non-null
+pointer remains undefined behavior.
 
 ## 6. Verification strategy
 
@@ -204,8 +212,9 @@ non-null pointer remains undefined behavior.
   exit status/stdout.
 - Negative tests assert that a specific code is emitted for a specific invalid
   program.
-- The four profiles are run on a representative executable to ensure the
-  pipeline works in each configuration.
+- The four profiles are run on a representative executable and trap regressions
+  for overflow, fixed-array bounds, slice bounds, division, shifts, exact-null
+  dereference, and exact-null slice; each trap must retain the expected status.
 - A hybrid Kyn + C + Zig project is built and executed, including an
   incremental no-op rebuild.
 - CI runs formatting, build, unit tests and integration tests.

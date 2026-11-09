@@ -14,6 +14,19 @@ const types = @import("types.zig");
 
 pub const Type = types.Type;
 
+/// Runtime checks promised by the selected compiler profile. Profiles currently
+/// keep every implemented check enabled; policy is explicit so future changes
+/// cannot silently alter language behavior during lowering.
+pub const RuntimeCheckPolicy = struct {
+    bounds: bool = true,
+    integer_overflow: bool = true,
+    division: bool = true,
+    shifts: bool = true,
+    null_dereference: bool = true,
+
+    pub const all: RuntimeCheckPolicy = .{};
+};
+
 pub const Value = union(enum) {
     none,
     int: i128,

@@ -127,6 +127,18 @@ for profile in debug safe release fast; do
     else
         bad "structs ($profile): expected exit 30, got $status" "$(cat "$TMP/profile-$profile.stderr")"
     fi
+
+    for check_case in overflow_add_i32 runtime_bounds runtime_slice_bounds runtime_division overflow_shift runtime_null_deref runtime_null_slice; do
+        check_file="$ROOT/tests/integration/cases/$check_case.kyn"
+        expected=$(tr -d '[:space:]' <"$ROOT/tests/integration/cases/$check_case.exit")
+        status=0
+        (cd "$TMP/work" && "$KYNC" run "$check_file" --profile "$profile" >/dev/null 2>"$TMP/profile-$profile-$check_case.stderr") || status=$?
+        if [ "$status" -eq "$expected" ]; then
+            ok "runtime check $check_case ($profile)"
+        else
+            bad "runtime check $check_case ($profile): expected exit $expected, got $status" "$(cat "$TMP/profile-$profile-$check_case.stderr")"
+        fi
+    done
 done
 
 echo "negative cases"
