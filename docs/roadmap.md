@@ -1,9 +1,9 @@
 # Kyn roadmap
 
-`v0.1.0-alpha.2` is the current principal release:
-https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2
+`v0.1.0-alpha.3` is the current principal release:
+https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.3
 
-Subsequent work builds from that published toolchain. No `alpha.3` or
+Subsequent work builds from that published toolchain. No `alpha.4` or
 `beta.1` pre-release artifacts exist and no next version number is selected.
 Milestones below are directions, not release promises.
 
@@ -25,7 +25,7 @@ Milestones below are directions, not release promises.
 - Fuzzing/robustness corpus and clean-room release gate.
 - Documented limitations and no hidden runtime.
 
-## Implemented after `v0.1.0-alpha.2`
+## v0.1.0-alpha.3 — published preview
 
 - Open-ended and bounded slice syntax (`base[..]`, `base[start..]`,
   `base[..end]`, `base[start..end]`) with zero-branch lowering for `base[..]`.
@@ -40,8 +40,6 @@ Milestones below are directions, not release promises.
   with integer literals and non-integer pointees, and safe `< 8`-byte /
   `< 16`-byte C ABI aggregate register packing with executable slice ABI tests.
 
-## Implemented after `v0.1.0-alpha.2` (continued)
-
 - Explicit `import "relative/path.kyn" [as alias];` declarations, deterministic
   dependency-first loading, once-only normalized-path visits, source-aware
   diagnostics, cycle/missing-file diagnostics (`E0231`/`E0232`), aliases for
@@ -53,6 +51,12 @@ Milestones below are directions, not release promises.
   imported names/types report `E0471` at use. Duplicate names are allowed across
   modules but rejected within one module (`E0401`). Declarations are public by
   default; `private` restricts cross-module access.
+- Expanded x86_64-linux C ABI aggregate lowering: INTEGER-class eightbyte
+  merging for float/int members, scalar SSE for exactly one direct `f32`/`f64`
+  field, `<2 x float>` for two adjacent `f32` fields, two SSE argument registers
+  and `{ double, double }` return for two `f64` fields, direct `{ f64, i32 }` /
+  `{ f64, u32 }` and `{ i32, f64 }` / `{ u32, f64 }` layouts at offsets 0/8,
+  plus `E0473` for unsupported boundary layouts.
 - Runtime-check policy is explicit from `driver.Profile` through LLVM lowering.
   All current profiles retain all implemented checks (bounds, overflow,
   division, shifts, and exact-null dereference); no profile-specific removal is

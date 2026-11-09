@@ -4,7 +4,9 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
-## [Unreleased]
+## [0.1.0-alpha.3] - 2026-11-09
+
+Modules, slices ergonomics and expanded x86_64-linux C ABI coverage.
 
 ### Added
 
