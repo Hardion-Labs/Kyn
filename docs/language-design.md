@@ -11,8 +11,10 @@ These are constraints on design decisions, not slogans.
   allocations, hidden copies, hidden synchronization or hidden control flow.
 - **Verifiable safety.** Properties that can be decided at compile time are
   checked and reported with stable diagnostic codes. Checks that require
-  runtime information are intended to be explicit, profile-controlled and
-  observable — never silently removed.
+  runtime information follow an explicit, observable profile policy — never
+  silently removed. All currently implemented checks remain enabled in every
+  profile; any profile-specific removal requires a documented language decision
+  and regressions before it can change.
 - **Predictable performance.** Source constructs map to a small, explainable
   set of machine operations. The language has no garbage collector, no
   ownership inference and no implicit reference counting. Native optimization

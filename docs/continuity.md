@@ -86,17 +86,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 ## 4. Pending items (ordered by technical dependency)
 
-1. **Profile-specific runtime check policy** (explicit IR/backend configuration
-   from `driver.Profile` without silent UB introduction).
-2. **Explicit module re-exports** (if needed, specify a syntax and visibility
+1. **Explicit module re-exports** (if needed, specify a syntax and visibility
    model; current unaliased imports are transitively open, while aliased edges
    are not re-exported unqualified).
-3. **Extended C ABI classification** (`x86_64` System V SSE/EIGHTBYTE class
+2. **Extended C ABI classification** (`x86_64` System V SSE/EIGHTBYTE class
    merging for float-bearing structs, function pointers, and target ABI
    selection instead of host-assumed `64`-bit `usize`).
-4. **Tagged unions / explicit error-return types** (`Result`-style value flow
+3. **Tagged unions / explicit error-return types** (`Result`-style value flow
    without hidden exceptions or unwinding).
-5. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
+4. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
    atop validated multi-file modules and slice ergonomics.
 
 ## 5. Active contracts, invariants & architectural decisions
@@ -223,16 +221,26 @@ branch history; this increment does not redo them.
   `125 passed, 0 failed` against ReleaseSafe. This includes all four profile
   trap regressions, diagnostic/docs gates, version metadata, 900 robustness
   cases, LLVM/object generation, Kyn+C+Zig ABI integration, and cache tests.
-- Documentation gates report 126 diagnostic codes synchronized; version
-  metadata remains `0.1.0-alpha.2`. A full Markdown link check was not rerun
-  for this increment.
+- Documentation gates report 126 diagnostic codes synchronized; Markdown links
+  and version metadata (`0.1.0-alpha.2`) passed in the latest integration run.
+- A documentation-only reconciliation in this increment corrects stale claims
+  that imported modules share one namespace, that the build system lacks module
+  aliases/visibility, and that compiler profiles affect optimization only.
+  It also marks explicit all-check runtime policy complete in the roadmap and
+  removes it from pending items. Files: `docs/compiler-architecture.md`,
+  `docs/build-system.md`, `docs/language-design.md`, `docs/roadmap.md`, and this
+  continuity record.
+- `zig fmt --check build.zig compiler build-system`, `git diff --check`, and
+  `tests/integration/run.sh` passed; integration reported `125 passed, 0 failed`
+  with profile traps, documentation gates, robustness cases, code generation,
+  ABI interop and build-cache tests.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
-  gate. The runtime checks and profile matrix demonstrate covered behavior only.
-- Git branch is `arena/2b67c8fb-kyn`. Runtime-policy implementation and docs
-  are committed as `431a727` (`feat(driver): pass runtime-check policy to LLVM
-  lowering`) and pushed to `origin/arena/2b67c8fb-kyn`. Earlier module
-  isolation remains committed on this branch; no `main` merge or release/version
-  change was made.
+  gate. This increment changes documentation only and does not modify compiler
+  behavior.
+- Git branch is `arena/2b67c8fb-kyn`; the existing PR #1 remains open against
+  `main`. Runtime policy is implemented in commit `431a727` and preceding module
+  isolation work remains in branch history. No merge or release/version change
+  was made.
 
 ## 11. Next logical task for resumption
 

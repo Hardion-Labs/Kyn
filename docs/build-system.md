@@ -150,8 +150,10 @@ compiler.
 | `release` | `-O3` | `ReleaseFast` |
 | `fast` | `-O3` | `ReleaseFast` |
 
-The Kyn compiler receives the same profile name. In v0.1 this affects native
-optimization only; the static analyzer always runs.
+The Kyn compiler receives the same profile name. It selects native
+optimization flags and an explicit runtime-check policy; all currently
+implemented runtime checks remain enabled in every profile. The static analyzer
+always runs.
 
 ## 4. Incremental behavior
 
@@ -169,7 +171,6 @@ Limitations of the current cache:
   not trigger a rebuild; use `--force` or touch/change a listed source.
 - The Kyn compiler's own version is not part of the digest, only its path.
 - Zig's transitive imports are not hashed; only listed `zig_sources`.
-- Kyn imports currently share one global namespace; module aliases and visibility are not implemented.
 - Builds are sequential; there is no parallel job scheduling.
 - There is no dependency graph between multiple targets; every target is built
   independently.

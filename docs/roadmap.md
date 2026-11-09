@@ -53,6 +53,10 @@ Milestones below are directions, not release promises.
   imported names/types report `E0471` at use. Duplicate names are allowed across
   modules but rejected within one module (`E0401`). Declarations are public by
   default; `private` restricts cross-module access.
+- Runtime-check policy is explicit from `driver.Profile` through LLVM lowering.
+  All current profiles retain all implemented checks (bounds, overflow,
+  division, shifts, and exact-null dereference); no profile-specific removal is
+  implemented or promised.
 
 ## Next direction
 
@@ -60,8 +64,9 @@ Milestones below are directions, not release promises.
 - Decide and specify general-purpose C ABI lowering for floating-point/SSE
   aggregate members and cross-compilation targets before exposing them across
   `extern`/`export` unconditionally.
-- Add profile-differentiated runtime trap policy (`debug`, `safe`, `release`,
-  `fast`) with explicit, documented and tested behavior.
+- Keep the all-checks-enabled runtime policy stable across profiles unless a
+  separate language-level decision explicitly specifies observable profile
+  differences and adds profile-specific regressions.
 - Keep the compiler and docs aligned: grammar, reference, type system, memory,
   safety, ABI, architecture, build system, [continuity.md](continuity.md) and
   release notes.

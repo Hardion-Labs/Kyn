@@ -76,11 +76,15 @@ problem.
 ## 4. Parser
 
 `parser.Parser` is a hand-written recursive-descent parser with precedence
-climbing for binary expressions. It produces `ast.Program`, a list of declarations and top-level import
-paths. Imports are resolved relative to the containing source. The loader uses
+climbing for binary expressions. It produces `ast.Program`, a list of
+top-level declarations and import paths. Imports are resolved relative to the
+containing source. The loader uses
 normalized paths, depth-first source order, once-only visits, and an explicit
-visiting/completed state to reject cycles. Imported declarations currently share
-one global namespace with the root declarations.
+visiting/completed state to reject cycles. Each source module owns its top-level
+namespace. Unaliased imports open public names through unaliased dependency
+edges; aliases provide qualified access to the target module. Local declarations
+shadow opened imports, and conflicting opened candidates are diagnosed at use
+(`E0471`).
 
 Key properties:
 
@@ -190,8 +194,11 @@ the boundary between language semantics and native code generation.
    - `if`/`while` create explicit blocks and branches.
    - `break`/`continue` use explicit block stacks.
    - Short-circuit `&&`/`||` lower to branches.
-   - Dynamic fixed-array and slice indexes and pointer dereferences are
-     bounds/null-checked at runtime.
+   - The driver passes an explicit `RuntimeCheckPolicy` selected by
+     `driver.Profile` into lowering. All four current profiles enable bounds,
+     integer-overflow, division, shift, and exact-null dereference checks.
+   - Dynamic fixed-array and slice indexes and exact-null pointer dereferences
+     are checked at runtime.
    - Integer division violations lower to explicit branches to `llvm.trap()`.
    - Struct/array literals are stored field by field into their destination.
    - Calls carry argument and return types for the emitter.
