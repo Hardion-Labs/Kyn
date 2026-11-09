@@ -236,8 +236,9 @@ branch history; this increment does not redo them.
 
 ## 11. Next logical task for resumption
 
-Continue compiler development from the runtime-policy increment: inspect the
-working tree and validate the documentation/format gates, then commit and push
-only to `arena/2b67c8fb-kyn`. Future check-policy changes must be independently
-justified by a documented language decision and profile-specific regression;
-otherwise keep every implemented check enabled.
+The runtime-policy increment is complete, validated, committed, and pushed; no
+follow-up is pending within its scope. For the next increment, review the
+current roadmap and source state to select one coherent compiler task. Any
+future runtime-check policy change must be independently justified by a
+documented language decision and profile-specific regression; otherwise keep
+every implemented check enabled.
