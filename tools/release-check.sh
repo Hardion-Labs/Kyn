@@ -102,10 +102,9 @@ echo "CI for $EXPECTED_SHA"
 if ! command -v gh >/dev/null 2>&1; then
     bad "GitHub CLI is available"
 else
-    ci_run=$(gh run list --branch main --workflow CI --limit 50 \
+    ci_run=$(gh run list --branch main --workflow CI --commit "$EXPECTED_SHA" --limit 10 \
         --json headSha,conclusion,databaseId \
-        --jq '.[] | select(.headSha == $sha and .conclusion == "success") | .databaseId' \
-        --arg sha "$EXPECTED_SHA" 2>/dev/null | head -n 1 || true)
+        --jq '.[] | select(.conclusion == "success") | .databaseId' 2>/dev/null | head -n 1 || true)
     if [ -n "$ci_run" ]; then
         ok "CI succeeded for expected SHA (run $ci_run)"
     else
