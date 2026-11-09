@@ -5,7 +5,8 @@ implementation, tests and documentation before it is announced as available.
 
 ## v0.1.0-alpha.1 — vertically functional compiler
 
-Status: implemented and validated on `main` by GitHub Actions. No tag or
+Status: implemented and validated on `main` by GitHub Actions. A clean-room
+release-readiness gate is available at `tools/release-check.sh`. No tag or
 GitHub release has been created yet.
 
 - source manager, lexer, parser and AST;

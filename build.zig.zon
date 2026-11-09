@@ -9,6 +9,7 @@
         "build.zig.zon",
         "compiler",
         "build-system",
+        "tools",
         "tests",
         "std",
         "runtime",

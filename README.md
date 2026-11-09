@@ -195,6 +195,7 @@ build.zig            Builds the toolchain and wires the test steps
 - [Compiler architecture](docs/compiler-architecture.md)
 - [Build system](docs/build-system.md)
 - [Diagnostic codes](docs/diagnostics.md)
+- [Release checklist](docs/release-checklist.md)
 - [Roadmap](docs/roadmap.md)
 
 ## Current limitations

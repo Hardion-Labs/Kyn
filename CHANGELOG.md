@@ -38,6 +38,9 @@ First vertically functional compiler milestone.
 - Language, type-system, memory, safety, ABI, build-system and compiler
   architecture documentation.
 - GitHub Actions CI for formatting, build, unit tests and integration tests.
+- `tools/release-check.sh`, a non-destructive release-readiness gate that
+  validates branch state, exact CI success, clean-room build/tests, metadata,
+  changelog, tag absence and release absence.
 
 ### Fixed
 
