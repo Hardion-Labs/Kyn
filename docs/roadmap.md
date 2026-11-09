@@ -48,6 +48,11 @@ and validated. Explicit heap allocator experiments and slices are pending.
 
 ## v0.1.0-beta.1 — safety checks
 
+Status: in progress. Fixed-array dynamic bounds checks and integer
+division/remainder traps (including `INT_MIN / -1`) are implemented in `main`,
+enabled in every profile, and covered by integration tests. Integer overflow,
+null dereference and profile-specific trap policy remain pending.
+
 - explicit runtime check layer for bounds, overflow, division and null;
 - profile policy that never silently removes a promised check;
 - freestanding-compatible trap/handler strategy;

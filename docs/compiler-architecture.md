@@ -170,6 +170,8 @@ the boundary between language semantics and native code generation.
    - `if`/`while` create explicit blocks and branches.
    - `break`/`continue` use explicit block stacks.
    - Short-circuit `&&`/`||` lower to branches.
+   - Dynamic fixed-array bounds and integer division violations lower to
+     explicit branches to `llvm.trap()`.
    - Struct/array literals are stored field by field into their destination.
    - Calls carry argument and return types for the emitter.
 2. **Emission** (`Emitter`): print deterministic textual LLVM IR

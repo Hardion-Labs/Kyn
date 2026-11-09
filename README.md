@@ -161,15 +161,15 @@ Example:
 
 ## 🧬 Safety Profiles
 
-| Profile | Native Optimization | Static Analyzer |
-|:---:|:---:|:---:|
-| 🔵 `debug` | `-O0 -g` | ✅ Always on |
-| 🟢 `safe` | `-O2` | ✅ Always on |
-| 🟡 `release` | `-O3` | ✅ Always on |
-| 🟠 `fast` | `-O3` | ✅ Always on |
+| Profile | Native Optimization | Static Analyzer | Runtime Checks |
+|:---:|:---:|:---:|:---:|
+| 🔵 `debug` | `-O0 -g` | ✅ Always on | ✅ Always on |
+| 🟢 `safe` | `-O2` | ✅ Always on | ✅ Always on |
+| 🟡 `release` | `-O3` | ✅ Always on | ✅ Always on |
+| 🟠 `fast` | `-O3` | ✅ Always on | ✅ Always on |
 
 > ⚠️ Profiles currently affect native optimization only.  
-> No check is removed silently: the static analyzer always runs.
+> No implemented check is removed silently.
 
 ---
 
@@ -184,7 +184,10 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
 | ❌ Variadic extern functions | Planned / C wrapper required |
 | ❌ Indirect calls and first-class function values | Planned |
-| ❌ Runtime bounds / overflow / null checks | Planned; not implemented |
+| ✅ Fixed-array dynamic indexes | Bounds-checked at runtime; trap on out-of-range |
+| ✅ Integer division and remainder | Zero divisor traps; signed `INT_MIN / -1` traps |
+| ❌ Runtime overflow / null checks | Planned; not implemented |
+| ❌ Runtime checks for raw pointers and arbitrary indexing | No bounds metadata |
 | ❌ Standard library and runtime | Planned |
 
 Aggregate by-value support exists **inside Kyn only**:

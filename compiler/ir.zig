@@ -178,6 +178,7 @@ pub const Inst = union(enum) {
     ret: struct {
         value: ?Value,
     },
+    trap_: void,
     unreachable_: void,
 };
 

@@ -31,6 +31,9 @@ First vertically functional compiler milestone.
   pass pointers across the C ABI.
 - Global scalar and aggregate constants, including nested structs/arrays and
   enum globals, emitted as LLVM constants.
+- Runtime bounds checks for fixed arrays and runtime integer division traps.
+  Dynamic indexes outside `[0, len)`, a zero divisor, and signed `INT_MIN / -1`
+  call `llvm.trap()` in every profile.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
@@ -60,6 +63,8 @@ First vertically functional compiler milestone.
   release-readiness gate after the visual refresh.
 - `kync --version` and `kyn-build --version` now print exactly the version
   line on stdout; help output is no longer printed after `--version`.
+- Trap blocks now emit `unreachable` after `llvm.trap()` so the LLVM parser
+  recognizes the terminating path.
 
 ### Known limitations
 

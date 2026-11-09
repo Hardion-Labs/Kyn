@@ -8,31 +8,47 @@ not exist.
 
 `kync` and `kyn-build` accept four profiles:
 
-| Profile   | Native flags | Static analyzer |
-| --------- | ------------ | --------------- |
-| `debug`   | `-O0 -g`     | always on       |
-| `safe`    | `-O2`        | always on       |
-| `release` | `-O3`        | always on       |
-| `fast`    | `-O3`        | always on       |
+| Profile   | Native flags | Static analyzer | Runtime checks |
+| --------- | ------------ | --------------- | -------------- |
+| `debug`   | `-O0 -g`     | always on       | always on      |
+| `safe`    | `-O2`        | always on       | always on      |
+| `release` | `-O3`        | always on       | always on      |
+| `fast`    | `-O3`        | always on       | always on      |
 
-Profiles currently control Clang optimization only. Runtime checks are not
-implemented yet, so there is nothing for a profile to disable. The rule for
-future work is strict:
+Profiles currently control Clang optimization only. Implemented runtime checks
+are enabled in every profile; no profile removes a check silently. The
+remaining missing checks (integer overflow and null dereference) still belong
+in the future runtime-check layer.
 
 > A profile may change the cost of a check, or make it explicit, but no
 > profile may silently remove a check that the language promises.
 
-When runtime checks are added, the intended distinction is:
+The intended profile distinction, if and when differing policies are added,
+is:
 
 - `debug`: all checks, no optimization, debug info.
 - `safe`: all checks, optimization as permitted by LLVM.
 - `release`: all checks, unless a check is documented as removable under a
   specific profile.
-- `fast`: only checks that are required for defined behavior; any removal must
-  be documented, opt-in and observable.
+- `fast`: only checks required for defined behavior; any removal must be
+  documented, opt-in and observable.
 
-This table describes intent, not current functionality. Only the static
-analyzer runs today.
+Until a differing policy is specified, implemented runtime checks are enabled
+in every profile.
+
+### 1.1 Runtime checks implemented today
+
+The backend emits checks before the affected operation:
+
+- Dynamic fixed-array indexes are bounds-checked. An index below zero or at
+  or above the array length calls `llvm.trap()`.
+- Integer division and remainder check the divisor. A zero divisor traps.
+- Signed integer division and remainder also trap on `INT_MIN / -1`.
+
+Traps use LLVM's `llvm.trap()` intrinsic, which lowers to a CPU trap and
+terminates the process. There is no unwinding, recovery or handler in v0.1.
+On Linux x86-64, the integration suite observes SIGILL and records the
+process status as `132`.
 
 ## 2. Compile-time checks that are implemented
 
@@ -95,9 +111,8 @@ warning. It is not an error.
 The following are **not** checked at runtime or, in the dynamic case, at
 compile time:
 
-- dynamic array/pointer bounds;
+- pointer arithmetic bounds;
 - runtime integer overflow;
-- runtime division/remainder by zero;
 - null pointer dereference;
 - dangling pointer and use-after-free;
 - double free and leaks;
@@ -155,10 +170,10 @@ The planned runtime-check layer must satisfy these constraints:
 5. **Testable.** Every check category gets positive (traps) and negative
    (proven-safe) integration tests in each profile that enables it.
 
-Until that layer exists, the documentation and README must not describe Kyn as
-memory-safe or bounds-safe. The correct description is: statically typed,
-explicitly checked where provable, with documented undefined behavior
-elsewhere.
+Implemented runtime checks (fixed-array bounds and signed/unsigned division by
+zero, including `INT_MIN / -1`) are emitted in every profile. The remaining
+unimplemented categories (integer overflow and null dereference) are still
+documented as undefined behavior.
 
 ## 6. Verification strategy
 

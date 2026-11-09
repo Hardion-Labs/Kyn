@@ -1,0 +1,5 @@
+fn main() i32 {
+    var values: [3]i32 = [10, 20, 30];
+    var index: i32 = -1;
+    return values[index];
+}

@@ -125,8 +125,9 @@ Arrays are contiguous sequences of `N` elements with no header and no length
 stored at runtime. The length is a compile-time property of the type. Array
 literals are written element by element into their destination.
 
-Indexing a pointer or array computes `base + index * sizeof(element)`. Dynamic
-indexes are not bounds-checked in v0.1; constant out-of-bounds indexes are
+Indexing an array computes `base + index * sizeof(element)` and is
+bounds-checked at runtime; out-of-bounds access traps. Indexing a pointer has
+no bounds information and is not checked. Constant out-of-bounds indexes are
 diagnosed (`E0502`).
 
 ### 3.3 Enums and characters
@@ -159,9 +160,10 @@ The following are not checked at runtime in v0.1 and must be avoided:
 
 - reading uninitialized storage;
 - dereferencing `null` or a dangling pointer;
-- out-of-bounds array/pointer access with a dynamic index;
+- out-of-bounds pointer arithmetic;
 - signed integer overflow at runtime;
-- division or remainder by zero at runtime;
+- overflow of SIMD or architecture-specific integer operations that LLVM does
+  not lower as checked code;
 - shifting by a runtime value outside `[0, bits)`;
 - freeing memory twice or using it after `free`;
 - data races in code that uses external threading;

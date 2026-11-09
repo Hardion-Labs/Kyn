@@ -151,7 +151,7 @@ pub const Lowering = struct {
         if (block.terminated) return;
         try block.insts.append(self.allocator, inst);
         const tag = std.meta.activeTag(inst);
-        if (tag == .br or tag == .cbr or tag == .ret or tag == .unreachable_) {
+        if (tag == .br or tag == .cbr or tag == .ret or tag == .unreachable_ or tag == .trap_) {
             block.terminated = true;
         }
     }
@@ -160,6 +160,99 @@ pub const Lowering = struct {
         const id = self.module.temp();
         try self.module.setRegType(id, ty);
         return id;
+    }
+
+    fn booleanType(self: *Lowering) Error!*types.Type {
+        const ty = try self.allocator.create(types.Type);
+        ty.* = .bool;
+        return ty;
+    }
+
+    fn i128Type(self: *Lowering) Error!*types.Type {
+        const ty = try self.allocator.create(types.Type);
+        ty.* = .{ .int = .{ .bits = 128, .signed = true } };
+        return ty;
+    }
+
+    fn emitTrapBranch(self: *Lowering, cond: u32) Error!void {
+        const trap_block = try self.newBlock();
+        const continue_block = try self.newBlock();
+        try self.emit(.{ .cbr = .{
+            .cond = .{ .reg = cond },
+            .then_block = trap_block,
+            .else_block = continue_block,
+        } });
+        try self.switchBlock(trap_block);
+        try self.emit(.{ .trap_ = {} });
+        try self.switchBlock(continue_block);
+    }
+
+    fn emitArrayBoundsCheck(
+        self: *Lowering,
+        base_ty: *types.Type,
+        index_value: ir.Value,
+        index_ty: *types.Type,
+    ) Error!void {
+        const len = base_ty.array.len;
+        const i128_ty = try self.i128Type();
+        const bool_ty = try self.booleanType();
+        const len_value: ir.Value = .{ .int = @intCast(len) };
+        const zero_value: ir.Value = .{ .int = 0 };
+
+        var normalized = index_value;
+        if (index_ty.* != .int or index_ty.int.bits != 128) {
+            const signed = index_ty.isInteger() and index_ty.intInfo().signed;
+            const kind: ir.CastKind = if (signed) .sext else .zext;
+            const dst = try self.reg(i128_ty);
+            try self.emit(.{ .cast = .{ .dst = dst, .kind = kind, .from = index_ty, .to = i128_ty, .value = index_value } });
+            normalized = .{ .reg = dst };
+        }
+
+        var cond: u32 = undefined;
+        if (index_ty.isInteger() and index_ty.intInfo().signed) {
+            const negative = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = normalized, .rhs = zero_value } });
+            const too_large = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = too_large, .op = .ge, .ty = i128_ty, .lhs = normalized, .rhs = len_value } });
+            cond = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = cond, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = too_large } } });
+        } else {
+            cond = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = cond, .op = .ge, .ty = i128_ty, .lhs = normalized, .rhs = len_value } });
+        }
+        try self.emitTrapBranch(cond);
+    }
+
+    fn emitDivisionByZeroTrap(
+        self: *Lowering,
+        binary: ast.Expr.Kind.Binary,
+        lhs: ir.Value,
+        rhs: ir.Value,
+        lhs_ty: *types.Type,
+        rhs_ty: *types.Type,
+    ) Error!void {
+        _ = binary;
+        if (!rhs_ty.isInteger()) return;
+        const bool_ty = try self.booleanType();
+
+        const is_zero = try self.reg(bool_ty);
+        try self.emit(.{ .icmp = .{ .dst = is_zero, .op = .eq, .ty = rhs_ty, .lhs = rhs, .rhs = .{ .int = 0 } } });
+        var cond = is_zero;
+
+        if (rhs_ty.intInfo().signed) {
+            const info = rhs_ty.intInfo();
+            const min_value = -(@as(i128, 1) << @intCast(info.bits - 1));
+            const lhs_is_min = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = lhs_is_min, .op = .eq, .ty = lhs_ty, .lhs = lhs, .rhs = .{ .int = min_value } } });
+            const rhs_is_neg_one = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = rhs_is_neg_one, .op = .eq, .ty = rhs_ty, .lhs = rhs, .rhs = .{ .int = -1 } } });
+            const is_min_div = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = is_min_div, .op = .bit_and, .ty = bool_ty, .lhs = .{ .reg = lhs_is_min }, .rhs = .{ .reg = rhs_is_neg_one } } });
+            cond = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = cond, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = is_zero }, .rhs = .{ .reg = is_min_div } } });
+        }
+
+        try self.emitTrapBranch(cond);
     }
 
     fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {
@@ -403,6 +496,9 @@ pub const Lowering = struct {
         const lhs = try self.lowerExpr(binary.lhs);
         const rhs = try self.lowerExpr(binary.rhs);
         const ty = expr.ty orelse return .none;
+        if (binary.op == .div or binary.op == .mod) {
+            try self.emitDivisionByZeroTrap(binary, lhs, rhs, lhs_ty, rhs_ty);
+        }
 
         switch (binary.op) {
             .eq, .ne, .lt, .le, .gt, .ge => return self.lowerComparison(expr, binary, lhs, rhs, lhs_ty),
@@ -633,6 +729,7 @@ pub const Lowering = struct {
                 }
                 const index_ty = index.index.ty orelse return .none;
                 const index_value = try self.lowerExpr(index.index);
+                if (is_array) try self.emitArrayBoundsCheck(base_ty, index_value, index_ty);
                 const elem_ty = try self.makePointer(if (is_array) base_ty.array.elem else base_ty.pointer.elem, if (base_ty.* == .pointer) base_ty.pointer.is_const else false);
                 const dst = try self.reg(elem_ty);
                 try self.emit(.{ .elem_ptr = .{
@@ -963,6 +1060,7 @@ pub const Emitter = struct {
     pub fn emit(self: *Emitter, writer: *std.Io.Writer) !void {
         try writer.writeAll("; ModuleID = 'kyn'\n");
         try writer.writeAll("; Generated by the Kyn compiler. Do not edit.\n\n");
+        try writer.writeAll("declare void @llvm.trap() noreturn nounwind\n\n");
 
         for (self.module.structs.items) |info| {
             try writer.print("%struct.{s} = type {{ ", .{info.name});
@@ -1180,6 +1278,10 @@ pub const Emitter = struct {
                 }
             },
             .unreachable_ => try writer.writeAll("  unreachable\n"),
+            .trap_ => {
+                try writer.writeAll("  call void @llvm.trap()\n");
+                try writer.writeAll("  unreachable\n");
+            },
         }
     }
 

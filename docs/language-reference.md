@@ -310,7 +310,8 @@ Parentheses group expressions. `as` binds tighter than arithmetic, so
 - `+ - * / %` require numeric operands of the same type. An integer literal is
   adapted to the concrete operand type when it fits.
 - `/` and `%` on signed integers truncate toward zero; on unsigned integers
-  they use unsigned division.
+  they use unsigned division. A dynamic zero divisor traps. Signed division
+  and remainder also trap on `INT_MIN / -1`.
 - Mixing different concrete numeric types is an error (`E0439`); use `as`.
 - `& | ^` require integer operands.
 - `<< >>` require integer operands; the left operand determines the result
@@ -426,8 +427,9 @@ let value: i32 = pointer[3];
 - The base may be an lvalue array, an array literal, or a pointer.
 - The index must be an integer type; it is not automatically converted.
 - Constant indexes outside the array bounds are `E0502`.
-- There is no slice type and no runtime bounds check in v0.1; dynamic
-  out-of-bounds indexing is unchecked.
+- Dynamic indexes into fixed arrays are bounds-checked at runtime and trap on
+  out-of-range access.
+- There is no slice type and no bounds check for arbitrary pointers.
 
 ### 5.10 Struct and array literals
 
@@ -472,7 +474,7 @@ The following are rejected or simply not part of v0.1:
 - indirect calls and first-class function values;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;
-- runtime bounds, overflow, null, alignment or initialization checks;
+- runtime integer overflow, null, alignment and full initialization checks;
 - a preprocessor or macros;
 - threads, atomics and inline assembly syntax.
 
