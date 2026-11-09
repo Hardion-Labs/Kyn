@@ -31,8 +31,16 @@ compiler/driver.zig        orchestration, file I/O, external tool invocation
 
 `driver.compile` loads the root source and its explicit import graph, then runs
 the frontend once over the deterministic dependency-first declaration list. It
-returns either rendered LLVM IR or a diagnostic failure. `main.zig` decides whether to write IR, invoke `clang` for
-an object/executable, or run the result.
+returns either rendered LLVM IR or a diagnostic failure. `main.zig` decides
+whether to write IR, invoke `clang` for an object/executable, or run the result.
+
+Each parsed source has a stable module/source ID for the compilation. Sema stores
+top-level symbols by owner module and resolves open imports by a deterministic
+DFS over unaliased edges; aliases look only in their target module. Internal
+function/global and LLVM struct identifiers are mangled with the module ID, while
+`extern`/`export` function names keep their C ABI spelling. Identical extern
+prototypes may be shared; conflicting declarations or duplicate exported
+symbols are diagnosed (`E0472`).
 
 ## 2. Source manager
 

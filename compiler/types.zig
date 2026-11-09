@@ -63,6 +63,8 @@ pub const SliceInfo = struct {
 
 pub const StructInfo = struct {
     name: []const u8,
+    /// Unique backend identifier; `name` remains the source-level spelling.
+    llvm_name: []const u8 = "",
     owner_module_id: u32 = 0,
     is_public: bool = true,
     fields: []Field = &.{},

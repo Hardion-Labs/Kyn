@@ -100,11 +100,13 @@ coupled to LLVM internals. Kyn semantics remain defined by this repository.
   in v0.1).
 
 Compilation roots can explicitly import relative `.kyn` files. Import graphs
-are loaded deterministically. Imports may use an explicit alias for qualified
-value/type references; unaliased imports contribute names to the shared global
-namespace. Top-level declarations are public by default and `private` restricts
-cross-file access. Aliases do not yet isolate symbol namespaces or permit same-name
-declarations across source files.
+are loaded deterministically, and each source file owns its top-level symbol
+table. Imports may use an explicit alias for qualified value/type references.
+Unaliased imports open public declarations through the transitive closure of
+unaliased edges; aliased edges are not re-exported unqualified. Local declarations
+shadow opened names, and conflicting public names report `E0471` when used.
+Same-named declarations in different modules are distinct. Top-level declarations
+are public by default and `private` restricts cross-file access.
 
 ## Control and cost
 

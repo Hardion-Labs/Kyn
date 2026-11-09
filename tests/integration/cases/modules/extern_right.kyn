@@ -1,0 +1,2 @@
+extern fn abs(value: i32) i32;
+fn absolute(value: i32) i32 { return abs(value); }

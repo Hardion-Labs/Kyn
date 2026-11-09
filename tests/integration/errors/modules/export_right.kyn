@@ -1,0 +1,1 @@
+export fn duplicate_export() i32 { return 2; }

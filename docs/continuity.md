@@ -19,13 +19,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **Latest increment implemented and validated:** Explicit relative-path
-  imports plus optional `as alias` qualified function/global/type references,
-  `private` visibility, deterministic dependency-first loading, per-source
-  diagnostic spans, cycle/missing-file handling, and transitive Kyn build-stamp
-  hashing. Aliases coexist with the shared unqualified global namespace;
-  same-name declarations across files still collide. The implementation is
-  committed and pushed on the session branch.
+- **Latest module-system increment implemented and validated in the working
+  tree:** Per-source top-level namespaces layered on deterministic relative
+  imports and aliases. Unaliased imports open public names through their
+  transitive unaliased dependency closure; local declarations shadow opens;
+  multiple distinct public candidates are ambiguous at use (`E0471`). Alias-only
+  edges remain qualified-only. Same-module duplicates are `E0401`; same-spelled
+  declarations across modules are distinct. `private` remains enforced
+  (`E0467`), and backend names are module-qualified while C `extern`/`export`
+  names retain ABI spellings.
 
 ## 2. Validated completed components
 
@@ -64,26 +66,31 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   `compiler/parser.zig`, `build-system/main.zig`):**
   - *Implemented & validated:* `import "relative/path.kyn";`, paths resolved
     relative to the containing file, normalized-path once-only depth-first
-    loading, dependency-first shared compilation, global duplicate detection,
-    source-aware diagnostics, cycle detection (`E0231`), missing-source errors
+    loading, dependency-first compilation, per-module duplicate detection and
+    opened-name ambiguity checks, source-aware diagnostics, cycle detection (`E0231`), missing-source errors
     (`E0232`), and transitive import path/content inclusion in SHA-256 build
     stamps. Multi-language linking with C/Zig remains supported.
   - *Implemented and validated in this working tree:* Optional
     `import "path.kyn" as alias;`, qualified calls/globals/struct/enum/type use,
     and cross-file private checks (`E0467`), including private function and type
     access through an alias.
-  - *Not yet implemented:* Isolated per-module symbol namespaces. Aliases do not
-    stop public names from being available through the existing unqualified
-    compilation namespace; same-name declarations across files still fail.
+  - *Implemented in the current increment:* Independent module-owned symbol
+    maps, alias-qualified target-only lookup, deterministic cached open-import
+    resolution, use-site ambiguity diagnostics, and module-qualified internal
+    linkage/type identifiers. Same-named private helpers and public types can
+    coexist in distinct source modules.
+  - *Contract:* only unaliased edges contribute to unqualified visibility,
+    transitively; alias-only edges do not re-export their target's declarations.
+    Local module declarations shadow opened imports. Repeated paths to the same
+    module count as one candidate.
 
 ## 4. Pending items (ordered by technical dependency)
 
-1. **Module-isolated namespaces** (move declaration lookup to module-owned
-   symbol tables so aliases no longer share/inject the global namespace and
-   same-named private/public declarations can coexist; preserve `private`
-   visibility and deterministic dependency/hash contracts).
-2. **Profile-specific runtime check policy** (explicit IR/backend configuration
+1. **Profile-specific runtime check policy** (explicit IR/backend configuration
    from `driver.Profile` without silent UB introduction).
+2. **Explicit module re-exports** (if needed, specify a syntax and visibility
+   model; current unaliased imports are transitively open, while aliased edges
+   are not re-exported unqualified).
 3. **Extended C ABI classification** (`x86_64` System V SSE/EIGHTBYTE class
    merging for float-bearing structs, function pointers, and target ABI
    selection instead of host-assumed `64`-bit `usize`).
@@ -130,12 +137,21 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   records and stable source/module IDs; declarations append dependency-first into
   one program. Imports retain the parent source ID in their span and the resolved
   target module ID for semantic alias lookup.
+- `sema.Sema`: `module_globals` maps owner module IDs to local top-level symbol
+  tables; `module_aliases` stores per-source aliases; `module_open_imports`
+  stores only unaliased edges. Name resolution caches results per module/name
+  and walks open edges with reusable generation marks and a retained stack,
+  avoiding a quadratic precomputed transitive closure.
+- `symbol.Symbol.link_name`: source `name` stays diagnostic/source-facing;
+  internal Kyn function/global linker symbols include module ID, while external
+  C symbols preserve their declared spelling. `types.StructInfo.llvm_name`
+  similarly separates LLVM type identity from source-level struct names.
 - `kyn-build.hashKynImports(arena, io, hasher, path, visited, hash_self)` uses
   the compiler's shared lexer/parser frontend and hashes each transitive import
   edge plus imported path/content once per listed root.
 - `ast.Expr.Kind.SliceAccess`: `{ base: *Expr, start: ?*Expr, end: ?*Expr }`
   representing `[..]`, `[start..]`, `[..end]`, and `[start..end]`.
-- `ast.Expr.Kind.Field`: `{ base: *Expr, name: []const u8, field_index: u32, is_enum_variant: bool, variant_value: i128, through_pointer: bool }`
+- `ast.Expr.Kind.Field`: `{ base: *Expr, name: []const u8, field_index: u32, is_enum_variant: bool, variant_value: i128, through_pointer: bool, sym: ?*Symbol }`
   used for struct fields, enum variants, `slice.ptr` (`0`), `slice.len` (`1`),
   and `array.len` (`1`).
 - `sema.Sema.checkSlice(expr, slice_expr, expected)`: resolves slice bounds and
@@ -145,37 +161,35 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   or `.memory` (`> 16B` `sret`/`byval`), returning `null` for float-bearing
   aggregates.
 
-## 7. Files modified / added in the current working tree
+## 7. Files modified / added in the current increment
 
-The current diff contains the accumulated post-`v0.1.0-alpha.2` work, not just
-the final alias increment:
+- **Semantics:** `compiler/sema.zig` now owns per-module top-level tables,
+  unaliased import edges, cached resolution results, and collision checks for
+  external function link names.
+- **Backend/types:** `compiler/symbol.zig` already carried `link_name`; this
+  increment assigns and consumes unique internal names in
+  `compiler/backend/llvm.zig`. `compiler/types.zig` separates source struct names
+  from unique LLVM identified-struct names.
+- **Integration coverage:** `module_namespaces`, `module_open_shadow`,
+  `module_open_diamond`, `open_transitive`, `module_extern_dedup`, and
+  `module_export_pair`, plus negative ambiguity, alias-only visibility,
+  external declaration/definition cases under `tests/integration/errors/`.
+- **Specifications:** `CHANGELOG.md`, `README.md`, `docs/compiler-architecture.md`,
+  `docs/diagnostics.md`, `docs/language-design.md`, `docs/language-reference.md`,
+  `docs/roadmap.md`, and this continuity record.
 
-- **Language/front end:** `build.zig`, `compiler/{source,diagnostics,token,lexer,
-ast,parser,driver,sema,symbol,types,analyzer}.zig`, new `compiler/modules.zig`,
-  and `build-system/main.zig` cover slicing/lvalue/safety/ABI fixes, imports,
-  per-source diagnostics, aliases and visibility.
-- **Backend/runtime contracts:** `compiler/backend/llvm.zig` and associated
-  runtime safety/aggregate ABI changes.
-- **Tests:** `tests/integration/run.sh`, `robustness.py`, slice/ABI/import/private
-  and alias positive fixtures, plus import/visibility/alias negative diagnostics.
-- **Documentation:** README/changelog and the language, architecture, ABI,
-  build, memory, safety, type-system, grammar, diagnostics, roadmap and
-  continuity documents.
-
-The alias/visibility increment is committed on top of the existing import
-implementation; inspect `git log --graph` and `git status --short` for current
-history and cleanliness.
+Earlier import, alias, visibility and slice implementations remain in the
+branch history; this increment does not redo them.
 
 ## 8. Known limitations
 
-- Imports still flatten declaration visibility into one compilation-wide name
-  table. Optional aliases resolve qualified values/types but do not isolate a
-  module namespace; duplicate declarations across files remain `E0401`.
-- Top-level declarations are public by default; `private` blocks cross-source
-  references, including alias-qualified access. The source graph is not yet a
-  namespace boundary for duplicate names.
-- Import paths are resolved lexically relative to the importing file; no
-  package registry, search path, or symlink-canonical module identity exists.
+- Module namespaces are source-file identities only. There is no package
+  registry, search path, module re-export syntax, or symlink-canonical identity.
+  Same-name opened public declarations are ambiguous at use (`E0471`); aliases
+  are the current disambiguation mechanism.
+- Top-level declarations are public by default; `private` blocks cross-module
+  references, including alias-qualified access. Import paths remain lexical and
+  relative to the importing file.
 - `usize` / `isize` and C ABI lowering assume 64-bit `x86_64` Linux System V.
 - Floating-point structs, fixed-size arrays by value, variadic functions, and
   function pointers are rejected across `extern`/`export` C ABI boundaries.
@@ -185,34 +199,33 @@ history and cleanliness.
 
 ## 9. Next logical task for resumption
 
-Complete module isolation: replace compilation-wide top-level name lookup with
-module-owned symbol tables, so alias-qualified references select only that module,
-open imports have explicit documented lookup behavior, and same-named private
-helpers/types can coexist. Preserve qualified calls/globals/types and `private`
-checks already implemented; add shadowing, ambiguity, duplicate-alias, and
-same-name cross-module integration tests. Preserve deterministic loading,
-source-aware diagnostics, and transitive SHA-256 caching.
+Implement the profile-specific runtime-check policy. First pass an explicit
+profile/check policy from `driver.Profile` through compilation and IR lowering;
+define which checks each profile keeps or removes without silently introducing
+undefined behavior. Preserve the current all-checks-by-default contract until a
+check category has a documented policy and positive/negative tests in every
+relevant profile. Keep C ABI behavior, module visibility and deterministic
+imports independent of optimization profiles.
 
 ## 10. Latest validation and Git state
 
 - Toolchain: Zig `0.17.0`; Clang `22.1.8` through `zig cc`.
 - `zig fmt --check build.zig compiler build-system`: passed.
 - `zig build`, `zig build test`, and `zig build -Doptimize=ReleaseSafe`: passed.
-- `tests/integration/run.sh`: `86 passed, 0 failed` against the Debug build and
-  `86 passed, 0 failed` against the ReleaseSafe build. This includes qualified
-  function/global/type/enum references, nested aliases, private visibility
-  regressions (including alias-qualified private types), all four native profiles,
-  ABI interop, 900 robustness cases, source-aware imported diagnostics, import
-  errors, and transitive cache invalidation.
-- Documentation gates: 119 diagnostic codes synchronized; 19 Markdown files
+- `tests/integration/run.sh`: `97 passed, 0 failed` against the Debug build and
+  `97 passed, 0 failed` against the ReleaseSafe build. New module coverage checks
+  same-name functions/globals/types across modules, private helpers, open-import
+  shadowing, transitive and diamond imports, ambiguity, alias-only visibility,
+  and extern/export linkage. Existing profiles, ABI interop, 900 robustness
+  cases, imported diagnostics and cache invalidation also passed.
+- Documentation gates: 126 diagnostic codes synchronized; 19 Markdown files
   link-checked; version metadata remains `0.1.0-alpha.2`.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
   gate. Static/dynamic regression coverage is the existing unit, integration,
   ABI and robustness suites.
-- Git: branch `arena/2b67c8fb-kyn`; alias/visibility and accumulated safety
-  work are committed as `a5d44ab` (`feat: add visibility-aware module imports
-  and harden slices`). The checkout was shallow/grafted at the release base, so
-  a no-content-change merge commit `f31533e` records the already-pushed import
-  history (`74e17b2`, `ae1ab25`) and permits a fast-forward push. Branch is
-  pushed to `origin/arena/2b67c8fb-kyn`; no `main` merge or release/version
-  change was made. Keep the working tree clean.
+- Git: branch `arena/2b67c8fb-kyn` at `7bc7d3a`; the module-isolation
+  increment is currently uncommitted. Earlier aliases/visibility, imports and
+  slicing work is in the branch history, including the merge reconciliation
+  commit `f31533e`; the remote branch was last pushed at `7bc7d3a`. No `main`
+  merge or release/version change was made. Stage/commit only after final review
+  and keep all work on this branch.

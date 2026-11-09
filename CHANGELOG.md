@@ -8,7 +8,7 @@ promised between alpha releases.
 
 ### Added
 
-- Explicit relative-path Kyn imports with deterministic dependency-first loading, once-only module graph traversal, source-aware diagnostics, and cycle/missing-file checks. Imports may declare aliases for qualified function/value/type references. Declarations still share one global name namespace; top-level `private` declarations are enforced across source files.
+- Explicit relative-path Kyn imports with deterministic dependency-first loading, once-only module graph traversal, source-aware diagnostics, and cycle/missing-file checks. Each source owns a top-level namespace; aliases qualify declarations and unaliased imports open public names transitively. Ambiguous opens are diagnosed; top-level `private` declarations are enforced across source files.
 - Transitive `.kyn` import contents are included in `kyn-build` SHA-256 cache stamps.
 - Open-ended and bounded slice expressions (`base[..]`, `base[start..]`,
   `base[..end]`, `base[start..end]`) across fixed arrays, pointers to fixed

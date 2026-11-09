@@ -1,0 +1,2 @@
+struct Shared { value: i32 }
+fn shared() i32 { return 20; }

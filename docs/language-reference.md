@@ -12,12 +12,16 @@ current language.
 - Each module is a UTF-8 source file with the `.kyn` extension.
 - A root compilation may use explicit `import "relative/path.kyn";` declarations;
   each imported file is resolved relative to the file containing that import.
-- Imported modules are parsed once per normalized path. Optional `as alias`
-  imports support qualified value/type references; unaliased imported names are
-  also available unqualified. Top-level names still share one compilation-wide
-  namespace, so duplicates across files produce `E0401`. `private` restricts
-  cross-file names/types (`E0467`). Import cycles are rejected (`E0231`), and
-  unreadable files produce `E0232`. There is no implicit prelude or glob import.
+- Imported modules are parsed once per normalized path and own independent
+  top-level namespaces. Optional `as alias` imports support qualified
+  value/type references. Unaliased imports open their public declarations,
+  including the transitive closure of other unaliased imports. A same-module
+  declaration shadows opened names; two distinct opened public declarations
+  with the same spelling are ambiguous at use (`E0471`). Aliased-only edges do
+  not open names. Duplicate declarations within one module produce `E0401`.
+  `private` restricts cross-module names/types (`E0467`). Import cycles are
+  rejected (`E0231`), and unreadable files produce `E0232`. There is no implicit
+  prelude or glob import.
 - Source text is processed as bytes. Invalid bytes inside comments, strings and
   characters are diagnosed by the lexer.
 - Line endings may be `\n` or `\r\n`.
@@ -143,10 +147,11 @@ cast in v0.1). Mutable slices `[]T` convert implicitly to `[]const T` when
 
 ## 3. Top-level declarations
 
-A program consists of top-level imports and declarations. Top-level names
-share one namespace across the root file and all imported files. Declarations
-are public by default for compatibility; prefix a top-level declaration with
-`private` to restrict its names and types to the declaring source module.
+A program consists of top-level imports and declarations. Each source file owns
+its top-level namespace. Declarations are public by default for compatibility;
+prefix a top-level declaration with `private` to restrict its names and types
+to the declaring source module. Same-spelled declarations in different modules
+are distinct; an open-import ambiguity is diagnosed only when the name is used.
 
 ### 3.1 Imports
 
@@ -165,13 +170,18 @@ fn main() i32 {
 Paths resolve relative to the importing file. The compiler traverses imports in
 depth-first source order, loads each normalized path once, then analyzes its
 declarations before the importer. An optional `as alias` enables explicit
-qualified references such as `math.add(...)` and `math.Vector`; without an alias,
-the import contributes public names to the unqualified compilation namespace.
-The current namespace still rejects same-named top-level declarations across
-files (`E0401`), including private names. Top-level declarations are public by
-default; prefix one with `private` to block cross-file access (`E0467`). Cycles
-(`E0231`) and unreadable files (`E0232`) are errors. Aliases do not yet create
-independent symbol namespaces.
+qualified references such as `math.add(...)` and `math.Vector`, resolving only
+declarations owned by that imported module.
+
+Without an alias, an import opens public names in the importing module. Open
+imports are transitive through other unaliased imports; aliased edges are not
+re-exported unqualified. Names declared locally shadow opened names. If two
+different opened modules provide the same public name, using that name without
+qualification reports `E0471`; qualify it through an alias to disambiguate.
+Private declarations do not participate in unqualified lookup from other
+modules. Same-named declarations in separate modules are distinct, while a
+duplicate within one module reports `E0401`. Cycles (`E0231`) and unreadable
+files (`E0232`) are errors.
 
 ### 3.2 Functions
 

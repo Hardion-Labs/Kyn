@@ -29,14 +29,24 @@ const Scope = struct {
     symbols: std.StringHashMap(*Symbol),
 };
 
+const NameResolution = union(enum) {
+    missing,
+    found: *Symbol,
+    private: *Symbol,
+    ambiguous,
+};
+
 pub const Sema = struct {
     allocator: std.mem.Allocator,
     reporter: *diagnostics.Reporter,
     prims: *types.Primitives,
-    globals: std.StringHashMap(*Symbol),
     module_globals: std.AutoHashMap(u32, std.StringHashMap(*Symbol)),
     module_aliases: std.AutoHashMap(u32, std.StringHashMap(u32)),
-    imports: []const ast.ImportDecl = &.{},
+    module_open_imports: std.AutoHashMap(u32, std.ArrayList(u32)),
+    module_name_cache: std.AutoHashMap(u32, std.StringHashMap(NameResolution)),
+    module_visit_marks: []u32 = &.{},
+    module_visit_generation: u32 = 0,
+    module_walk_stack: std.ArrayList(u32) = .empty,
     scope: ?*Scope = null,
     next_symbol_id: u32 = 1,
     loop_depth: u32 = 0,
@@ -51,17 +61,18 @@ pub const Sema = struct {
             .allocator = allocator,
             .reporter = reporter,
             .prims = prims,
-            .globals = std.StringHashMap(*Symbol).init(allocator),
             .module_globals = std.AutoHashMap(u32, std.StringHashMap(*Symbol)).init(allocator),
             .module_aliases = std.AutoHashMap(u32, std.StringHashMap(u32)).init(allocator),
+            .module_open_imports = std.AutoHashMap(u32, std.ArrayList(u32)).init(allocator),
+            .module_name_cache = std.AutoHashMap(u32, std.StringHashMap(NameResolution)).init(allocator),
         };
     }
 
     pub fn analyze(self: *Sema, program: *ast.Program) Error!void {
-        self.imports = program.imports;
-        try self.registerModuleAliases(program.imports);
+        try self.registerImports(program.imports);
         try self.declareTopLevel(program);
         try self.resolveTopLevel(program);
+        try self.checkExternalSymbols(program);
         try self.checkBodies(program);
     }
 
@@ -79,19 +90,141 @@ pub const Sema = struct {
         return aliases.get(alias);
     }
 
-    fn registerModuleAliases(self: *Sema, imports: []const ast.ImportDecl) Error!void {
+    fn registerImports(self: *Sema, imports: []const ast.ImportDecl) Error!void {
+        var max_module_id: u32 = 0;
         for (imports) |imp| {
-            const alias = imp.alias orelse continue;
-            if (self.module_aliases.getPtr(imp.span.source_id)) |aliases| {
-                if (aliases.contains(alias)) {
-                    try self.reporter.err("E0468", imp.span, "duplicate module alias '{s}'", .{alias});
-                    continue;
+            max_module_id = @max(max_module_id, @max(imp.span.source_id, imp.target_module_id));
+            if (imp.alias) |alias| {
+                if (self.module_aliases.getPtr(imp.span.source_id)) |aliases| {
+                    if (aliases.contains(alias)) {
+                        try self.reporter.err("E0468", imp.span, "duplicate module alias '{s}'", .{alias});
+                        continue;
+                    }
+                    try aliases.put(alias, imp.target_module_id);
+                } else {
+                    var aliases = std.StringHashMap(u32).init(self.allocator);
+                    try aliases.put(alias, imp.target_module_id);
+                    try self.module_aliases.put(imp.span.source_id, aliases);
                 }
-                try aliases.put(alias, imp.target_module_id);
+            } else if (self.module_open_imports.getPtr(imp.span.source_id)) |targets| {
+                try targets.append(self.allocator, imp.target_module_id);
             } else {
-                var aliases = std.StringHashMap(u32).init(self.allocator);
-                try aliases.put(alias, imp.target_module_id);
-                try self.module_aliases.put(imp.span.source_id, aliases);
+                var targets: std.ArrayList(u32) = .empty;
+                try targets.append(self.allocator, imp.target_module_id);
+                try self.module_open_imports.put(imp.span.source_id, targets);
+            }
+        }
+
+        self.module_visit_marks = try self.allocator.alloc(u32, @as(usize, max_module_id) + 1);
+        @memset(self.module_visit_marks, 0);
+    }
+
+    fn cacheModuleName(self: *Sema, module_id: u32, name: []const u8, result: NameResolution) Error!NameResolution {
+        if (self.module_name_cache.getPtr(module_id)) |cache| {
+            try cache.put(name, result);
+        } else {
+            var cache = std.StringHashMap(NameResolution).init(self.allocator);
+            try cache.put(name, result);
+            try self.module_name_cache.put(module_id, cache);
+        }
+        return result;
+    }
+
+    fn resolveModuleName(self: *Sema, module_id: u32, name: []const u8) Error!NameResolution {
+        if (self.module_name_cache.get(module_id)) |cache| {
+            if (cache.get(name)) |cached| return cached;
+        }
+        if (self.moduleSymbol(module_id, name)) |local| {
+            return try self.cacheModuleName(module_id, name, .{ .found = local });
+        }
+        if (module_id >= self.module_visit_marks.len) {
+            return try self.cacheModuleName(module_id, name, .missing);
+        }
+
+        if (self.module_visit_generation == std.math.maxInt(u32)) {
+            @memset(self.module_visit_marks, 0);
+            self.module_visit_generation = 1;
+        } else {
+            self.module_visit_generation += 1;
+        }
+        const generation = self.module_visit_generation;
+        self.module_walk_stack.clearRetainingCapacity();
+        try self.pushOpenTargets(module_id);
+
+        var visible: ?*Symbol = null;
+        var inaccessible: ?*Symbol = null;
+        var ambiguous = false;
+        while (self.module_walk_stack.pop()) |imported_id| {
+            if (self.module_visit_marks[imported_id] == generation) continue;
+            self.module_visit_marks[imported_id] = generation;
+            if (self.moduleSymbol(imported_id, name)) |candidate| {
+                if (candidate.is_public) {
+                    if (visible) |previous| {
+                        if (previous != candidate) {
+                            ambiguous = true;
+                            break;
+                        }
+                    } else {
+                        visible = candidate;
+                    }
+                } else if (inaccessible == null) {
+                    inaccessible = candidate;
+                }
+            }
+            try self.pushOpenTargets(imported_id);
+        }
+        if (ambiguous) return try self.cacheModuleName(module_id, name, .ambiguous);
+        if (visible) |candidate| return try self.cacheModuleName(module_id, name, .{ .found = candidate });
+        if (inaccessible) |candidate| return try self.cacheModuleName(module_id, name, .{ .private = candidate });
+        return try self.cacheModuleName(module_id, name, .missing);
+    }
+
+    fn pushOpenTargets(self: *Sema, module_id: u32) Error!void {
+        const targets = self.module_open_imports.get(module_id) orelse return;
+        var index = targets.items.len;
+        while (index > 0) {
+            index -= 1;
+            try self.module_walk_stack.append(self.allocator, targets.items[index]);
+        }
+    }
+
+    fn lookupValue(self: *Sema, name: []const u8, source_id: u32, span: Span) Error!?*Symbol {
+        return self.lookupLocal(name) orelse switch (try self.resolveModuleName(source_id, name)) {
+            .found => |sym| sym,
+            .missing => null,
+            .private => |sym| blk: {
+                try self.reporter.err("E0467", span, "declaration '{s}' is private to another module", .{name});
+                _ = sym;
+                break :blk null;
+            },
+            .ambiguous => blk: {
+                try self.reporter.err("E0471", span, "unqualified name '{s}' is ambiguous; use an import alias", .{name});
+                break :blk null;
+            },
+        };
+    }
+
+    fn checkExternalSymbols(self: *Sema, program: *ast.Program) Error!void {
+        const External = struct { symbol: *Symbol, is_definition: bool };
+        var names = std.StringHashMap(External).init(self.allocator);
+        for (program.decls) |decl| {
+            const fd = switch (decl.kind) {
+                .fn_decl => |fd| fd,
+                else => continue,
+            };
+            const sym = fd.sym orelse continue;
+            const is_root_main = sym.owner_module_id == 0 and std.mem.eql(u8, sym.name, "main");
+            if (!fd.is_extern and !fd.is_export and !is_root_main) continue;
+            const link_name = sym.link_name;
+            const is_definition = fd.is_export or is_root_main;
+            if (names.get(link_name)) |previous| {
+                if (!Type.eql(previous.symbol.ty, sym.ty) or (previous.is_definition and is_definition)) {
+                    try self.reporter.err("E0472", decl.span, "incompatible or duplicate external function symbol '{s}'", .{link_name});
+                } else if (is_definition) {
+                    try names.put(link_name, .{ .symbol = sym, .is_definition = true });
+                }
+            } else {
+                try names.put(link_name, .{ .symbol = sym, .is_definition = is_definition });
             }
         }
     }
@@ -101,11 +234,16 @@ pub const Sema = struct {
             switch (decl.kind) {
                 .struct_decl => |sd| {
                     const info = try self.allocator.create(types.StructInfo);
-                    info.* = .{ .name = sd.name, .owner_module_id = decl.span.source_id, .is_public = decl.is_public };
+                    info.* = .{
+                        .name = sd.name,
+                        .llvm_name = try std.fmt.allocPrint(self.allocator, "__kyn_s_m{d}_{s}", .{ decl.span.source_id, sd.name }),
+                        .owner_module_id = decl.span.source_id,
+                        .is_public = decl.is_public,
+                    };
                     const ty = try self.allocator.create(Type);
                     ty.* = .{ .struct_type = info };
                     sd.ty = ty;
-                    sd.sym = try self.declareGlobal(sd.name, .struct_type, ty, decl.span, decl.is_public);
+                    sd.sym = try self.declareGlobal(sd.name, .struct_type, ty, decl.span, decl.is_public, false);
                 },
                 .enum_decl => |ed| {
                     const info = try self.allocator.create(types.EnumInfo);
@@ -113,7 +251,7 @@ pub const Sema = struct {
                     const ty = try self.allocator.create(Type);
                     ty.* = .{ .enum_type = info };
                     ed.ty = ty;
-                    ed.sym = try self.declareGlobal(ed.name, .enum_type, ty, decl.span, decl.is_public);
+                    ed.sym = try self.declareGlobal(ed.name, .enum_type, ty, decl.span, decl.is_public, false);
                 },
                 .fn_decl => |fd| {
                     if (fd.body == null and !fd.is_extern) {
@@ -121,7 +259,7 @@ pub const Sema = struct {
                     }
                     const placeholder = try self.allocator.create(Type);
                     placeholder.* = .invalid;
-                    fd.sym = try self.declareGlobal(fd.name, .function, placeholder, decl.span, decl.is_public);
+                    fd.sym = try self.declareGlobal(fd.name, .function, placeholder, decl.span, decl.is_public, fd.is_extern or fd.is_export or (decl.span.source_id == 0 and std.mem.eql(u8, fd.name, "main")));
                     if (fd.sym) |sym| {
                         sym.is_extern = fd.is_extern;
                         sym.is_export = fd.is_export;
@@ -130,8 +268,8 @@ pub const Sema = struct {
                 .var_decl => |vd| {
                     const placeholder = try self.allocator.create(Type);
                     placeholder.* = .invalid;
-                    const existed = self.globals.contains(vd.name);
-                    vd.sym = try self.declareGlobal(vd.name, .global, placeholder, decl.span, decl.is_public);
+                    const existed = self.moduleSymbol(decl.span.source_id, vd.name) != null;
+                    vd.sym = try self.declareGlobal(vd.name, .global, placeholder, decl.span, decl.is_public, false);
                     if (!existed) {
                         if (vd.sym) |sym| sym.mutable = vd.mutable;
                     }
@@ -147,24 +285,32 @@ pub const Sema = struct {
         ty: *Type,
         span: Span,
         is_public: bool,
+        is_external_name: bool,
     ) Error!*Symbol {
-        if (self.globals.get(name)) |existing| {
-            try self.reporter.err("E0401", span, "duplicate top-level declaration '{s}' (previous kind: {s})", .{
+        if (self.moduleSymbol(span.source_id, name)) |existing| {
+            try self.reporter.err("E0401", span, "duplicate declaration '{s}' in this module (previous kind: {s})", .{
                 name,
                 @tagName(existing.kind),
             });
             return existing;
         }
+        const link_name = if (is_external_name)
+            name
+        else switch (kind) {
+            .global => try std.fmt.allocPrint(self.allocator, "__kyn_g_m{d}_{s}", .{ span.source_id, name }),
+            .function => try std.fmt.allocPrint(self.allocator, "__kyn_f_m{d}_{s}", .{ span.source_id, name }),
+            else => name,
+        };
         const sym = try self.allocator.create(Symbol);
         sym.* = .{
             .id = self.nextId(),
             .name = name,
+            .link_name = link_name,
             .kind = kind,
             .ty = ty,
             .owner_module_id = span.source_id,
             .is_public = is_public,
         };
-        try self.globals.put(name, sym);
         if (self.module_globals.getPtr(span.source_id)) |symbols| {
             try symbols.put(name, sym);
         } else {
@@ -536,10 +682,6 @@ pub const Sema = struct {
         return null;
     }
 
-    fn lookup(self: *Sema, name: []const u8) ?*Symbol {
-        return self.lookupLocal(name) orelse self.globals.get(name);
-    }
-
     // ------------------------------------------------------------------
     // Type resolution
     // ------------------------------------------------------------------
@@ -549,30 +691,39 @@ pub const Sema = struct {
         const ty: *Type = switch (te.kind) {
             .name => |name| blk: {
                 if (self.primitiveByName(name)) |prim| break :blk prim;
-                const sym = if (std.mem.indexOfScalar(u8, name, '.')) |dot| blk2: {
+                const resolved = if (std.mem.indexOfScalar(u8, name, '.')) |dot| blk2: {
                     const alias = name[0..dot];
                     const member = name[dot + 1 ..];
                     const target = self.moduleAliasTarget(te.span.source_id, alias) orelse {
                         try self.reporter.err("E0469", te.span, "unknown module alias '{s}'", .{alias});
                         break :blk self.prims.invalid;
                     };
-                    const resolved = self.moduleSymbol(target, member) orelse {
+                    const member_sym = self.moduleSymbol(target, member) orelse {
                         try self.reporter.err("E0470", te.span, "module '{s}' has no type named '{s}'", .{ alias, member });
                         break :blk self.prims.invalid;
                     };
-                    break :blk2 resolved;
-                } else self.globals.get(name);
-                if (sym) |resolved| {
-                    if (resolved.kind == .struct_type or resolved.kind == .enum_type) {
-                        if (!self.isSymbolVisible(resolved, te.span.source_id)) {
-                            try self.reporter.err("E0467", te.span, "type '{s}' is private to another module", .{name});
-                            break :blk self.prims.invalid;
-                        }
-                        break :blk resolved.ty;
+                    if (member_sym.kind != .struct_type and member_sym.kind != .enum_type) {
+                        try self.reporter.err("E0422", te.span, "'{s}' is not a type in module '{s}'", .{ member, alias });
+                        break :blk self.prims.invalid;
                     }
-                }
-                try self.reporter.err("E0422", te.span, "unknown type '{s}'", .{name});
-                break :blk self.prims.invalid;
+                    if (!self.isSymbolVisible(member_sym, te.span.source_id)) {
+                        try self.reporter.err("E0467", te.span, "type '{s}' is private to another module", .{name});
+                        break :blk self.prims.invalid;
+                    }
+                    break :blk2 member_sym.ty;
+                } else blk2: {
+                    switch (try self.resolveModuleName(te.span.source_id, name)) {
+                        .found => |sym| {
+                            if (sym.kind == .struct_type or sym.kind == .enum_type) break :blk2 sym.ty;
+                            try self.reporter.err("E0422", te.span, "'{s}' is not a type", .{name});
+                        },
+                        .private => try self.reporter.err("E0467", te.span, "type '{s}' is private to another module", .{name}),
+                        .ambiguous => try self.reporter.err("E0471", te.span, "unqualified type name '{s}' is ambiguous; use an import alias", .{name}),
+                        .missing => try self.reporter.err("E0422", te.span, "unknown type '{s}'", .{name}),
+                    }
+                    break :blk2 self.prims.invalid;
+                };
+                break :blk resolved;
             },
             .pointer => |p| blk: {
                 const elem = try self.resolveType(p.elem);
@@ -707,8 +858,11 @@ pub const Sema = struct {
     }
 
     fn checkIdent(self: *Sema, expr: *ast.Expr, ident: *ast.Expr.Kind.Ident) Error!*Type {
-        const sym = self.lookup(ident.name) orelse {
-            try self.reporter.err("E0427", expr.span, "unknown identifier '{s}'", .{ident.name});
+        const prior_errors = self.reporter.error_count;
+        const sym = (try self.lookupValue(ident.name, expr.span.source_id, expr.span)) orelse {
+            if (self.reporter.error_count == prior_errors) {
+                try self.reporter.err("E0427", expr.span, "unknown identifier '{s}'", .{ident.name});
+            }
             expr.ty = self.prims.invalid;
             return self.prims.invalid;
         };
@@ -1127,7 +1281,10 @@ pub const Sema = struct {
     fn checkField(self: *Sema, expr: *ast.Expr, field: *ast.Expr.Kind.Field) Error!*Type {
         if (field.base.kind == .ident) {
             const alias = field.base.kind.ident.name;
-            const shadowed_by_name = self.lookup(alias) != null;
+            const shadowed_by_name = self.lookupLocal(alias) != null or switch (try self.resolveModuleName(expr.span.source_id, alias)) {
+                .found, .ambiguous => true,
+                .missing, .private => false,
+            };
             if (!shadowed_by_name) {
                 if (self.moduleAliasTarget(expr.span.source_id, alias)) |target| {
                     if (field.through_pointer) {
@@ -1520,8 +1677,11 @@ pub const Sema = struct {
                         if (bt.* == .array) return @intCast(bt.array.len);
                     }
                     if (field.base.kind == .ident) {
-                        if (self.lookup(field.base.kind.ident.name)) |sym| {
+                        if (self.lookupLocal(field.base.kind.ident.name)) |sym| {
                             if (sym.ty.* == .array) return @intCast(sym.ty.array.len);
+                        } else switch (try self.resolveModuleName(field.base.span.source_id, field.base.kind.ident.name)) {
+                            .found => |sym| if (sym.ty.* == .array) return @intCast(sym.ty.array.len),
+                            else => {},
                         }
                     }
                 }

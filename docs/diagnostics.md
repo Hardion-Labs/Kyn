@@ -73,7 +73,7 @@ unsupported construct or an internal compiler invariant violation.
 
 | Code | Meaning |
 | ---- | ------- |
-| `E0401` | duplicate top-level declaration |
+| `E0401` | duplicate declaration in one module |
 | `E0402` | function has no body and is not `extern` |
 | `E0403` | struct contains itself by value |
 | `E0404` | duplicate struct field |
@@ -143,6 +143,8 @@ unsupported construct or an internal compiler invariant violation.
 | `E0468` | duplicate module alias in one source module |
 | `E0469` | unknown module alias |
 | `E0470` | imported module has no declaration with that name |
+| `E0471` | unqualified imported name is ambiguous |
+| `E0472` | external function symbol has conflicting declarations or definitions |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

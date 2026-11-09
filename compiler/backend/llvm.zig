@@ -34,7 +34,7 @@ pub const Lowering = struct {
     allocator: std.mem.Allocator,
     reporter: *diagnostics.Reporter,
     module: *ir.Module,
-    globals: std.StringHashMap(u32),
+    globals: std.AutoHashMap(u32, u32),
     ctx: ?*FnCtx = null,
     current_fd: ?*ast.FnDecl = null,
 
@@ -47,7 +47,7 @@ pub const Lowering = struct {
             .allocator = allocator,
             .reporter = reporter,
             .module = module,
-            .globals = std.StringHashMap(u32).init(allocator),
+            .globals = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
 
@@ -84,6 +84,7 @@ pub const Lowering = struct {
     }
 
     fn lowerGlobal(self: *Lowering, vd: *ast.VarDecl, span: @import("../source.zig").Span) Error!void {
+        const sym = vd.sym orelse return;
         const ty = vd.ty orelse {
             try self.reporter.err("E0601", span, "internal: global '{s}' has no resolved type", .{vd.name});
             return;
@@ -94,20 +95,30 @@ pub const Lowering = struct {
         };
         const index: u32 = @intCast(self.module.globals.items.len);
         try self.module.globals.append(self.allocator, .{
-            .name = vd.name,
+            .name = sym.link_name,
             .ty = ty,
             .init = init_value,
             .mutable = vd.mutable,
         });
-        try self.globals.put(vd.name, index);
+        try self.globals.put(sym.id, index);
     }
 
     fn createFunction(self: *Lowering, fd: *ast.FnDecl) Error!void {
+        const fn_sym = fd.sym orelse return;
         const fn_ty = fd.ty orelse return;
         const info = fn_ty.fn_type;
+        if (fd.is_extern and findFunction(self.module, fn_sym.link_name) != null) return;
+        if (!fd.is_extern) {
+            for (self.module.functions.items, 0..) |existing, index| {
+                if (existing.linkage == .declaration and std.mem.eql(u8, existing.name, fn_sym.link_name)) {
+                    _ = self.module.functions.orderedRemove(index);
+                    break;
+                }
+            }
+        }
         const linkage: ir.Linkage = if (fd.is_extern)
             .declaration
-        else if (fd.is_export or std.mem.eql(u8, fd.name, "main"))
+        else if (fd.is_export or (fn_sym.owner_module_id == 0 and std.mem.eql(u8, fd.name, "main")))
             .external
         else
             .internal;
@@ -120,7 +131,7 @@ pub const Lowering = struct {
             }
             const function = try self.allocator.create(ir.Function);
             function.* = .{
-                .name = fd.name,
+                .name = fn_sym.link_name,
                 .params = params,
                 .ret = info.ret,
                 .linkage = linkage,
@@ -192,7 +203,7 @@ pub const Lowering = struct {
 
         const function = try self.allocator.create(ir.Function);
         function.* = .{
-            .name = fd.name,
+            .name = fn_sym.link_name,
             .params = params,
             .ret = ret_ty,
             .linkage = linkage,
@@ -471,7 +482,7 @@ pub const Lowering = struct {
     }
 
     fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {
-        const function = findFunction(self.module, fd.name) orelse return;
+        const function = findFunction(self.module, fd.sym.?.link_name) orelse return;
         const ctx = try self.allocator.create(FnCtx);
         ctx.* = .{ .function = function };
         self.ctx = ctx;
@@ -750,7 +761,7 @@ pub const Lowering = struct {
                 if (field.is_enum_variant) break :blk .{ .int = field.variant_value };
                 if (field.sym) |sym| {
                     if (sym.kind == .global) {
-                        const index = self.globals.get(sym.name) orelse return .none;
+                        const index = self.globals.get(sym.id) orelse return .none;
                         const ty = expr.ty orelse sym.ty;
                         const dst = try self.reg(ty);
                         try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .global = index }, .ty = ty } });
@@ -823,7 +834,7 @@ pub const Lowering = struct {
         if (sym.kind == .function or sym.kind == .struct_type or sym.kind == .enum_type) return .none;
         const ty = expr.ty orelse sym.ty;
         const ptr: ir.Value = if (sym.kind == .global)
-            .{ .global = self.globals.get(sym.name) orelse return .none }
+            .{ .global = self.globals.get(sym.id) orelse return .none }
         else
             .{ .local = sym.id };
         const dst = try self.reg(ty);
@@ -1051,7 +1062,7 @@ pub const Lowering = struct {
             try self.reporter.err("E0604", call.callee.span, "indirect calls are not supported yet", .{});
             return .none;
         }
-        const name = callee_sym.?.name;
+        const name = callee_sym.?.link_name;
         const call_result = expr.ty orelse return .none;
         const callee_boundary = callee_sym.?.is_extern or callee_sym.?.is_export;
 
@@ -1515,7 +1526,7 @@ pub const Lowering = struct {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 const sym = ident.sym orelse return .none;
-                if (sym.kind == .global) break :blk .{ .global = self.globals.get(sym.name) orelse return .none };
+                if (sym.kind == .global) break :blk .{ .global = self.globals.get(sym.id) orelse return .none };
                 break :blk .{ .local = sym.id };
             },
             .unary => |unary| if (unary.op == .dereference)
@@ -1524,7 +1535,7 @@ pub const Lowering = struct {
                 .none,
             .field => |field| blk: {
                 if (field.sym) |sym| {
-                    if (sym.kind == .global) break :blk .{ .global = self.globals.get(sym.name) orelse return .none };
+                    if (sym.kind == .global) break :blk .{ .global = self.globals.get(sym.id) orelse return .none };
                     break :blk .none;
                 }
                 const base_ty = field.base.ty orelse return .none;
@@ -1749,6 +1760,10 @@ pub const Lowering = struct {
     }
 };
 
+fn structLlvmName(info: *types.StructInfo) []const u8 {
+    return if (info.llvm_name.len > 0) info.llvm_name else info.name;
+}
+
 fn findFunction(module: *ir.Module, name: []const u8) ?*ir.Function {
     for (module.functions.items) |function| {
         if (std.mem.eql(u8, function.name, name)) return function;
@@ -1936,7 +1951,7 @@ pub const Emitter = struct {
         try writer.writeByte('\n');
 
         for (self.module.structs.items) |info| {
-            try writer.print("%struct.{s} = type {{ ", .{info.name});
+            try writer.print("%struct.{s} = type {{ ", .{structLlvmName(info)});
             for (info.fields, 0..) |field, i| {
                 if (i > 0) try writer.writeAll(", ");
                 try self.emitType(writer, field.ty);
@@ -1981,11 +1996,11 @@ pub const Emitter = struct {
             if (i > 0) try writer.writeAll(", ");
             if (function.sret and i == 0) {
                 const info = function.sret_type orelse return error.OutOfMemory;
-                try writer.print("ptr sret(%struct.{s}) noalias writable %arg{d}", .{ info.name, param.local });
+                try writer.print("ptr sret(%struct.{s}) noalias writable %arg{d}", .{ structLlvmName(info), param.local });
                 continue;
             }
             if (param.byval_type) |info| {
-                try writer.print("ptr byval(%struct.{s}) align {d} %arg{d}", .{ info.name, aggregateAlign(info), param.local });
+                try writer.print("ptr byval(%struct.{s}) align {d} %arg{d}", .{ structLlvmName(info), aggregateAlign(info), param.local });
                 continue;
             }
             try writer.print("{s} %arg{d}", .{ try self.typeString(param.ty), param.local });
@@ -2175,10 +2190,10 @@ pub const Emitter = struct {
                     };
                     if (call.sret and i == 0) {
                         const info = call.sret_type orelse return error.OutOfMemory;
-                        try writer.print("ptr sret(%struct.{s}) noalias writable %v{d}", .{ info.name, local_id });
+                        try writer.print("ptr sret(%struct.{s}) noalias writable %v{d}", .{ structLlvmName(info), local_id });
                     } else if (byval_type) |info| {
                         const alignment = aggregateAlign(info);
-                        try writer.print("ptr byval(%struct.{s}) align {d} %v{d}", .{ info.name, alignment, local_id });
+                        try writer.print("ptr byval(%struct.{s}) align {d} %v{d}", .{ structLlvmName(info), alignment, local_id });
                     } else {
                         try writer.print("{s} ", .{try self.typeString(call.arg_types[i])});
                         try self.emitValue(writer, arg, call.arg_types[i]);
@@ -2192,7 +2207,7 @@ pub const Emitter = struct {
                 try writer.print(", i32 0, i32 {d}\n", .{field.field});
             },
             .field_ptr => |field| {
-                try writer.print("  %t{d} = getelementptr inbounds %struct.{s}, ptr ", .{ field.dst, field.struct_ty.name });
+                try writer.print("  %t{d} = getelementptr inbounds %struct.{s}, ptr ", .{ field.dst, structLlvmName(field.struct_ty) });
                 try self.emitValue(writer, field.base, null);
                 try writer.print(", i32 0, i32 {d}\n", .{field.field});
             },
@@ -2334,7 +2349,7 @@ pub const Emitter = struct {
                 try self.typeString(array.elem),
             }),
             .slice => "%kyn.slice",
-            .struct_type => |info| try std.fmt.allocPrint(self.allocator, "%struct.{s}", .{info.name}),
+            .struct_type => |info| try std.fmt.allocPrint(self.allocator, "%struct.{s}", .{structLlvmName(info)}),
             .enum_type => |info| try self.typeString(info.backing),
             .fn_type => "ptr",
             .comptime_int => "i64",

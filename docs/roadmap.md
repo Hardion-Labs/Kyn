@@ -47,13 +47,16 @@ Milestones below are directions, not release promises.
   diagnostics, cycle/missing-file diagnostics (`E0231`/`E0232`), aliases for
   qualified function/value/type references, and `private` checks (`E0467`).
   `kyn-build` hashes transitive Kyn imports in target stamps.
-- Imported symbols still share one compilation-wide name table: duplicate names
-  across files are rejected, and aliases do not yet create isolated namespaces.
-  Declarations are public by default; `private` restricts cross-file access.
+- Each source module has its own top-level symbol table. Qualified aliases
+  resolve only declarations in their target; unaliased imports open public names
+  through unaliased dependency edges. Local names shadow opens, and ambiguous
+  imported names/types report `E0471` at use. Duplicate names are allowed across
+  modules but rejected within one module (`E0401`). Declarations are public by
+  default; `private` restricts cross-module access.
 
 ## Next direction
 
-- Isolate module-owned symbol namespaces so same-named declarations can coexist and aliases no longer share the compilation-wide name table; preserve explicit `private` checks and open-import compatibility.
+- Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
 - Decide and specify general-purpose C ABI lowering for floating-point/SSE
   aggregate members and cross-compilation targets before exposing them across
   `extern`/`export` unconditionally.
