@@ -203,10 +203,12 @@ pub const Parser = struct {
         var fields: std.ArrayList(ast.StructField) = .empty;
         if (try self.expect(.l_brace, "to begin struct body")) {
             while (!self.check(.r_brace) and !self.check(.eof)) {
+                const before = self.pos;
                 if (!self.check(.identifier)) {
                     try self.reporter.err("E0208", self.peek().span, "expected field name, found {s}", .{token.describe(self.peek().kind)});
                     self.synchronize(.comma);
                     _ = self.match(.comma);
+                    if (self.pos == before) break;
                     continue;
                 }
                 const field_name = self.advance();
@@ -255,10 +257,12 @@ pub const Parser = struct {
         var variants: std.ArrayList(ast.EnumVariantDecl) = .empty;
         if (try self.expect(.l_brace, "to begin enum body")) {
             while (!self.check(.r_brace) and !self.check(.eof)) {
+                const before = self.pos;
                 if (!self.check(.identifier)) {
                     try self.reporter.err("E0210", self.peek().span, "expected enum variant name, found {s}", .{token.describe(self.peek().kind)});
                     self.synchronize(.comma);
                     _ = self.match(.comma);
+                    if (self.pos == before) break;
                     continue;
                 }
                 const variant_tok = self.advance();
@@ -849,10 +853,12 @@ pub const Parser = struct {
         var fields: std.ArrayList(ast.Expr.Kind.InitField) = .empty;
         if (try self.expect(.l_brace, "to begin struct initializer")) {
             while (!self.check(.r_brace) and !self.check(.eof)) {
+                const before = self.pos;
                 if (!self.check(.identifier)) {
                     try self.reporter.err("E0222", self.peek().span, "expected field name, found {s}", .{token.describe(self.peek().kind)});
                     self.synchronize(.comma);
                     _ = self.match(.comma);
+                    if (self.pos == before) break;
                     continue;
                 }
                 const field_tok = self.advance();
@@ -1157,4 +1163,109 @@ test "parse string escapes" {
     const stmt = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.var_decl;
     const bytes = stmt.init.?.kind.string_lit.bytes;
     try testing.expectEqualStrings("a\nA", bytes);
+}
+
+test "parser terminates when a declaration appears inside a struct body" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\struct Point { x: i32, y: { } enum Color: u8 { Red }
+        \\fn main() i32 { return 0; }
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(ctx.reporter.hasErrors());
+    try testing.expect(ctx.reporter.error_count <= 20);
+    try testing.expectEqual(@as(usize, 3), program.decls.len);
+    try testing.expectEqual(std.meta.Tag(ast.Decl.Kind).struct_decl, std.meta.activeTag(program.decls[0].kind));
+    try testing.expectEqual(std.meta.Tag(ast.Decl.Kind).enum_decl, std.meta.activeTag(program.decls[1].kind));
+}
+
+test "parser terminates when a declaration appears inside an enum body" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\enum Color: u8 { Red, @@@ struct Point { x: i32 }
+        \\fn main() i32 { return 0; }
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(ctx.reporter.hasErrors());
+    try testing.expect(ctx.reporter.error_count <= 20);
+    try testing.expectEqual(@as(usize, 3), program.decls.len);
+}
+
+test "parser terminates when a declaration appears inside a struct initializer" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\struct Point { x: i32, y: i32 }
+        \\fn main() i32 {
+        \\    let p: Point = Point { x: 1, @@@ fn ok() i32 { return 0; } ;
+        \\    return 0;
+        \\}
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(ctx.reporter.hasErrors());
+    try testing.expect(ctx.reporter.error_count <= 30);
+    try testing.expectEqual(@as(usize, 2), program.decls.len);
+}
+
+test "subtraction and division associate left-to-right" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn main() i32 { return 10 - 4 - 2; }");
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    const ret = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.return_stmt;
+    const expr = ret.value.?;
+    try testing.expectEqual(ast.BinaryOp.sub, expr.kind.binary.op);
+    try testing.expectEqual(ast.BinaryOp.sub, expr.kind.binary.lhs.kind.binary.op);
+    try testing.expectEqual(@as(u128, 10), expr.kind.binary.lhs.kind.binary.lhs.kind.int_lit.value);
+}
+
+test "bitwise operators respect precedence" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn main() i32 { return 1 | 2 ^ 3 & 4; }");
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    const ret = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.return_stmt;
+    const expr = ret.value.?;
+    try testing.expectEqual(ast.BinaryOp.bit_or, expr.kind.binary.op);
+    try testing.expectEqual(ast.BinaryOp.bit_xor, expr.kind.binary.rhs.kind.binary.op);
+    try testing.expectEqual(ast.BinaryOp.bit_and, expr.kind.binary.rhs.kind.binary.rhs.kind.binary.op);
+}
+
+test "shift has lower precedence than addition" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn main() i32 { return 1 << 2 + 3; }");
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    const ret = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.return_stmt;
+    const expr = ret.value.?;
+    try testing.expectEqual(ast.BinaryOp.shl, expr.kind.binary.op);
+    try testing.expectEqual(ast.BinaryOp.add, expr.kind.binary.rhs.kind.binary.op);
+}
+
+test "as binds to the nearest multiplicative operand" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn main() i32 { return a * b as i64; }");
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    const ret = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.return_stmt;
+    const expr = ret.value.?;
+    try testing.expectEqual(ast.BinaryOp.mul, expr.kind.binary.op);
+    try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).cast, std.meta.activeTag(expr.kind.binary.rhs.kind));
+}
+
+test "assignment is right-associative" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn main() i32 { a = b = c; return a; }");
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    const stmt = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.expr;
+    try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).assign, std.meta.activeTag(stmt.kind));
+    try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).assign, std.meta.activeTag(stmt.kind.assign.value.kind));
 }

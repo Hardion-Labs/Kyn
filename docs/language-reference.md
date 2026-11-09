@@ -21,7 +21,7 @@ current language.
 /* block comment, which may span lines */
 ```
 
-Block comments do not nest. An unterminated block comment is `E0106`.
+Block comments nest. An unterminated block comment is `E0106`.
 
 ### 1.3 Identifiers
 

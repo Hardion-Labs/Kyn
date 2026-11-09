@@ -1,0 +1,2 @@
+struct Point { x: i32, y: { } enum Color: u8 { Red }
+fn main() i32 { return 0; }

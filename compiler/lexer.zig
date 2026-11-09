@@ -515,3 +515,55 @@ test "lexer reports invalid byte" {
     try testing.expect(rep.hasErrors());
     try testing.expectEqualStrings("E0101", rep.list.items[0].code);
 }
+
+test "lexer handles nested block comments" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src = try source.Source.init(a, "test.kyn",
+        \\/* outer /* nested /* deep */ inner */ tail */
+        \\fn main() i32 { return 0; }
+    );
+    var rep = diagnostics.Reporter.init(a, &src);
+    var lexer = Lexer.init(a, &src, &rep);
+    const toks = try lexer.tokenize();
+
+    try testing.expectEqual(Kind.kw_fn, toks[0].kind);
+    try testing.expect(!rep.hasErrors());
+}
+
+test "lexer reports unterminated block comment" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src = try source.Source.init(a, "test.kyn", "/* never closed");
+    var rep = diagnostics.Reporter.init(a, &src);
+    var lexer = Lexer.init(a, &src, &rep);
+    _ = try lexer.tokenize();
+    try testing.expect(rep.hasErrors());
+    try testing.expectEqualStrings("E0106", rep.list.items[0].code);
+}
+
+test "lexer reports exponent without digits" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src = try source.Source.init(a, "test.kyn", "1e+");
+    var rep = diagnostics.Reporter.init(a, &src);
+    var lexer = Lexer.init(a, &src, &rep);
+    _ = try lexer.tokenize();
+    try testing.expect(rep.hasErrors());
+    try testing.expectEqualStrings("E0103", rep.list.items[0].code);
+}
+
+test "lexer reports base prefix without digits" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var src = try source.Source.init(a, "test.kyn", "0x");
+    var rep = diagnostics.Reporter.init(a, &src);
+    var lexer = Lexer.init(a, &src, &rep);
+    _ = try lexer.tokenize();
+    try testing.expect(rep.hasErrors());
+    try testing.expectEqualStrings("E0102", rep.list.items[0].code);
+}
