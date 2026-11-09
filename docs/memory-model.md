@@ -114,7 +114,9 @@ Struct values are constructed directly in their destination:
 
 - a local initializer writes each field through a GEP;
 - a struct initializer assigned to an existing struct writes each field;
-- passing a struct by value is rejected; pass `*Struct` instead.
+- an aggregate initializer stored into a destination is written field by field;
+- an existing aggregate value passed as an argument or returned from an
+  internal Kyn function is passed by value according to the internal ABI.
 
 ### 3.2 Arrays
 
@@ -179,6 +181,8 @@ checked and what is planned.
 | function call | native call; no hidden allocation |
 | string literal | static read-only data, no runtime construction |
 | struct/array literal | field/element stores into destination |
+| aggregate copy | load/store of the aggregate representation |
+| aggregate by-value call | native call; no hidden heap copy |
 | `free`/`malloc` | cost of the external allocator, fully explicit |
 
 There is no hidden heap allocation, no hidden copy of aggregates, no exception

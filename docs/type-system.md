@@ -193,11 +193,14 @@ pointer regardless of how the pointer variable itself was declared.
 ## 8. Aggregates
 
 - Struct and array values are constructed in place.
-- Reading an aggregate expression as a whole value (for a parameter, return,
-  assignment or variable initializer from another variable) is not supported
-  yet except when initializing a destination from a literal or a field-by-field
-  path. Such attempts produce `E0464` or `E0410`.
-- A pointer to an aggregate is the supported way to pass or return it.
+- Struct and array values may be passed as aggregate arguments, returned from
+  internal Kyn functions and assigned/copied when source and destination have
+  the same type.
+- Aggregate copies lower to contiguous loads/stores; LLVM's optimizer may
+  promote or lower them according to the internal ABI.
+- `extern` and `export` functions reject aggregate parameters and returns
+  (`E0410`) in v0.1; pass a pointer across the C ABI.
+- A pointer to an aggregate remains the preferred way to avoid large copies.
 
 ## 9. Explicit casts
 
@@ -214,7 +217,7 @@ Type errors use the `E04xx` range. The most important codes:
 | ---- | ------- |
 | `E0401` | duplicate top-level declaration |
 | `E0403` | struct contains itself by value |
-| `E0410` | unsupported aggregate parameter/return, or void parameter |
+| `E0410` | void parameter, or aggregate parameter/return at a C ABI boundary |
 | `E0414` | function may reach the end without returning |
 | `E0426` | integer literal does not fit |
 | `E0427` | unknown identifier |
@@ -228,6 +231,5 @@ Type errors use the `E04xx` range. The most important codes:
 | `E0458` | missing struct initializer field |
 | `E0462` | incompatible assignment without a cast |
 | `E0463` | condition is not `bool` |
-| `E0464` | aggregate copy not supported |
 
 See [diagnostics.md](diagnostics.md) for the full list.

@@ -78,7 +78,7 @@ unsupported construct or an internal compiler invariant violation.
 | `E0407` | enum variant value is not a constant integer |
 | `E0408` | enum value does not fit the backing type |
 | `E0409` | duplicate parameter name |
-| `E0410` | void parameter, aggregate parameter, or aggregate return |
+| `E0410` | void parameter |
 | `E0411` | global variable has type `void` |
 | `E0412` | global initializer is not constant |
 | `E0413` | global has no initializer |
@@ -132,7 +132,6 @@ unsupported construct or an internal compiler invariant violation.
 | `E0461` | array literal elements have different types |
 | `E0462` | assignment without an explicit cast |
 | `E0463` | condition is not `bool` |
-| `E0464` | aggregate copy/assignment not supported |
 | `E0465` | field access on a non-lvalue, non-pointer |
 | `E0466` | indexing a non-lvalue, non-pointer, non-literal |
 

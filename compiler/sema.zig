@@ -228,6 +228,7 @@ pub const Sema = struct {
     fn resolveSignature(self: *Sema, fd: *ast.FnDecl) Error!void {
         var params = try self.allocator.alloc(*Type, fd.params.len);
         var seen = std.StringHashMap(void).init(self.allocator);
+        const is_c_boundary = fd.is_extern or fd.is_export;
         for (fd.params, 0..) |*param, i| {
             if (seen.contains(param.name)) {
                 try self.reporter.err("E0409", param.span, "duplicate parameter '{s}'", .{param.name});
@@ -247,8 +248,8 @@ pub const Sema = struct {
             param.sym = param_sym;
             if (ty.* == .void) {
                 try self.reporter.err("E0410", param.span, "parameter '{s}' cannot have type 'void'", .{param.name});
-            } else if (ty.isAggregate()) {
-                try self.reporter.err("E0410", param.span, "aggregate parameter '{s}' is not supported yet; pass a pointer", .{param.name});
+            } else if (is_c_boundary and ty.isAggregate()) {
+                try self.reporter.err("E0410", param.span, "aggregate parameter '{s}' is not supported across the C ABI yet; pass a pointer", .{param.name});
             }
             params[i] = ty;
         }
@@ -258,8 +259,8 @@ pub const Sema = struct {
             break :blk ty;
         } else self.prims.void;
 
-        if (ret.isAggregate()) {
-            try self.reporter.err("E0410", fd.span, "aggregate return type is not supported yet; return a pointer", .{});
+        if (is_c_boundary and ret.isAggregate()) {
+            try self.reporter.err("E0410", fd.span, "aggregate return type is not supported across the C ABI yet; return a pointer", .{});
         }
         const fn_ty = try types.makeFn(self.allocator, params, ret);
         fd.ty = fn_ty;
@@ -413,9 +414,6 @@ pub const Sema = struct {
             if (explicit_ty) |ty| {
                 const init_ty = try self.checkExpr(init_expr, ty);
                 try self.requireAssignable(ty, init_expr, init_ty, true);
-                if (ty.isAggregate() and !isAggregateInitializer(init_expr)) {
-                    try self.reporter.err("E0464", init_expr.span, "aggregate copy is not supported yet; initialize the value field by field", .{});
-                }
             } else {
                 const init_ty = try self.checkExpr(init_expr, null);
                 const concrete = self.materialize(init_ty, init_expr.span);
@@ -831,9 +829,6 @@ pub const Sema = struct {
 
         if (assign.op == .assign) {
             try self.requireAssignable(target_ty, assign.value, value_ty, true);
-            if (target_ty.isAggregate() and !isAggregateInitializer(assign.value)) {
-                try self.reporter.err("E0464", assign.value.span, "aggregate copy is not supported yet", .{});
-            }
             return target_ty;
         }
 
@@ -1286,13 +1281,6 @@ pub fn literalIntValue(expr: *ast.Expr) ?i128 {
     };
 }
 
-fn isAggregateInitializer(expr: *ast.Expr) bool {
-    return switch (expr.kind) {
-        .struct_init, .array_lit => true,
-        else => false,
-    };
-}
-
 pub fn isConstInitializer(expr: *ast.Expr) bool {
     return switch (expr.kind) {
         .int_lit, .float_lit, .bool_lit, .char_lit, .string_lit, .null_lit => true,
@@ -1510,4 +1498,37 @@ test "semantic accepts explicit numeric casts" {
         \\    return b;
         \\}
     );
+}
+
+test "aggregate parameters and returns are supported within Kyn" {
+    try expectClean(
+        \\struct Point { x: i32, y: i32 }
+        \\fn sum(p: Point) i32 {
+        \\    return p.x + p.y;
+        \\}
+        \\fn make(x: i32, y: i32) Point {
+        \\    return Point { x: x, y: y };
+        \\}
+        \\fn main() i32 {
+        \\    let p: Point = make(3, 4);
+        \\    let q: Point = p;
+        \\    return sum(q);
+        \\}
+    );
+}
+
+test "external functions reject aggregate parameters and returns" {
+    try expectSemanticError(
+        \\struct Point { x: i32, y: i32 }
+        \\extern fn c_sum(p: Point) i32;
+        \\fn main() i32 { return 0; }
+    , "E0410");
+
+    try expectSemanticError(
+        \\struct Point { x: i32, y: i32 }
+        \\export fn kyn_make(x: i32, y: i32) Point {
+        \\    return Point { x: x, y: y };
+        \\}
+        \\fn main() i32 { return 0; }
+    , "E0410");
 }

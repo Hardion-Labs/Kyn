@@ -107,7 +107,11 @@ names share one global namespace.
 - Locals live in stack slots (`alloca` in LLVM IR) and are loaded/stored
   explicitly. There is no hidden heap allocation.
 - Aggregate values are initialized field by field into their destination.
-  Aggregate copies are rejected in v0.1 rather than lowered ambiguously.
+  Whole-aggregate copies and by-value parameters/returns lower to native
+  aggregate loads/stores and calls; LLVM's optimizer decides the actual
+  machine representation.
+- Aggregate copies have a real memory cost and are not hidden control flow or
+  allocation, but they are not free.
 - Short-circuit `&&` and `||` lower to real control flow, so side effects are
   skipped exactly as written.
 - Integer operations lower to LLVM integer instructions with the signedness

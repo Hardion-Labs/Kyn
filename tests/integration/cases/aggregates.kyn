@@ -1,0 +1,32 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn add(a: Point, b: Point) Point {
+    return Point { x: a.x + b.x, y: a.y + b.y };
+}
+
+fn sum_array(values: [3]i32) i32 {
+    return values[0] + values[1] + values[2];
+}
+
+fn make_array() [3]i32 {
+    return [1, 2, 3];
+}
+
+fn main() i32 {
+    let p: Point = Point { x: 1, y: 2 };
+    let q: Point = Point { x: 3, y: 4 };
+    let out: Point = add(p, q);
+    let copied: Point = out;
+    var assigned: Point = copied;
+    assigned = out;
+
+    let values: [3]i32 = make_array();
+    let array_copy: [3]i32 = values;
+    var mutable_copy: [3]i32 = array_copy;
+    mutable_copy = values;
+
+    return assigned.x + assigned.y + sum_array(mutable_copy);
+}

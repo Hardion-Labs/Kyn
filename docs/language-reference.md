@@ -139,11 +139,12 @@ fn log_message() {
 
 - Parameters are `name: Type`, separated by commas.
 - The return type follows the parameter list. Omitted means `void`.
+- Aggregate parameters and aggregate return types use the internal Kyn ABI.
+  They are not supported across `extern`/`export` C ABI boundaries in v0.1;
+  pass a pointer instead. Arrays are also not valid C prototypes.
 - A function with a non-void return type must return on every path; otherwise
   `E0414`.
 - `return;` is valid only in a `void` function.
-- Aggregate parameters and aggregate return types are rejected (`E0410`); pass
-  a pointer instead.
 
 ### 3.2 External and exported functions
 
@@ -349,7 +350,8 @@ array[index] = 6;
 - Compound assignment is defined for numeric operands and shifts; both sides
   must have the same concrete type. Pointer `+=`/`-=` is not supported in
   v0.1.
-- Aggregate assignment/copy is not supported (`E0464`).
+- Aggregate assignment copies the complete value when source and destination
+  have the same type.
 
 ### 5.6 Calls
 
@@ -363,7 +365,9 @@ let sum: i32 = add(1, 2);
 - Argument count must match (`E0446`) and each argument must be assignable to
   its parameter type.
 - Arguments are evaluated left to right.
-- Aggregate arguments by value are rejected; pass a pointer.
+- Aggregate arguments by value are passed by value within Kyn. `extern` and
+  `export` functions reject aggregate arguments and returns in v0.1; pass a
+  pointer instead.
 
 ### 5.7 Casts
 
@@ -429,8 +433,10 @@ let values: [3]i32 = [1, 2, 3];
 - Struct initializers must name every field of the struct, with no duplicates.
 - Array literals cannot be empty (`E0459`) and all elements must share a type.
   Integer literal elements adapt to a concrete element type.
-- Aggregate values can be initialized into a local or assigned into an
-  existing lvalue field-by-field, but they cannot be copied as whole values.
+- Aggregate values can be initialized into a local, passed as arguments and
+  copied into an existing lvalue of the same type. Aggregate copies are not
+  partial or field-wise unless the value is itself an aggregate literal being
+  stored field by field.
 
 ## 6. Entry point and process behavior
 
@@ -456,7 +462,7 @@ The following are rejected or simply not part of v0.1:
 - slices (`[]T`), inferred array lengths, multidimensional array sugar;
 - generics, traits, interfaces, operator overloading;
 - variadic functions and variadic `extern` declarations;
-- aggregate parameters/returns and aggregate copies;
+- aggregate parameters/returns across `extern`/`export` C ABI boundaries;
 - indirect calls and first-class function values;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;

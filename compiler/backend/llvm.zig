@@ -329,7 +329,9 @@ pub const Lowering = struct {
                 const id = self.module.temp();
                 try self.addLocal(id, "tmp.agg", ty);
                 try self.lowerAggregateInto(.{ .local = id }, ty, expr);
-                break :blk .{ .local = id };
+                const dst = try self.reg(ty);
+                try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = id }, .ty = ty } });
+                break :blk .{ .reg = dst };
             },
         };
     }
@@ -514,10 +516,10 @@ pub const Lowering = struct {
         if (assign.op == .assign) {
             if (target_ty.isAggregate() and isAggregateInitializer(assign.value)) {
                 try self.lowerAggregateInto(ptr, target_ty, assign.value);
-                return .none;
+            } else {
+                const value = try self.lowerExpr(assign.value);
+                try self.emit(.{ .store = .{ .ptr = ptr, .value = value, .ty = target_ty } });
             }
-            const value = try self.lowerExpr(assign.value);
-            try self.emit(.{ .store = .{ .ptr = ptr, .value = value, .ty = target_ty } });
             const dst = try self.reg(target_ty);
             try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = target_ty } });
             return .{ .reg = dst };

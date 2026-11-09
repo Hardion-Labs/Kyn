@@ -205,8 +205,8 @@ support:
 - modules, imports or a package system;
 - slices, generics or traits;
 - variadic extern functions and variadic Kyn functions;
-- aggregate parameters/returns by value (pass a pointer instead);
-- aggregate copies and aggregate assignment;
+- aggregate parameters/returns across `extern`/`export` C ABI boundaries
+  (internal Kyn functions may use aggregates by value);
 - indirect calls through function pointers;
 - `defer`, `for`, `switch`/`match`, closures or exceptions;
 - runtime bounds, overflow and null checks;

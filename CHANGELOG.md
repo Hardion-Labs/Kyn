@@ -26,6 +26,9 @@ First vertically functional compiler milestone.
   `exe`/`staticlib`/`sharedlib` kinds and content-hash incremental rebuilds.
 - C ABI interoperability through `extern fn` / `export fn`, including a
   verified Kyn + C + Zig example.
+- Aggregate parameters and returns by value inside Kyn, aggregate assignment
+  and aggregate copies. `extern`/`export` functions reject aggregates in v0.1;
+  pass pointers across the C ABI.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
@@ -43,6 +46,8 @@ First vertically functional compiler milestone.
   syntax error. Regression tests cover the failure mode.
 - Documentation now states that block comments nest, matching the lexer and
   its tests.
+- Documentation and integration tests now cover aggregate by-value support
+  within Kyn and its rejection at C ABI boundaries.
 - `kync --version` and `kyn-build --version` now print exactly the version
   line on stdout; help output is no longer printed after `--version`.
 

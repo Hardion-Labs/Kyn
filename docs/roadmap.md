@@ -21,6 +21,10 @@ GitHub release has been created yet.
 
 ## v0.1.0-alpha.2 — frontend hardening
 
+Status: the parser recovery, diagnostic reference/coverage, robustness corpus
+and reproducible clean-build/CI checks from this milestone are implemented on
+`main`. No tag or GitHub release has been created yet.
+
 - expansion of parser recovery tests and diagnostic regression coverage;
 - fuzz/robustness passes for lexer and parser;
 - complete diagnostic reference and examples;
@@ -28,6 +32,11 @@ GitHub release has been created yet.
 - no new unsafe runtime promises.
 
 ## v0.1.0-alpha.3 — memory and aggregates
+
+Status: in progress. Aggregate parameters and returns by value inside Kyn and
+aggregate copies/assignment are implemented and tested. `extern`/`export`
+functions still reject aggregates (`E0410`) until C ABI lowering is specified
+and validated. Explicit heap allocator experiments and slices are pending.
 
 - aggregate parameters and returns by value with documented ABI lowering;
 - aggregate copies and assignment;
