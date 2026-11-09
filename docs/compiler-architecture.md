@@ -237,8 +237,9 @@ structures at the cost of holding memory until the process exits.
 - Analyzer tests cover initialization, constant facts and warnings.
 - Integration tests under `tests/integration` compile and execute real
   binaries, assert stdout/exit status, assert negative diagnostic codes, verify
-  that every documented diagnostic code matches the compiler sources, and
-  exercise `kyn-build` with a hybrid project.
+  diagnostic documentation coverage, run a deterministic lexer/parser robustness
+  corpus, check version metadata consistency, and exercise `kyn-build` with a
+  hybrid project.
 
 ## 14. Extension checklist
 

@@ -163,6 +163,22 @@ else
     bad "diagnostic codes documented" "$(cat "$TMP/diagnostic-docs.log")"
 fi
 
+echo "tool metadata"
+
+if "${PYTHON:-python3}" "$ROOT/tests/integration/check_versions.py" --kync "$KYNC" --kyn-build "$KYNBUILD" >"$TMP/tool-metadata.log" 2>&1; then
+    ok "version metadata consistent"
+else
+    bad "version metadata consistent" "$(cat "$TMP/tool-metadata.log")"
+fi
+
+echo "robustness corpus"
+
+if "${PYTHON:-python3}" "$ROOT/tests/integration/robustness.py" --kync "$KYNC" >"$TMP/robustness.log" 2>&1; then
+    ok "$(cat "$TMP/robustness.log")"
+else
+    bad "deterministic robustness corpus" "$(cat "$TMP/robustness.log")"
+fi
+
 echo "code generation"
 
 ll_file="$TMP/hello.ll"

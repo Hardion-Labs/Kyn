@@ -164,6 +164,9 @@ The integration suite covers:
 - the four safety profiles;
 - negative programs that must fail with a specific diagnostic code;
 - diagnostic documentation coverage against compiler sources;
+- deterministic lexer/parser robustness corpus;
+- version metadata consistency across `build.zig.zon`, compiler sources and
+  installed tools.
 - `emit-llvm` and `emit-obj` smoke tests;
 - a Kyn + C + Zig executable built by `kyn-build`, plus incremental rebuild.
 

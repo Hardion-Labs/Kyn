@@ -29,8 +29,9 @@ First vertically functional compiler milestone.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
-  profiles, negative diagnostics, code generation, hybrid builds and diagnostic
-  documentation coverage.
+  profiles, negative diagnostics, code generation, hybrid builds, diagnostic
+  documentation coverage, version metadata consistency and a deterministic
+  lexer/parser robustness corpus.
 - Language, type-system, memory, safety, ABI, build-system and compiler
   architecture documentation.
 - GitHub Actions CI for formatting, build, unit tests and integration tests.
@@ -42,6 +43,8 @@ First vertically functional compiler milestone.
   syntax error. Regression tests cover the failure mode.
 - Documentation now states that block comments nest, matching the lexer and
   its tests.
+- `kync --version` and `kyn-build --version` now print exactly the version
+  line on stdout; help output is no longer printed after `--version`.
 
 ### Known limitations
 
