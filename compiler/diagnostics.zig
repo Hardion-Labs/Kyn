@@ -33,6 +33,7 @@ pub const Diagnostic = struct {
 pub const Reporter = struct {
     allocator: std.mem.Allocator,
     source: *const source.Source,
+    sources: std.ArrayList(*const source.Source) = .empty,
     list: std.ArrayList(Diagnostic) = .empty,
     error_count: usize = 0,
     warning_count: usize = 0,
@@ -41,9 +42,14 @@ pub const Reporter = struct {
         return .{ .allocator = allocator, .source = src };
     }
 
+    pub fn addSource(self: *Reporter, src: *const source.Source) !void {
+        try self.sources.append(self.allocator, src);
+    }
+
     pub fn deinit(self: *Reporter) void {
         for (self.list.items) |diag| self.allocator.free(diag.message);
         self.list.deinit(self.allocator);
+        self.sources.deinit(self.allocator);
     }
 
     pub fn add(
@@ -84,6 +90,12 @@ pub const Reporter = struct {
         return self.error_count > 0;
     }
 
+    fn sourceFor(self: *const Reporter, id: u32) *const source.Source {
+        if (self.source.source_id == id) return self.source;
+        for (self.sources.items) |src| if (src.source_id == id) return src;
+        return self.source;
+    }
+
     /// Render every diagnostic into a newly allocated buffer.
     pub fn renderAlloc(self: *const Reporter) ![]u8 {
         var out: std.Io.Writer.Allocating = .init(self.allocator);
@@ -93,9 +105,10 @@ pub const Reporter = struct {
     }
 
     pub fn renderOne(self: *const Reporter, writer: *std.Io.Writer, diag: Diagnostic) !void {
-        const loc = self.source.location(diag.span.start);
+        const src = self.sourceFor(diag.span.source_id);
+        const loc = src.location(diag.span.start);
         try writer.print("{s}:{d}:{d}: {s}[{s}]: {s}\n", .{
-            self.source.path,
+            src.path,
             loc.line,
             loc.column,
             diag.severity.label(),
@@ -103,7 +116,7 @@ pub const Reporter = struct {
             diag.message,
         });
 
-        const text = self.source.lineText(loc.line);
+        const text = src.lineText(loc.line);
         if (text.len == 0) return;
         try writer.print("    {s}\n", .{text});
         try writer.writeAll("    ");
@@ -132,4 +145,20 @@ test "diagnostic rendering" {
     defer std.testing.allocator.free(rendered);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "test.kyn:2:3: error[E0001]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "^^^") != null);
+}
+
+test "diagnostics resolve the source file recorded by spans" {
+    var root = try source.Source.initWithId(std.testing.allocator, "main.kyn", "fn main() {}\n", 0);
+    defer root.deinit();
+    var imported = try source.Source.initWithId(std.testing.allocator, "lib.kyn", "fn f() i32 { return missing; }\n", 1);
+    defer imported.deinit();
+
+    var rep = Reporter.init(std.testing.allocator, &root);
+    defer rep.deinit();
+    try rep.addSource(&imported);
+    try rep.err("E0001", .{ .start = 22, .end = 29, .source_id = 1 }, "unknown name", .{});
+    const rendered = try rep.renderAlloc();
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "lib.kyn:1:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "return missing") != null);
 }

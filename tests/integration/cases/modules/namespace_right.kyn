@@ -1,0 +1,5 @@
+struct Item { x: i32 }
+const answer: i32 = 20;
+var tally: i32 = 2;
+private fn helper(input: i32) i32 { return input + 2; }
+fn value(item: Item) i32 { return helper(item.x); }

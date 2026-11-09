@@ -98,7 +98,7 @@ pub fn main(init: std.process.Init) !u8 {
     var reporter: diagnostics.Reporter = undefined;
     var program: ?*ast.Program = null;
 
-    const result = driver.compile(arena, io, path, &src, &reporter, &program) catch |err| {
+    const result = driver.compile(arena, io, path, opts.profile, &src, &reporter, &program) catch |err| {
         try out.print("kyn: internal compiler error: {s}\n", .{@errorName(err)});
         try out.flush();
         return 70;

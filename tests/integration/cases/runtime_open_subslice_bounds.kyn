@@ -1,0 +1,6 @@
+fn main() i32 {
+    var values: [3]i32 = [10, 20, 30];
+    var start: usize = 4;
+    let bad: []i32 = values[start..];
+    return bad.len as i32;
+}

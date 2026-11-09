@@ -1,0 +1,2 @@
+import "modules/open_top.kyn";
+fn main() i32 { return top_value() + leaf_value(); }

@@ -1,0 +1,13 @@
+struct LargeFloat { amount: f64, tag: i64, count: i32 }
+
+extern fn c_transform_large(value: LargeFloat) LargeFloat;
+extern fn c_verify_large() i32;
+
+export fn kyn_make_large(amount: f64, tag: i64, count: i32) LargeFloat {
+    return LargeFloat { amount: amount + 1.0, tag: tag + 2, count: count + 3 };
+}
+
+fn main() i32 {
+    let value: LargeFloat = c_transform_large(LargeFloat { amount: 2.0, tag: 10, count: 4 });
+    return value.tag as i32 + value.count + c_verify_large();
+}

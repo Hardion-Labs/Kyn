@@ -15,6 +15,9 @@ pub const Kind = enum {
 pub const Symbol = struct {
     id: u32,
     name: []const u8,
+    owner_module_id: u32 = 0,
+    is_public: bool = true,
+    link_name: []const u8 = "",
     kind: Kind,
     ty: *types.Type,
     /// Whether the binding can be assigned through its own name.

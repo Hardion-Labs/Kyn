@@ -29,21 +29,33 @@ compiler/driver.zig        orchestration, file I/O, external tool invocation
  └─ diagnostics.zig       diagnostic records and rendering
 ```
 
-`driver.compile` runs the frontend and returns either rendered LLVM IR or a
-diagnostic failure. `main.zig` decides whether to write IR, invoke `clang` for
-an object/executable, or run the result.
+`driver.compile` loads the root source and its explicit import graph, then runs
+the frontend once over the deterministic dependency-first declaration list. It
+returns either rendered LLVM IR or a diagnostic failure. `main.zig` decides
+whether to write IR, invoke `clang` for an object/executable, or run the result.
+
+Each parsed source has a stable module/source ID for the compilation. Sema stores
+top-level symbols by owner module and resolves open imports by a deterministic
+DFS over unaliased edges; aliases look only in their target module. Internal
+function/global and LLVM struct identifiers are mangled with the module ID, while
+`extern`/`export` function names keep their C ABI spelling. Identical extern
+prototypes may be shared; conflicting declarations or duplicate exported
+symbols are diagnosed (`E0472`).
 
 ## 2. Source manager
 
 `Source` owns:
 
+- a stable source ID within the compilation;
 - the file path;
 - the source bytes;
 - a span-to-line/column mapping.
 
 UTF-8 is not required for source bytes as a whole; the lexer operates on bytes
 and only interprets UTF-8 inside character literals. Spans are byte offsets.
-`Span.join` creates a span covering two nodes for diagnostics.
+`Span.join` creates a span covering two nodes for diagnostics while retaining
+the originating source ID. `Reporter` resolves each diagnostic span against the
+registered source files.
 
 ## 3. Lexer
 
@@ -65,7 +77,14 @@ problem.
 
 `parser.Parser` is a hand-written recursive-descent parser with precedence
 climbing for binary expressions. It produces `ast.Program`, a list of
-declarations.
+top-level declarations and import paths. Imports are resolved relative to the
+containing source. The loader uses
+normalized paths, depth-first source order, once-only visits, and an explicit
+visiting/completed state to reject cycles. Each source module owns its top-level
+namespace. Unaliased imports open public names through unaliased dependency
+edges; aliases provide qualified access to the target module. Local declarations
+shadow opened imports, and conflicting opened candidates are diagnosed at use
+(`E0471`).
 
 Key properties:
 
@@ -105,6 +124,8 @@ type expressions. Semantic annotations are stored directly on nodes:
 - `Expr.ty` is filled by sema;
 - `Expr.Kind.Ident.sym` points at the resolved symbol;
 - `Expr.Kind.Field` stores the resolved field index or enum variant value;
+- `Expr.Kind.SliceAccess` stores optional `start` and `end` bounds (`[..]`,
+  `[start..]`, `[..end]`, `[start..end]`);
 - `VarDecl.ty` / `Param.ty` / `FnDecl.ty` hold resolved types;
 - `TypeExpr.resolved` caches resolved named types.
 
@@ -134,10 +155,13 @@ values, array lengths and initializer checks.
 state (`AutoHashMap(symbol id, bool)`). It reports:
 
 - possible reads of uninitialized locals (`E0501`);
-- constant out-of-bounds array indexes (`E0502`);
+- constant out-of-bounds array indexes, negative slice indexes, and invalid
+  constant slice ranges (`E0502`);
 - provable division by zero (`E0503`);
 - constant shifts outside the type width (`E0504`);
 - constant arithmetic overflow (`E0505`);
+- provable null pointer dereferences and null array-pointer slicing/casting
+  (`E0506`);
 - unreachable statements (`W0501`);
 - constant `if`/`while` conditions (`W0502`).
 
@@ -170,8 +194,11 @@ the boundary between language semantics and native code generation.
    - `if`/`while` create explicit blocks and branches.
    - `break`/`continue` use explicit block stacks.
    - Short-circuit `&&`/`||` lower to branches.
-   - Dynamic fixed-array and slice indexes and pointer dereferences are
-     bounds/null-checked at runtime.
+   - The driver passes an explicit `RuntimeCheckPolicy` selected by
+     `driver.Profile` into lowering. All four current profiles enable bounds,
+     integer-overflow, division, shift, and exact-null dereference checks.
+   - Dynamic fixed-array and slice indexes and exact-null pointer dereferences
+     are checked at runtime.
    - Integer division violations lower to explicit branches to `llvm.trap()`.
    - Struct/array literals are stored field by field into their destination.
    - Calls carry argument and return types for the emitter.

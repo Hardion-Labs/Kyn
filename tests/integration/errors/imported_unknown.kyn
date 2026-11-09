@@ -1,0 +1,2 @@
+import "modules/unknown.kyn";
+fn main() i32 { return 0; }

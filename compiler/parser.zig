@@ -28,9 +28,12 @@ pub const Parser = struct {
 
     pub fn parse(self: *Parser) !*ast.Program {
         var decls: std.ArrayList(*ast.Decl) = .empty;
+        var imports: std.ArrayList(ast.ImportDecl) = .empty;
         while (!self.check(.eof)) {
             const before = self.pos;
-            if (try self.parseDecl()) |decl| {
+            if (self.check(.kw_import)) {
+                if (try self.parseImport()) |imp| try imports.append(self.allocator, imp);
+            } else if (try self.parseDecl()) |decl| {
                 try decls.append(self.allocator, decl);
             }
             if (self.pos == before) {
@@ -38,8 +41,33 @@ pub const Parser = struct {
             }
         }
         const program = try self.allocator.create(ast.Program);
-        program.* = .{ .decls = try decls.toOwnedSlice(self.allocator) };
+        program.* = .{ .decls = try decls.toOwnedSlice(self.allocator), .imports = try imports.toOwnedSlice(self.allocator) };
         return program;
+    }
+
+    fn parseImport(self: *Parser) !?ast.ImportDecl {
+        const start = self.advance();
+        if (!self.check(.string_literal)) {
+            try self.reporter.err("E0230", self.peek().span, "expected a quoted path after 'import'", .{});
+            self.synchronize(.semicolon);
+            _ = self.match(.semicolon);
+            return null;
+        }
+        const path_token = self.advance();
+        const path = try self.decodeString(path_token);
+        var alias: ?[]const u8 = null;
+        if (self.match(.kw_as)) {
+            if (!self.check(.identifier)) {
+                try self.reporter.err("E0236", self.peek().span, "expected module alias after 'as'", .{});
+                self.synchronize(.semicolon);
+                _ = self.match(.semicolon);
+                return null;
+            }
+            alias = self.advance().lexeme;
+        }
+        const end = self.peek().span;
+        _ = try self.expect(.semicolon, "after import path");
+        return .{ .span = source.Span.join(start.span, end), .path = path, .alias = alias };
     }
 
     // ------------------------------------------------------------------
@@ -100,6 +128,13 @@ pub const Parser = struct {
     fn parseDecl(self: *Parser) !?*ast.Decl {
         const tok = self.peek();
         switch (tok.kind) {
+            .kw_private => {
+                const start = self.advance().span;
+                const decl = (try self.parseDecl()) orelse return null;
+                decl.is_public = false;
+                decl.span = Span.join(start, decl.span);
+                return decl;
+            },
             .kw_fn => return try self.parseFn(false, false),
             .kw_extern => {
                 const start = self.advance().span;
@@ -380,8 +415,19 @@ pub const Parser = struct {
         }
         if (tok.kind == .identifier or tok.kind.isPrimitiveType()) {
             _ = self.advance();
+            var name = tok.lexeme;
+            var span = tok.span;
+            if (tok.kind == .identifier and self.match(.dot)) {
+                if (!self.check(.identifier)) {
+                    try self.reporter.err("E0213", self.peek().span, "expected a type name after module qualifier", .{});
+                    return null;
+                }
+                const member = self.advance();
+                name = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ tok.lexeme, member.lexeme });
+                span = Span.join(span, member.span);
+            }
             const expr = try self.allocator.create(ast.TypeExpr);
-            expr.* = .{ .span = tok.span, .kind = .{ .name = tok.lexeme } };
+            expr.* = .{ .span = span, .kind = .{ .name = name } };
             return expr;
         }
         try self.reporter.err("E0213", tok.span, "expected a type, found {s}", .{token.describe(tok.kind)});
@@ -446,7 +492,7 @@ pub const Parser = struct {
                 stmt.* = .{ .span = end, .kind = .{ .empty = {} } };
                 return stmt;
             },
-            .kw_struct, .kw_enum, .kw_fn, .kw_extern, .kw_export => {
+            .kw_struct, .kw_enum, .kw_fn, .kw_extern, .kw_export, .kw_private => {
                 try self.reporter.err("E0214", tok.span, "declarations are not allowed inside function bodies", .{});
                 self.synchronize(.semicolon);
                 return null;
@@ -734,9 +780,26 @@ pub const Parser = struct {
                 },
                 .l_bracket => {
                     _ = self.advance();
+                    if (self.match(.dotdot)) {
+                        var end: ?*ast.Expr = null;
+                        if (!self.check(.r_bracket)) {
+                            end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        }
+                        _ = try self.expect(.r_bracket, "after slice range");
+                        const node = try self.allocator.create(ast.Expr);
+                        node.* = .{
+                            .span = Span.join(expr.span, self.peek().span),
+                            .kind = .{ .slice = .{ .base = expr, .start = null, .end = end } },
+                        };
+                        expr = node;
+                        continue;
+                    }
                     const first = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
                     if (self.match(.dotdot)) {
-                        const end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        var end: ?*ast.Expr = null;
+                        if (!self.check(.r_bracket)) {
+                            end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        }
                         _ = try self.expect(.r_bracket, "after slice range");
                         const node = try self.allocator.create(ast.Expr);
                         node.* = .{
@@ -834,6 +897,17 @@ pub const Parser = struct {
                     const type_expr = try self.allocator.create(ast.TypeExpr);
                     type_expr.* = .{ .span = tok.span, .kind = .{ .name = tok.lexeme } };
                     return try self.parseStructInit(type_expr, tok.span);
+                }
+                if (self.check(.dot) and self.peekAt(1).kind == .identifier and
+                    self.peekAt(2).kind == .l_brace)
+                {
+                    _ = self.advance();
+                    const member = self.advance();
+                    const qualified = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ tok.lexeme, member.lexeme });
+                    const span = Span.join(tok.span, member.span);
+                    const type_expr = try self.allocator.create(ast.TypeExpr);
+                    type_expr.* = .{ .span = span, .kind = .{ .name = qualified } };
+                    return try self.parseStructInit(type_expr, span);
                 }
                 const node = try self.allocator.create(ast.Expr);
                 node.* = .{ .span = tok.span, .kind = .{ .ident = .{ .name = tok.lexeme } } };
@@ -1291,4 +1365,38 @@ test "assignment is right-associative" {
     const stmt = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.expr;
     try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).assign, std.meta.activeTag(stmt.kind));
     try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).assign, std.meta.activeTag(stmt.kind.assign.value.kind));
+}
+
+test "parse open-ended and bounded slice expressions" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    let a = arr[..];
+        \\    let b = arr[1..];
+        \\    let c = arr[..3];
+        \\    let d = arr[1..3];
+        \\    return 0;
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const stmts = program.decls[0].kind.fn_decl.body.?.stmts;
+
+    const full = stmts[0].kind.var_decl.init.?.kind.slice;
+    try testing.expect(full.start == null);
+    try testing.expect(full.end == null);
+
+    const from = stmts[1].kind.var_decl.init.?.kind.slice;
+    try testing.expect(from.start != null);
+    try testing.expect(from.end == null);
+
+    const up_to = stmts[2].kind.var_decl.init.?.kind.slice;
+    try testing.expect(up_to.start == null);
+    try testing.expect(up_to.end != null);
+
+    const bounded = stmts[3].kind.var_decl.init.?.kind.slice;
+    try testing.expect(bounded.start != null);
+    try testing.expect(bounded.end != null);
 }

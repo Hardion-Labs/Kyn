@@ -1,0 +1,2 @@
+import "alias_helper.kyn" as helper;
+fn nested_public() i32 { return helper.value(); }

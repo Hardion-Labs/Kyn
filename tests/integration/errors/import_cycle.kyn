@@ -1,0 +1,2 @@
+import "modules/cycle_a.kyn";
+fn main() i32 { return 0; }

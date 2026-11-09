@@ -1,0 +1,2 @@
+import "modules/private_symbols.kyn" as;
+fn main() i32 { return 0; }

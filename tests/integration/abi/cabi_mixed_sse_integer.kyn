@@ -1,0 +1,16 @@
+struct DoubleInt { amount: f64, count: i32 }
+
+extern fn c_transform(value: DoubleInt) DoubleInt;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: DoubleInt) DoubleInt {
+    return DoubleInt {
+        amount: value.amount + 2.0,
+        count: value.count + 3,
+    };
+}
+
+fn main() i32 {
+    let result: DoubleInt = c_transform(DoubleInt { amount: 1.5, count: 4 });
+    return (result.amount as i32) + result.count + c_verify_kyn();
+}

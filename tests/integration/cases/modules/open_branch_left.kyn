@@ -1,0 +1,3 @@
+import "open_shared.kyn";
+private fn helper(value: i32) i32 { return value + 1; }
+fn left_api() i32 { return helper(1) + shared_number(); }

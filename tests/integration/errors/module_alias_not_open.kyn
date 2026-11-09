@@ -1,0 +1,2 @@
+import "modules/open_left.kyn" as left;
+fn main() i32 { return shared(); }

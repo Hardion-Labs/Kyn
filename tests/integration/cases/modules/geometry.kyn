@@ -1,0 +1,5 @@
+struct Pair { x: i32, y: i32 }
+enum Color: u8 { Red = 1 }
+const bias: i32 = 1;
+var counter: i32 = 0;
+fn sum(pair: Pair) i32 { return pair.x + pair.y; }

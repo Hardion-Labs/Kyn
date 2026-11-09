@@ -1,0 +1,6 @@
+import "modules/constants.kyn";
+import "modules/math.kyn";
+
+fn main() i32 {
+    return module_add(19, 23);
+}

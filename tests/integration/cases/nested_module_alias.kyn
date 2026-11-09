@@ -1,0 +1,2 @@
+import "modules/alias_user.kyn";
+fn main() i32 { return nested_public(); }

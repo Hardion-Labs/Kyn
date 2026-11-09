@@ -1,0 +1,3 @@
+import "modules/open_branch_left.kyn";
+import "modules/open_branch_right.kyn";
+fn main() i32 { return left_api() + right_api() + shared_number(); }

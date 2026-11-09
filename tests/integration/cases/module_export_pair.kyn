@@ -1,0 +1,3 @@
+import "modules/export_decl.kyn" as api;
+import "modules/export_def.kyn" as implementation;
+fn main() i32 { return api.call_api(41) + implementation.exported_value(0) - 1; }

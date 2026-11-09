@@ -1,0 +1,3 @@
+struct SseInteger { count: i32, amount: f64 }
+extern fn c_take(value: SseInteger);
+fn main() i32 { return 0; }

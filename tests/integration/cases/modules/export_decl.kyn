@@ -1,0 +1,2 @@
+extern fn exported_value(value: i32) i32;
+fn call_api(value: i32) i32 { return exported_value(value); }

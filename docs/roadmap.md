@@ -25,19 +25,57 @@ Milestones below are directions, not release promises.
 - Fuzzing/robustness corpus and clean-room release gate.
 - Documented limitations and no hidden runtime.
 
+## Implemented after `v0.1.0-alpha.2`
+
+- Open-ended and bounded slice syntax (`base[..]`, `base[start..]`,
+  `base[..end]`, `base[start..end]`) with zero-branch lowering for `base[..]`.
+- Const-polymorphic slicing and one-way implicit `[]T -> []const T`
+  assignability (for identical `T`), plus read-only `slice.ptr`, `slice.len`,
+  `array.len`, and `->len` / `->ptr` through pointers.
+- Lvalue and mutability hardening: `.len`/`.ptr` rejected as lvalues (`E0441`),
+  `&` restricted to lvalues (`E0464`), immutable `const`/`let` globals
+  enforced (`E0442`), and default `enum` backing aligned to `i32`.
+- Compile-time constant slice range checks (`E0502`), provable/runtime `null`
+  checks (`E0506` / trap) on array-pointer slicing/casting, pointer arithmetic
+  with integer literals and non-integer pointees, and safe `< 8`-byte /
+  `< 16`-byte C ABI aggregate register packing with executable slice ABI tests.
+
+## Implemented after `v0.1.0-alpha.2` (continued)
+
+- Explicit `import "relative/path.kyn" [as alias];` declarations, deterministic
+  dependency-first loading, once-only normalized-path visits, source-aware
+  diagnostics, cycle/missing-file diagnostics (`E0231`/`E0232`), aliases for
+  qualified function/value/type references, and `private` checks (`E0467`).
+  `kyn-build` hashes transitive Kyn imports in target stamps.
+- Each source module has its own top-level symbol table. Qualified aliases
+  resolve only declarations in their target; unaliased imports open public names
+  through unaliased dependency edges. Local names shadow opens, and ambiguous
+  imported names/types report `E0471` at use. Duplicate names are allowed across
+  modules but rejected within one module (`E0401`). Declarations are public by
+  default; `private` restricts cross-module access.
+- Runtime-check policy is explicit from `driver.Profile` through LLVM lowering.
+  All current profiles retain all implemented checks (bounds, overflow,
+  division, shifts, and exact-null dereference); no profile-specific removal is
+  implemented or promised.
+
 ## Next direction
 
-- Decide and specify general-purpose C ABI lowering for every aggregate type,
-  including floating-point members and cross-compilation targets, before
-  exposing them across `extern`/`export` unconditionally.
-- Add const-polymorphic slicing and additional slice ergonomics.
-- Add remaining runtime policy for traps: null dereference is checked in every
-  profile, but profile-specific policies remain intentionally unimplemented.
-- Add modules and a deterministic package manifest.
+- Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
+- Complete System V C ABI coercions for remaining `SSE`/`SSEUP` aggregate
+  classes and specify cross-compilation targets before exposing those layouts
+  across `extern`/`export`. Implemented subsets: one direct `f32`/`f64` field
+  via scalar SSE, exactly two direct `f32` fields via `<2 x float>`, and exactly
+  two direct `f64` fields via two SSE parameter registers and an LLVM pair
+  return, and direct `{ f64, i32 }` at offsets 0/8 via SSE+INTEGER registers.
+- Keep the all-checks-enabled runtime policy stable across profiles unless a
+  separate language-level decision explicitly specifies observable profile
+  differences and adds profile-specific regressions.
 - Keep the compiler and docs aligned: grammar, reference, type system, memory,
-  safety, ABI, architecture, build system and release notes.
-- Evaluate explicit allocator abstractions and a minimal runtime only after
-  their ownership and failure model is specified.
+  safety, ABI, architecture, build system, [continuity.md](continuity.md) and
+  release notes.
+- Evaluate explicit allocator abstractions and minimal freestanding `std`
+  primitives only after multi-file modules and ownership/failure rules are
+  settled.
 
 ## Explicitly deferred
 

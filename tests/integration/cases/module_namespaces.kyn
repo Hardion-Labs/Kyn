@@ -1,0 +1,12 @@
+import "modules/namespace_left.kyn" as left;
+import "modules/namespace_right.kyn" as right;
+
+fn value(input: i32) i32 { return input; }
+
+fn main() i32 {
+    left.tally += 1;
+    right.tally += 2;
+    const left_value: i32 = left.value(left.Item { x: 5 });
+    const right_value: i32 = right.value(right.Item { x: 7 });
+    return value(3) + left_value + right_value + left.answer + right.answer + left.tally + right.tally;
+}

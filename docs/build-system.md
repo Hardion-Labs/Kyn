@@ -114,6 +114,7 @@ For each selected target:
    - target name and kind;
    - profile;
    - each Kyn/C/Zig source path and its full content;
+   - each transitive `.kyn` import path and full content;
    - `cflags`, `include_dirs`, `libs`, `lib_dirs`;
    - the `kync`, `cc` and `zig` executable paths.
 2. Compare the digest with `build/<target>/.kyn-stamp`. If it matches and the
@@ -149,14 +150,16 @@ compiler.
 | `release` | `-O3` | `ReleaseFast` |
 | `fast` | `-O3` | `ReleaseFast` |
 
-The Kyn compiler receives the same profile name. In v0.1 this affects native
-optimization only; the static analyzer always runs.
+The Kyn compiler receives the same profile name. It selects native
+optimization flags and an explicit runtime-check policy; all currently
+implemented runtime checks remain enabled in every profile. The static analyzer
+always runs.
 
 ## 4. Incremental behavior
 
 The cache is content-based, not timestamp-based:
 
-- editing a source changes the digest and rebuilds the target;
+- editing a listed source or any transitively imported `.kyn` source changes the digest and rebuilds the target;
 - changing a flag, include directory, library or tool path changes the digest;
 - running twice with no changes prints `up to date` for each target;
 - `--force` rebuilds regardless;

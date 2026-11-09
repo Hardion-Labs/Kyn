@@ -11,8 +11,10 @@ These are constraints on design decisions, not slogans.
   allocations, hidden copies, hidden synchronization or hidden control flow.
 - **Verifiable safety.** Properties that can be decided at compile time are
   checked and reported with stable diagnostic codes. Checks that require
-  runtime information are intended to be explicit, profile-controlled and
-  observable — never silently removed.
+  runtime information follow an explicit, observable profile policy — never
+  silently removed. All currently implemented checks remain enabled in every
+  profile; any profile-specific removal requires a documented language decision
+  and regressions before it can change.
 - **Predictable performance.** Source constructs map to a small, explainable
   set of machine operations. The language has no garbage collector, no
   ownership inference and no implicit reference counting. Native optimization
@@ -99,8 +101,14 @@ coupled to LLVM internals. Kyn semantics remain defined by this repository.
   function types (used for direct calls; function values are not first-class
   in v0.1).
 
-There are no modules yet: a compilation unit is one file, and all top-level
-names share one global namespace.
+Compilation roots can explicitly import relative `.kyn` files. Import graphs
+are loaded deterministically, and each source file owns its top-level symbol
+table. Imports may use an explicit alias for qualified value/type references.
+Unaliased imports open public declarations through the transitive closure of
+unaliased edges; aliased edges are not re-exported unqualified. Local declarations
+shadow opened names, and conflicting public names report `E0471` when used.
+Same-named declarations in different modules are distinct. Top-level declarations
+are public by default and `private` restricts cross-file access.
 
 ## Control and cost
 

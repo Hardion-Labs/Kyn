@@ -1,0 +1,2 @@
+private fn helper() i32 { return 39; }
+fn public_api() i32 { return helper() + 3; }

@@ -64,12 +64,16 @@ unsupported construct or an internal compiler invariant violation.
 | `E0227` | incomplete hex escape in a character literal |
 | `E0228` | unknown escape sequence in a character literal |
 | `E0229` | invalid UTF-8 in a character literal |
+| `E0230` | expected a quoted path after `import` |
+| `E0231` | cyclic import |
+| `E0232` | source file cannot be read |
+| `E0236` | expected a module alias after `as` |
 
 ## Name resolution and type checking (`E04xx`)
 
 | Code | Meaning |
 | ---- | ------- |
-| `E0401` | duplicate top-level declaration |
+| `E0401` | duplicate declaration in one module |
 | `E0402` | function has no body and is not `extern` |
 | `E0403` | struct contains itself by value |
 | `E0404` | duplicate struct field |
@@ -121,9 +125,9 @@ unsupported construct or an internal compiler invariant violation.
 | `E0450` | field access through a pointer without `->` |
 | `E0451` | `->` used on a non-pointer |
 | `E0452` | field access on a type without fields |
-| `E0453` | unknown struct field |
-| `E0454` | non-integer array index |
-| `E0455` | indexing a non-array/non-pointer |
+| `E0453` | unknown struct, slice or array field |
+| `E0454` | non-integer index or slice bound |
+| `E0455` | indexing or slicing an unsupported type |
 | `E0456` | struct initializer for a non-struct type |
 | `E0457` | unknown field in a struct initializer |
 | `E0458` | missing field in a struct initializer |
@@ -132,8 +136,16 @@ unsupported construct or an internal compiler invariant violation.
 | `E0461` | array literal elements have different types |
 | `E0462` | assignment without an explicit cast |
 | `E0463` | condition is not `bool` |
+| `E0464` | `&` applied to a non-lvalue expression |
 | `E0465` | field access on a non-lvalue, non-pointer |
-| `E0466` | indexing a non-lvalue, non-pointer, non-literal |
+| `E0466` | indexing or slicing a non-lvalue, non-pointer, non-literal |
+| `E0467` | private declaration or type accessed from another module |
+| `E0468` | duplicate module alias in one source module |
+| `E0469` | unknown module alias |
+| `E0470` | imported module has no declaration with that name |
+| `E0471` | unqualified imported name is ambiguous |
+| `E0472` | external function symbol has conflicting declarations or definitions |
+| `E0473` | aggregate parameter or return layout is unsupported at the C ABI boundary |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 
@@ -142,7 +154,7 @@ Errors:
 | Code | Meaning |
 | ---- | ------- |
 | `E0501` | variable may be used before initialization |
-| `E0502` | constant index out of bounds |
+| `E0502` | constant index or slice range out of bounds |
 | `E0503` | provable division by zero |
 | `E0504` | constant shift amount out of range |
 | `E0505` | constant expression overflows its type |

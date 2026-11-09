@@ -1,0 +1,2 @@
+import "modules/private_symbols.kyn";
+fn main() i32 { let value: HiddenType; return 0; }

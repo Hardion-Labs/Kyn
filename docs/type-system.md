@@ -60,14 +60,21 @@ A slice stores two values at runtime:
 - a `usize` length.
 
 Slices are aggregate values and may be passed, returned and copied inside Kyn.
-`extern`/`export` signatures may use slices if the fields are compatible with a
-C `struct { ptr, usize }`; the boundary lowering uses the System V x86_64
-convention on Linux. A slice is constructed with an explicit cast from a
-pointer to a fixed-size array, or with the subslice syntax
-`slice[start..end]` / `array[start..end]`. `[]const T` prevents assignment to
-the pointed-at elements; `[]T` carries the mutability of its source.
-`slice.len` returns the length as `usize`. Slice indexing and subslicing are
-bounds-checked at runtime.
+`extern`/`export` signatures may use slices when the C counterpart uses a
+matching `struct { T *ptr; size_t len; }`; boundary lowering follows the
+System V x86_64 calling convention on Linux. Slices are constructed with
+open-ended or bounded slice syntax (`base[..]`, `base[start..]`, `base[..end]`,
+`base[start..end]`) on lvalue arrays, pointers to arrays or existing slices, or
+with an explicit `as` cast from a pointer to a fixed-size array.
+
+`[]const T` prevents assignment to the pointed-at elements; `[]T` preserves
+mutability when the source is mutable and adapts to `[]const T` when expected
+by context or implicitly assigned to `[]const T` (provided `T` is identical).
+`slice.len` returns the length as `usize`, and `slice.ptr` returns `*T` for
+`[]T` or `*const T` for `[]const T` (both are read-only non-lvalue properties;
+`->len` and `->ptr` work on pointers to slices). Slice indexing and subslicing
+are bounds-checked at compile time when constant (`E0502`) and at runtime
+otherwise.
 
 ### 1.4 Arrays
 
@@ -77,7 +84,9 @@ bounds-checked at runtime.
 
 `N` must be a positive integer constant; zero-length and inferred-length
 arrays are rejected. Arrays are value types with contiguous storage, and their
-length is part of the type. `[3]i32` and `[4]i32` are different types.
+length is part of the type (`array.len` returns `N` as `usize` and is usable
+in constant expressions when the base is a fixed-array identifier or constant
+array literal). `[3]i32` and `[4]i32` are different types.
 
 Array indexing accepts any integer index type; it does not implicitly convert
 the index to `usize`. Constant indexes are checked against the length during
@@ -142,7 +151,8 @@ let e: i64 = 1 as i32;  // E0462, concrete i32 does not implicitly widen
 - Function types are equal when parameter lists and return types are
   structurally equal.
 
-There is no subtyping, covariance or implicit mutability weakening.
+There is no nominal subtyping or deep variance; the only implicit mutability
+weakening is top-level `[]T` to `[]const T` when `T` is identical.
 
 ## 4. Assignability
 
@@ -150,10 +160,12 @@ A value of type `S` is assignable to a location of type `T` when one of the
 following holds:
 
 1. `S` and `T` are the same type.
-2. `S` is `comptime_int`, `T` is an integer type, and the literal value fits
+2. `S` is `[]U`, `T` is `[]const U`, and `U` is the exact same type (`[][]T`
+   does not implicitly convert to `[][]const T`).
+3. `S` is `comptime_int`, `T` is an integer type, and the literal value fits
    `T` (including the minimum signed value written as a negated literal).
-3. `S` is `comptime_float` and `T` is a floating type.
-4. `S` is `null` and `T` is a pointer type.
+4. `S` is `comptime_float` and `T` is a floating type.
+5. `S` is `null` and `T` is a pointer type.
 
 No other implicit conversions exist. Assignment, initialization, arguments and
 `return` all use these rules. Concrete numeric types require an explicit
@@ -172,7 +184,7 @@ No other implicit conversions exist. Assignment, initialization, arguments and
 | `!` | `bool` | `bool` |
 | unary `-` | numeric | operand type |
 | unary `~` | integer | operand type |
-| `&` | lvalue | pointer to operand type |
+| `&` | lvalue (`E0464` otherwise) | pointer to operand type (`*T` or `*const T`) |
 | `*` | pointer | pointee type |
 | `as` | allowed cast pair | target type |
 
@@ -186,9 +198,13 @@ An expression is an lvalue when it denotes storage:
 
 - an identifier bound to a local or global;
 - `*p`;
-- `base.field` where `base` is an lvalue;
-- `base.field` through a non-const pointer using `->`;
-- `base[index]` where `base` is an lvalue or a pointer.
+- `base.field` on a struct where `base` is an lvalue;
+- `base->field` on a pointer to a struct;
+- `base[index]` where `base` is an lvalue, a pointer, or a slice.
+
+Built-in properties (`slice.len`, `slice.ptr`, `array.len`, and their `->`
+forms) are computed values, not lvalues (`E0441` on assignment, `E0464` on
+address-of).
 
 Mutability is checked separately:
 
@@ -220,9 +236,19 @@ pointer regardless of how the pointer variable itself was declared.
   type.
 - Aggregate copies lower to contiguous loads/stores; LLVM's optimizer may
   promote or lower them according to the internal ABI.
-- `extern`/`export` functions pass integer-like aggregates ≤16 bytes by value
-  using the System V x86_64 calling convention on Linux. They are rejected
-  (`E0410`) on other hosts or when a field is not integer-like.
+- `extern`/`export` functions pass aggregates through the System V x86_64 ABI
+  on Linux when the current classifier supports their layout. Aggregates ≤16
+  bytes are passed in `INTEGER`-class registers; float and integer fields may
+  share an eightbyte when the merged class is `INTEGER`. Larger supported
+  aggregates use `sret`/`byval` memory passing.
+- A struct containing one direct `f32`/`f64` field crosses `extern`/`export`
+  boundaries as one scalar SSE value. Exactly two adjacent direct `f32` fields
+  use one `<2 x float>` SSE/SSEUP value; exactly two direct `f64` fields use
+  two SSE registers and an LLVM `{ double, double }` return coercion. A direct
+  `{ f64, i32 }` or `{ f64, u32 }` struct with the integer at offset 8 uses
+  `double, i32` arguments and an LLVM `{ double, i32 }` return. Other unsupported small
+  SSE/INTEGER layouts, fixed arrays by value, and unsupported targets are
+  rejected with `E0473`.
 - Slices may also cross the C ABI boundary when their layout matches a C
   `struct { ptr, usize }`.
 - A pointer to an aggregate remains the preferred way to avoid large copies.
@@ -242,7 +268,8 @@ Type errors use the `E04xx` range. The most important codes:
 | ---- | ------- |
 | `E0401` | duplicate top-level declaration |
 | `E0403` | struct contains itself by value |
-| `E0410` | void parameter, or aggregate parameter/return at a C ABI boundary |
+| `E0410` | void parameter |
+| `E0473` | unsupported aggregate parameter/return at a C ABI boundary |
 | `E0414` | function may reach the end without returning |
 | `E0426` | integer literal does not fit |
 | `E0427` | unknown identifier |

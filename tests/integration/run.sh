@@ -127,6 +127,18 @@ for profile in debug safe release fast; do
     else
         bad "structs ($profile): expected exit 30, got $status" "$(cat "$TMP/profile-$profile.stderr")"
     fi
+
+    for check_case in overflow_add_i32 runtime_bounds runtime_slice_bounds runtime_division overflow_shift runtime_null_deref runtime_null_slice; do
+        check_file="$ROOT/tests/integration/cases/$check_case.kyn"
+        expected=$(tr -d '[:space:]' <"$ROOT/tests/integration/cases/$check_case.exit")
+        status=0
+        (cd "$TMP/work" && "$KYNC" run "$check_file" --profile "$profile" >/dev/null 2>"$TMP/profile-$profile-$check_case.stderr") || status=$?
+        if [ "$status" -eq "$expected" ]; then
+            ok "runtime check $check_case ($profile)"
+        else
+            bad "runtime check $check_case ($profile): expected exit $expected, got $status" "$(cat "$TMP/profile-$profile-$check_case.stderr")"
+        fi
+    done
 done
 
 echo "negative cases"
@@ -154,6 +166,15 @@ for case_file in "$ROOT"/tests/integration/errors/*.kyn; do
     fi
     ok "$name ($code)"
 done
+
+imported_diag="$TMP/imported-diagnostic.stderr"
+status=0
+"$KYNC" check "$ROOT/tests/integration/errors/imported_unknown.kyn" >/dev/null 2>"$imported_diag" || status=$?
+if [ "$status" -ne 0 ] && grep -qF "modules/unknown.kyn:" "$imported_diag" && grep -qF "error[E0427]" "$imported_diag"; then
+    ok "diagnostics retain imported source locations"
+else
+    bad "diagnostics retain imported source locations" "$(cat "$imported_diag")"
+fi
 
 echo "diagnostic documentation"
 
@@ -265,6 +286,41 @@ if [ "$status" -eq 0 ]; then
         ok "incremental rebuild"
     else
         bad "incremental rebuild" "$second_log"
+    fi
+
+    import_project="$TMP/import-build"
+    mkdir -p "$import_project/src/modules"
+    cat >"$import_project/kyn.build" <<'EOF'
+project "import-cache"
+target "import-cache" {
+    kind: "exe"
+    sources: ["src/main.kyn"]
+}
+EOF
+    cat >"$import_project/src/main.kyn" <<'EOF'
+import "modules/api.kyn";
+fn main() i32 { return imported_value(); }
+EOF
+    cat >"$import_project/src/modules/api.kyn" <<'EOF'
+import "value.kyn";
+fn imported_value() i32 { return imported_constant; }
+EOF
+    echo 'const imported_constant: i32 = 11;' >"$import_project/src/modules/value.kyn"
+    status=0
+    "$KYNBUILD" --file "$import_project/kyn.build" --kync "$KYNC" >"$TMP/import-build-first.log" 2>&1 || status=$?
+    import_status=0
+    "$import_project/build/import-cache/import-cache" >/dev/null 2>&1 || import_status=$?
+    echo 'const imported_constant: i32 = 12;' >"$import_project/src/modules/value.kyn"
+    status_after_edit=0
+    "$KYNBUILD" --file "$import_project/kyn.build" --kync "$KYNC" >"$TMP/import-build-second.log" 2>&1 || status_after_edit=$?
+    import_status_after_edit=0
+    "$import_project/build/import-cache/import-cache" >/dev/null 2>&1 || import_status_after_edit=$?
+    if [ "$status" -eq 0 ] && [ "$import_status" -eq 11 ] \
+        && [ "$status_after_edit" -eq 0 ] && [ "$import_status_after_edit" -eq 12 ] \
+        && grep -q "building" "$TMP/import-build-second.log"; then
+        ok "transitive Kyn import invalidates build cache"
+    else
+        bad "transitive Kyn import invalidates build cache" "$(cat "$TMP/import-build-first.log" "$TMP/import-build-second.log")"
     fi
 else
     bad "kyn+c+zig build" "$(cat "$build_log")"

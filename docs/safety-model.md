@@ -15,10 +15,12 @@ not exist.
 | `release` | `-O3`        | always on       | always on      |
 | `fast`    | `-O3`        | always on       | always on      |
 
-Profiles currently control Clang optimization only. Implemented runtime checks
-are enabled in every profile; no profile removes a check silently. The
-remaining unimplemented categories (for example checked initialization and
-use-after-free) still belong in the future runtime-check layer.
+Profiles control Clang optimization and explicitly select an LLVM-lowering
+runtime-check policy. All implemented check categories are enabled in every
+profile; no profile removes a check silently. The policy is passed from
+`driver.Profile` through `driver.compile` into backend lowering. The remaining
+unimplemented categories (for example checked initialization and
+use-after-free) are not implied by this policy.
 
 > A profile may change the cost of a check, or make it explicit, but no
 > profile may silently remove a check that the language promises.
@@ -42,18 +44,20 @@ The backend emits checks before the affected operation:
 
 - Dynamic fixed-array and slice indexes are bounds-checked. An index below
   zero or at or above the array/slice length calls `llvm.trap()`.
-- Subslice bounds (`slice[start..end]` and `array[start..end]`) are checked
-  against the base length; invalid ranges trap.
+- Subslice bounds (`base[start..]`, `base[..end]`, `base[start..end]`) are
+  checked against the base length; invalid ranges trap. Full-range `base[..]`
+  uses the base length directly without a redundant bounds branch.
 - Integer addition, subtraction and multiplication trap on signed and unsigned
   overflow. Integer negation is checked as `0 - x`.
 - Integer division and remainder check the divisor. A zero divisor traps.
 - Signed integer division and remainder also trap on `INT_MIN / -1`.
 - Dynamic shift amounts are checked against the integer width. A negative or
   out-of-range amount traps.
-- Dereferencing a pointer that is exactly `null` traps. This includes `*p`,
-  `p->field` and `p[index]`. Provable null dereferences are diagnosed at
-  compile time with `E0506`; variable provenance is not tracked yet, so some
-  null cases only trap dynamically.
+- Dereferencing or slicing a pointer that is exactly `null` traps. This
+  includes `*p`, `p->field`, `p[index]`, `p[..]` / `p[start..end]`, and
+  `p as []T`. Provable null dereferences are diagnosed at compile time with
+  `E0506`; variable provenance is not tracked yet, so dynamic null cases trap
+  at runtime.
 
 Traps use LLVM's `llvm.trap()` intrinsic, which lowers to a CPU trap and
 terminates the process. There is no unwinding, recovery or handler in v0.1.
@@ -99,11 +103,13 @@ fit the expression's type. Unary negation is checked the same way.
 A constant shift amount outside `[0, bits)` for the left operand type is
 rejected.
 
-### 2.5 Constant array bounds (`E0502`)
+### 2.5 Constant array and slice bounds (`E0502`)
 
-Indexing an array with a constant index outside `[0, length)` is rejected. The
-check applies to array types known at the indexing expression; pointer
-indexing is not statically bounded.
+Indexing a fixed-size array with a constant index outside `[0, length)`,
+indexing a slice with a negative constant index, or slicing with constant
+invalid bounds (`start < 0`, `end < 0`, `start > end`, or a bound exceeding a
+statically known array length) is rejected. Pointer indexing is not statically
+bounded.
 
 ### 2.6 Unreachable statements (`W0501`)
 
@@ -118,11 +124,12 @@ warning. It is not an error.
 
 ### 2.8 Provable null dereferences (`E0506`)
 
-When the operand of a dereference, field access through a pointer, or pointer
-index can be proven to be exactly `null` from the expression text, the
-compiler rejects the program. Example: `*(null as *i32)`. The analysis does
-not prove arbitrary runtime pointer provenance, but any pointer exactly `null`
-is trapped dynamically when dereferenced.
+When the operand of a dereference, field access through a pointer, pointer
+index, array-pointer slice, or array-pointer-to-slice cast can be proven to be
+exactly `null` from the expression text, the compiler rejects the program.
+Example: `*(null as *i32)` or `(null as *[4]i32)[..]`. The analysis does not
+prove arbitrary runtime pointer provenance, but any pointer exactly `null` is
+trapped dynamically when dereferenced or sliced.
 
 ## 3. Checks that do not exist yet
 
@@ -171,25 +178,32 @@ Diagnostic ranges:
 | `E05xx` / `W05xx` | static analyzer errors / warnings |
 | `E06xx` | compiler-internal backend errors |
 
-## 5. Runtime check design (planned)
+## 5. Runtime-check policy and lowering
 
-The planned runtime-check layer must satisfy these constraints:
+`driver.Profile.runtimeCheckPolicy()` explicitly selects the policy carried
+through `driver.compile` into `llvm.Lowering`. The policy has separate switches
+for bounds, integer overflow, division, shifts, and exact-null dereferences.
+All four current profiles select all five categories:
 
-1. **Explicit policy.** Each check category (bounds, overflow, division,
-   null/deref, initialization) has a documented profile policy.
-2. **Predictable lowering.** Checks lower to ordinary branches and a trap or
-   call to a documented handler; no hidden unwinding through user frames.
-3. **Observable removal.** If a profile removes a check, the removal is
-   documented and testable; it is never an undocumented optimization.
-4. **No silent UB introduction.** A profile that claims a check keeps it,
-   unless the operation is already statically proven safe.
-5. **Testable.** Every check category gets positive (traps) and negative
-   (proven-safe) integration tests in each profile that enables it.
+| Profile | Bounds | Integer overflow | Division | Shifts | Exact-null dereference |
+| ------- | ------ | ---------------- | -------- | ------ | ---------------------- |
+| `debug` | enabled | enabled | enabled | enabled | enabled |
+| `safe` | enabled | enabled | enabled | enabled | enabled |
+| `release` | enabled | enabled | enabled | enabled | enabled |
+| `fast` | enabled | enabled | enabled | enabled | enabled |
 
-Implemented runtime checks (fixed-array bounds, signed and unsigned integer
-addition/subtraction/multiplication, checked negation, checked division and
-shift bounds) are emitted in every profile. Null dereference is still
-documented as undefined behavior.
+This is an explicit implementation of the existing contract, not a
+profile-specific safety reduction. A future policy change requires a
+documented language decision and profile regressions before any category can
+be disabled.
+
+Checks lower to branches and LLVM's `llvm.trap()` intrinsic, without hidden
+unwinding through user frames. Runtime traps for integer addition,
+bounds/subslice ranges, division, shifts, and exact-null dereferences are
+exercised in all four profiles by the integration suite. Other operations
+within those categories share the corresponding lowering helpers and broader
+integration fixtures. Dereferencing a dangling, misaligned or wild non-null
+pointer remains undefined behavior.
 
 ## 6. Verification strategy
 
@@ -198,8 +212,9 @@ documented as undefined behavior.
   exit status/stdout.
 - Negative tests assert that a specific code is emitted for a specific invalid
   program.
-- The four profiles are run on a representative executable to ensure the
-  pipeline works in each configuration.
+- The four profiles are run on a representative executable and trap regressions
+  for overflow, fixed-array bounds, slice bounds, division, shifts, exact-null
+  dereference, and exact-null slice; each trap must retain the expected status.
 - A hybrid Kyn + C + Zig project is built and executed, including an
   incremental no-op rebuild.
 - CI runs formatting, build, unit tests and integration tests.

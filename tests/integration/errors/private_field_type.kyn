@@ -1,0 +1,2 @@
+import "modules/private_field_api.kyn";
+fn main() i32 { let value = make_public(); return value.hidden.value; }

@@ -22,9 +22,12 @@ fn main() i32 {
     let q: *Point = &p;
     q->x += 1;
     var values: [3]i32 = [1, 2, 3];
+    let s: []const i32 = values[..];
+    let sub: []const i32 = s[1..];
+    let head: []const i32 = values[..2];
     let c: Color = Color.Green;
     if (c == Color.Green) { puts("ok"); }
-    let total: i32 = values[0] + values[1] + values[2];
+    let total: i32 = values[0] + sub[0] + head[1] + (*(s.ptr)) - 1 + (s.len as i32) - 3;
     return total + q->x - 6;
 }
 '''
@@ -32,8 +35,8 @@ fn main() i32 {
 TOKENS = [
     'fn', 'extern', 'export', 'struct', 'enum', 'const', 'let', 'var', 'if', 'else',
     'while', 'return', 'break', 'continue', 'as', 'true', 'false', 'null',
-    'i32', 'u8', 'bool', 'void', 'main', 'x', 'y', 'Point',
-    '{', '}', '(', ')', '[', ']', ',', ';', ':', '.', '->',
+    'i32', 'u8', 'bool', 'void', 'main', 'x', 'y', 'Point', 'len', 'ptr',
+    '{', '}', '(', ')', '[', ']', ',', ';', ':', '.', '..', '->',
     '+', '-', '*', '/', '%', '&', '|', '^', '~', '!', '=', '==', '!=',
     '<', '<=', '>', '>=', '<<', '>>', '+=', '<<=', '&&', '||',
     '0', '1', '42', '0x1F', '1_000', '1.5', '"str"', '"a\\n"', r"'c'",

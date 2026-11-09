@@ -121,7 +121,11 @@ fn main() i32 {
 - Field access through pointers uses `->`; field access on values uses `.`.
 - Conditions must be `bool`.
 - Numeric conversions require `as`.
-- Kyn and C can call each other through the C ABI; v0.1 supports the scalar call surface, integer-like aggregates up to 16 bytes by value, and slices by value when represented as `struct { ptr, usize }`. Variadics and floating-point aggregates in boundary signatures are not supported yet.
+- Files compose through deterministic relative imports. Optional aliases enable
+  qualified references; each file has its own top-level namespace, while
+  unaliased imports open public names transitively and diagnose ambiguity.
+  `private` declarations are enforced.
+- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, supported integer-class aggregates (including float/integer fields merged within one eightbyte), one-field `f32`/`f64` structs as scalar SSE values, two-adjacent-`f32` structs as `<2 x float>` SSE/SSEUP values, two-direct-`f64` structs in two SSE argument registers, direct `{ f64, i32 }` structs in SSE/INTEGER registers, larger supported structs via `sret`/`byval`, and slices (`struct { T *ptr; size_t len; }`). Variadics and other unsupported small mixed-class layouts remain unsupported.
 
 ---
 
@@ -185,7 +189,7 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 
 | Limitation | Status |
 |:---|:---|
-| ❌ Modules, imports or package system | Planned |
+| 🟡 Relative-path imports | Aliases, module namespaces and `private` supported; packages/re-exports pending |
 | ✅ Slices (`[]T`, `[]const T`) | `&array as []T`, `slice[a..b]`, `.len`, runtime bounds |
 | ❌ Generics or traits | Planned |
 | ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
@@ -204,9 +208,14 @@ Aggregate by-value support across the C ABI is limited:
 
 - Struct and array parameters/returns inside Kyn: ✅
 - Aggregate assignment and copies inside Kyn: ✅
-- Integer-like aggregates ≤16 bytes by value across `extern`/`export`: ✅ (`E0410` rejected; `x86_64`-Linux)
-- Aggregate types containing floating-point fields across `extern`/`export`: ❌ (`E0410`)
-- Arrays by value across `extern`/`export`: ❌ (`E0410`); pass a pointer
+- `INTEGER`-class aggregates ≤16 bytes across `extern`/`export`: ✅ (includes float/integer members merged within one eightbyte; `x86_64` Linux)
+- Larger supported aggregates via `sret`/`byval`: ✅
+- One-field `f32`/`f64` structs via scalar SSE coercion: ✅ (`x86_64` Linux)
+- Exactly two direct `f32` fields via one SSE/SSEUP vector: ✅ (`x86_64` Linux)
+- Exactly two direct `f64` fields via two SSE registers: ✅ (`x86_64` Linux)
+- Direct `{ f64, i32 }` at offsets 0/8 via SSE + INTEGER: ✅ (`x86_64` Linux)
+- Other unsupported small SSE/mixed-class aggregates: ❌ (`E0473`)
+- Arrays by value across `extern`/`export`: ❌ (`E0473`); pass a pointer
 - Slices by value (`[]T`, `[]const T`) across `extern`/`export`: ✅ (`{ ptr, usize }` layout)
 
 Unsupported constructs are rejected with diagnostics, rather than silently compiled as undefined behavior.
@@ -229,6 +238,7 @@ See [Diagnostic codes](docs/diagnostics.md) for the stable codes.
 | [🛠️ Build System](docs/build-system.md) | `kyn-build` and incremental builds |
 | [🔎 Diagnostics](docs/diagnostics.md) | Stable diagnostic codes |
 | [🚦 Release Checklist](docs/release-checklist.md) | Release readiness gate |
+| [🧭 Continuity Record](docs/continuity.md) | Validated technical state, contracts & next step |
 | [🗺️ Roadmap](docs/roadmap.md) | Planned milestones |
 
 ---
@@ -285,8 +295,11 @@ build.zig            Builds the toolchain and wires test steps
 |:---|:---|
 | `v0.1.0-alpha.2` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2) |
 | C ABI lowering for integer-like aggregates and slices | ✅ Shipped in `v0.1.0-alpha.2` |
-| Const-polymorphic slicing and subslice syntax | 🔜 Planned |
-| Modules and package manifest | 🔜 Planned |
+| Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Implemented |
+| Relative-path imports, qualified aliases and module namespaces | 🟡 Partial |
+| Integer-class mixed float/integer aggregate C ABI cases | ✅ Implemented |
+| SSE aggregate C ABI coercions (single scalar, two-`f32` pair and two-`f64` pair implemented) | 🟡 Partial |
+| Explicit all-check runtime policy across profiles | ✅ Implemented |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.
 

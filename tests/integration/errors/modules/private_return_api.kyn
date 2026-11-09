@@ -1,0 +1,2 @@
+private struct Hidden { value: i32 }
+fn make_hidden() Hidden { return Hidden { value: 1 }; }

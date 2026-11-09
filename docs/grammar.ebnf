@@ -11,15 +11,13 @@
  * Lexical rules (identifier, literals, comments) are summarized at the end.
  *)
 
-program        = { declaration } , end_of_file ;
+program        = { import_decl | declaration } , end_of_file ;
 
-declaration    = function_decl
-               | extern_decl
-               | export_decl
-               | struct_decl
-               | enum_decl
-               | global_var
-               ;
+import_decl    = "import" , string_literal , [ "as" , identifier ] , ";" ;
+
+declaration    = [ "private" ] ,
+                 ( function_decl | extern_decl | export_decl | struct_decl
+                 | enum_decl | global_var ) ;
 
 (* Functions *)
 
@@ -169,7 +167,8 @@ postfix_expression
                = primary_expression , { postfix_suffix } ;
 
 postfix_suffix = "(" , [ argument_list ] , ")"
-               | "[" , expression , [ ".." , expression ] , "]"
+               | "[" , expression , "]"
+               | "[" , [ expression ] , ".." , [ expression ] , "]"
                | "." , identifier
                | "->" , identifier
                ;
@@ -206,6 +205,8 @@ array_element_list
  * digit         = "0".."9" ;
  * hex_digit     = digit | "a".."f" | "A".."F" ;
  * identifier    = ( letter | "_" ) , { letter | digit | "_" } ;
+ * keyword       = "import" | "private" | "fn" | "extern" | "export"
+ *               | "struct" | "enum" ;
  *
  * decimal_int   = digit , { digit | "_" } ;
  * hex_int       = "0" , ( "x" | "X" ) , hex_digit , { hex_digit | "_" } ;

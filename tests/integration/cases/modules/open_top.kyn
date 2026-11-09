@@ -1,0 +1,2 @@
+import "open_leaf.kyn";
+fn top_value() i32 { return leaf_value() + 1; }

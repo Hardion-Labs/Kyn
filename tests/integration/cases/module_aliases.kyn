@@ -1,0 +1,8 @@
+import "modules/geometry.kyn" as geom;
+import "modules/geometry.kyn" as geo;
+
+fn main() i32 {
+    let pair: geom.Pair = geom.Pair { x: 20, y: 20 };
+    geom.counter += 1;
+    return geom.sum(pair) + geo.bias + geom.Color.Red as i32 + geom.counter;
+}
