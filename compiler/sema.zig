@@ -75,7 +75,7 @@ pub const Sema = struct {
                 },
                 .enum_decl => |ed| {
                     const info = try self.allocator.create(types.EnumInfo);
-                    info.* = .{ .name = ed.name, .backing = self.prims.u32 };
+                    info.* = .{ .name = ed.name, .backing = self.prims.i32 };
                     const ty = try self.allocator.create(Type);
                     ty.* = .{ .enum_type = info };
                     ed.ty = ty;
@@ -96,7 +96,11 @@ pub const Sema = struct {
                 .var_decl => |vd| {
                     const placeholder = try self.allocator.create(Type);
                     placeholder.* = .invalid;
+                    const existed = self.globals.contains(vd.name);
                     vd.sym = try self.declareGlobal(vd.name, .global, placeholder, decl.span);
+                    if (!existed) {
+                        if (vd.sym) |sym| sym.mutable = vd.mutable;
+                    }
                 },
             }
         }
@@ -584,7 +588,7 @@ pub const Sema = struct {
             .assign => |assign| try self.checkAssign(expr, assign),
             .call => |call| try self.checkCall(expr, call),
             .cast => |cast| try self.checkCast(expr, cast),
-            .slice => |slice| try self.checkSlice(expr, slice),
+            .slice => |slice| try self.checkSlice(expr, slice, expected),
             .field => |*field| try self.checkField(expr, field),
             .index => |index| try self.checkIndex(expr, index),
             .struct_init => |struct_init| try self.checkStructInit(expr, struct_init),
@@ -634,6 +638,10 @@ pub const Sema = struct {
         switch (unary.op) {
             .address_of => {
                 const operand_ty = try self.checkExpr(unary.operand, null);
+                if (operand_ty.* != .invalid and !self.isLvalue(unary.operand)) {
+                    try self.reporter.err("E0464", expr.span, "cannot take address of non-lvalue", .{});
+                    return self.prims.invalid;
+                }
                 const mutable = self.lvalueMutable(unary.operand);
                 const ptr = try types.makePointer(self.allocator, operand_ty, !mutable);
                 return ptr;
@@ -722,6 +730,14 @@ pub const Sema = struct {
                 return self.prims.bool;
             },
             .add, .sub => {
+                if (lhs_ty.isPointer() and rhs_ty.* == .comptime_int) {
+                    if (try self.applyLiteralType(binary.rhs, rhs_ty, self.prims.isize)) {
+                        rhs_ty = self.prims.isize;
+                    } else {
+                        try self.reporter.err("E0440", expr.span, "integer literal does not fit type 'isize'", .{});
+                        return self.prims.invalid;
+                    }
+                }
                 if (lhs_ty.isPointer() and self.isIntegerType(rhs_ty) and binary.op == .add) {
                     return lhs_ty;
                 }
@@ -943,16 +959,24 @@ pub const Sema = struct {
         return Type.eql(source_info.elem, target_info.elem);
     }
 
-    fn checkSlice(self: *Sema, expr: *ast.Expr, slice_expr: ast.Expr.Kind.SliceAccess) Error!*Type {
+    fn checkSlice(
+        self: *Sema,
+        expr: *ast.Expr,
+        slice_expr: ast.Expr.Kind.SliceAccess,
+        expected: ?*Type,
+    ) Error!*Type {
         const base_ty = try self.checkExpr(slice_expr.base, null);
-        const start_ty = try self.checkExpr(slice_expr.start, null);
-        const end_ty = try self.checkExpr(slice_expr.end, null);
-
-        if (!self.isIntegerType(start_ty) and start_ty.* != .comptime_int) {
-            try self.reporter.err("E0454", slice_expr.start.span, "slice start must be an integer, found '{s}'", .{self.typeName(start_ty)});
+        if (slice_expr.start) |start_expr| {
+            const start_ty = try self.checkExpr(start_expr, null);
+            if (!self.isIntegerType(start_ty) and start_ty.* != .comptime_int) {
+                try self.reporter.err("E0454", start_expr.span, "slice start must be an integer, found '{s}'", .{self.typeName(start_ty)});
+            }
         }
-        if (!self.isIntegerType(end_ty) and end_ty.* != .comptime_int) {
-            try self.reporter.err("E0454", slice_expr.end.span, "slice end must be an integer, found '{s}'", .{self.typeName(end_ty)});
+        if (slice_expr.end) |end_expr| {
+            const end_ty = try self.checkExpr(end_expr, null);
+            if (!self.isIntegerType(end_ty) and end_ty.* != .comptime_int) {
+                try self.reporter.err("E0454", end_expr.span, "slice end must be an integer, found '{s}'", .{self.typeName(end_ty)});
+            }
         }
 
         var elem: *Type = self.prims.invalid;
@@ -977,10 +1001,19 @@ pub const Sema = struct {
                 elem = slice.elem;
                 is_const = slice.is_const;
             },
+            .invalid => return self.prims.invalid,
             else => {
                 try self.reporter.err("E0455", slice_expr.base.span, "cannot slice value of type '{s}'", .{self.typeName(base_ty)});
                 return self.prims.invalid;
             },
+        }
+
+        if (!is_const) {
+            if (expected) |exp| {
+                if (exp.* == .slice and exp.slice.is_const and Type.eql(exp.slice.elem, elem)) {
+                    is_const = true;
+                }
+            }
         }
 
         const ty = try types.makeSlice(self.allocator, elem, is_const);
@@ -990,19 +1023,7 @@ pub const Sema = struct {
 
     fn checkField(self: *Sema, expr: *ast.Expr, field: *ast.Expr.Kind.Field) Error!*Type {
         const base_ty = try self.checkExpr(field.base, null);
-
-        if (base_ty.* == .slice) {
-            if (field.through_pointer) {
-                try self.reporter.err("E0451", expr.span, "'->' requires a pointer operand", .{});
-                return self.prims.invalid;
-            }
-            if (std.mem.eql(u8, field.name, "len")) {
-                field.field_index = 1;
-                return self.prims.usize;
-            }
-            try self.reporter.err("E0453", expr.span, "slice has no field '{s}'", .{field.name});
-            return self.prims.invalid;
-        }
+        if (base_ty.* == .invalid) return self.prims.invalid;
 
         if (base_ty.* == .enum_type) {
             if (field.through_pointer) {
@@ -1030,6 +1051,28 @@ pub const Sema = struct {
             struct_ty = base_ty.pointer.elem;
         } else if (field.through_pointer) {
             try self.reporter.err("E0451", expr.span, "'->' requires a pointer operand", .{});
+            return self.prims.invalid;
+        }
+
+        if (struct_ty.* == .slice) {
+            if (std.mem.eql(u8, field.name, "ptr")) {
+                field.field_index = 0;
+                return types.makePointer(self.allocator, struct_ty.slice.elem, struct_ty.slice.is_const);
+            }
+            if (std.mem.eql(u8, field.name, "len")) {
+                field.field_index = 1;
+                return self.prims.usize;
+            }
+            try self.reporter.err("E0453", expr.span, "slice has no field '{s}'", .{field.name});
+            return self.prims.invalid;
+        }
+
+        if (struct_ty.* == .array) {
+            if (std.mem.eql(u8, field.name, "len")) {
+                field.field_index = 1;
+                return self.prims.usize;
+            }
+            try self.reporter.err("E0453", expr.span, "array has no field '{s}'", .{field.name});
             return self.prims.invalid;
         }
 
@@ -1167,6 +1210,13 @@ pub const Sema = struct {
     fn isAssignable(self: *Sema, target: *Type, value_expr: *ast.Expr, value_ty: *Type) bool {
         _ = self;
         if (Type.eql(target, value_ty)) return true;
+        if (target.* == .slice and value_ty.* == .slice) {
+            if (target.slice.is_const and !value_ty.slice.is_const and
+                Type.eql(target.slice.elem, value_ty.slice.elem))
+            {
+                return true;
+            }
+        }
         if (value_ty.* == .comptime_int and target.isInteger()) {
             const value = literalIntValue(value_expr) orelse return false;
             return fitsInt(target.intInfo(), value);
@@ -1209,7 +1259,14 @@ pub const Sema = struct {
         return switch (expr.kind) {
             .ident => |ident| if (ident.sym) |sym| sym.kind == .local or sym.kind == .global else false,
             .unary => |unary| unary.op == .dereference,
-            .field => |field| !field.is_enum_variant and self.isLvalue(field.base),
+            .field => |field| blk: {
+                if (field.is_enum_variant) break :blk false;
+                const base_ty = field.base.ty orelse break :blk false;
+                const target_ty = if (field.through_pointer and base_ty.* == .pointer) base_ty.pointer.elem else base_ty;
+                if (target_ty.* == .slice or target_ty.* == .array) break :blk false;
+                if (field.through_pointer and base_ty.* == .pointer) break :blk true;
+                break :blk self.isLvalue(field.base);
+            },
             .index => |index| blk: {
                 if (index.base.ty) |base_ty| {
                     if (base_ty.* == .slice) break :blk true;
@@ -1317,6 +1374,16 @@ pub const Sema = struct {
             },
             .field => |field| {
                 if (field.is_enum_variant) return field.variant_value;
+                if (!field.through_pointer and std.mem.eql(u8, field.name, "len")) {
+                    if (field.base.ty) |bt| {
+                        if (bt.* == .array) return @intCast(bt.array.len);
+                    }
+                    if (field.base.kind == .ident) {
+                        if (self.lookup(field.base.kind.ident.name)) |sym| {
+                            if (sym.ty.* == .array) return @intCast(sym.ty.array.len);
+                        }
+                    }
+                }
                 return null;
             },
             else => return null,
@@ -1328,7 +1395,6 @@ pub const Sema = struct {
     // ------------------------------------------------------------------
 
     pub fn typeName(self: *const Sema, ty: *Type) []const u8 {
-        _ = self;
         return switch (ty.*) {
             .invalid => "invalid",
             .void => "void",
@@ -1336,9 +1402,18 @@ pub const Sema = struct {
             .char => "char",
             .int => |info| info.name(),
             .float => |bits| if (bits == 32) "f32" else "f64",
-            .pointer => |p| if (p.is_const) "*const ?" else "*?",
-            .array => "[?]?",
-            .slice => "slice",
+            .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
+                if (p.is_const) "const " else "",
+                self.typeName(p.elem),
+            }) catch (if (p.is_const) "*const ?" else "*?"),
+            .array => |a| std.fmt.allocPrint(self.allocator, "[{d}]{s}", .{
+                a.len,
+                self.typeName(a.elem),
+            }) catch "[?]?",
+            .slice => |s| std.fmt.allocPrint(self.allocator, "[]{s}{s}", .{
+                if (s.is_const) "const " else "",
+                self.typeName(s.elem),
+            }) catch (if (s.is_const) "[]const ?" else "[]?"),
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
             .fn_type => "fn",
@@ -1428,7 +1503,11 @@ pub fn isConstInitializer(expr: *ast.Expr) bool {
         .unary => |unary| unary.op != .dereference and unary.op != .address_of and isConstInitializer(unary.operand),
         .binary => |binary| isConstInitializer(binary.lhs) and isConstInitializer(binary.rhs),
         .cast => |cast| isConstInitializer(cast.operand),
-        .field => |field| field.is_enum_variant,
+        .field => |field| field.is_enum_variant or (!field.through_pointer and std.mem.eql(u8, field.name, "len") and blk: {
+            const bt = field.base.ty orelse break :blk false;
+            if (bt.* != .array) break :blk false;
+            break :blk field.base.kind == .ident or isConstInitializer(field.base);
+        }),
         else => false,
     };
 }
@@ -1788,4 +1867,102 @@ test "mutable and immutable subslices are typed and bounds-checked" {
         \\    return values[1];
         \\}
     , "E0442");
+}
+
+test "open-ended slicing and const-polymorphic slice coercion" {
+    try expectClean(
+        \\const GLOBAL_ARR: [4]i32 = [1, 2, 3, 4];
+        \\fn sum(xs: []const i32) i32 {
+        \\    return xs.len as i32;
+        \\}
+        \\fn main() i32 {
+        \\    var a: [4]i32 = [10, 20, 30, 40];
+        \\    let b: [4]i32 = [1, 2, 3, 4];
+        \\    let rw: []i32 = a[..];
+        \\    let ro1: []const i32 = rw;
+        \\    let ro2: []const i32 = a[1..];
+        \\    let ro3: []const i32 = b[..3];
+        \\    let ro4: []const i32 = GLOBAL_ARR[..];
+        \\    return sum(rw) + sum(ro1) + sum(ro2) + sum(ro3) + sum(ro4) + sum(a[..2]);
+        \\}
+    );
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let b: [4]i32 = [1, 2, 3, 4];
+        \\    let bad: []i32 = b[..];
+        \\    return bad.len as i32;
+        \\}
+    , "E0462");
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    var inner: [2]i32 = [1, 2];
+        \\    var outer: [1][]i32 = [inner[..]];
+        \\    let s: [][]i32 = outer[..];
+        \\    let bad: [][]const i32 = s;
+        \\    return bad.len as i32;
+        \\}
+    , "E0462");
+}
+
+test "slice ptr, array len, lvalue and address-of rules" {
+    try expectClean(
+        \\const DATA: [3]i32 = [4, 5, 6];
+        \\const DATA_LEN: usize = DATA.len;
+        \\fn main() i32 {
+        \\    var a: [DATA.len]i32 = [10, 20, 30];
+        \\    var s: []i32 = a[..];
+        \\    let cs: []const i32 = a[..];
+        \\    let p: *i32 = s.ptr;
+        \\    let cp: *const i32 = cs.ptr;
+        \\    *(p + 1) = 99;
+        \\    let sp: *[]i32 = &s;
+        \\    return (*cp) + a[1] + (sp->len as i32) + (*(sp->ptr) ) + (DATA_LEN as i32);
+        \\}
+    );
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    var a: [2]i32 = [1, 2];
+        \\    var s: []i32 = a[..];
+        \\    s.len = 1;
+        \\    return 0;
+        \\}
+    , "E0441");
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    var a: [2]i32 = [1, 2];
+        \\    var s: []i32 = a[..];
+        \\    s.ptr = &a[0];
+        \\    return 0;
+        \\}
+    , "E0441");
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let p = &42;
+        \\    return *p;
+        \\}
+    , "E0464");
+
+    try expectSemanticError(
+        \\const IMMUT: i32 = 7;
+        \\fn main() i32 {
+        \\    IMMUT = 8;
+        \\    return IMMUT;
+        \\}
+    , "E0442");
+
+    try expectClean(
+        \\enum Sign {
+        \\    Neg = -1,
+        \\    Zero = 0,
+        \\    Pos = 1,
+        \\}
+        \\fn main() i32 {
+        \\    return (Sign.Neg as i32) + (Sign.Pos as i32);
+        \\}
+    );
 }

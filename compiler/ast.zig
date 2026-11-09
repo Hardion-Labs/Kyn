@@ -283,8 +283,8 @@ pub const Expr = struct {
 
         pub const SliceAccess = struct {
             base: *Expr,
-            start: *Expr,
-            end: *Expr,
+            start: ?*Expr,
+            end: ?*Expr,
         };
 
         pub const StructInit = struct {

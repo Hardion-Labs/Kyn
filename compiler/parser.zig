@@ -734,9 +734,26 @@ pub const Parser = struct {
                 },
                 .l_bracket => {
                     _ = self.advance();
+                    if (self.match(.dotdot)) {
+                        var end: ?*ast.Expr = null;
+                        if (!self.check(.r_bracket)) {
+                            end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        }
+                        _ = try self.expect(.r_bracket, "after slice range");
+                        const node = try self.allocator.create(ast.Expr);
+                        node.* = .{
+                            .span = Span.join(expr.span, self.peek().span),
+                            .kind = .{ .slice = .{ .base = expr, .start = null, .end = end } },
+                        };
+                        expr = node;
+                        continue;
+                    }
                     const first = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
                     if (self.match(.dotdot)) {
-                        const end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        var end: ?*ast.Expr = null;
+                        if (!self.check(.r_bracket)) {
+                            end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        }
                         _ = try self.expect(.r_bracket, "after slice range");
                         const node = try self.allocator.create(ast.Expr);
                         node.* = .{
@@ -1291,4 +1308,38 @@ test "assignment is right-associative" {
     const stmt = program.decls[0].kind.fn_decl.body.?.stmts[0].kind.expr;
     try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).assign, std.meta.activeTag(stmt.kind));
     try testing.expectEqual(std.meta.Tag(ast.Expr.Kind).assign, std.meta.activeTag(stmt.kind.assign.value.kind));
+}
+
+test "parse open-ended and bounded slice expressions" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    let a = arr[..];
+        \\    let b = arr[1..];
+        \\    let c = arr[..3];
+        \\    let d = arr[1..3];
+        \\    return 0;
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const stmts = program.decls[0].kind.fn_decl.body.?.stmts;
+
+    const full = stmts[0].kind.var_decl.init.?.kind.slice;
+    try testing.expect(full.start == null);
+    try testing.expect(full.end == null);
+
+    const from = stmts[1].kind.var_decl.init.?.kind.slice;
+    try testing.expect(from.start != null);
+    try testing.expect(from.end == null);
+
+    const up_to = stmts[2].kind.var_decl.init.?.kind.slice;
+    try testing.expect(up_to.start == null);
+    try testing.expect(up_to.end != null);
+
+    const bounded = stmts[3].kind.var_decl.init.?.kind.slice;
+    try testing.expect(bounded.start != null);
+    try testing.expect(bounded.end != null);
 }

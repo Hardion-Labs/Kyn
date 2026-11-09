@@ -34,7 +34,8 @@ expression  := assignment, with precedence documented in the language reference
   and the types to be assignable.
 - `as` binds tighter than binary arithmetic, e.g. `a * b as u64` is
   `a * (b as u64)`.
-- Postfix operations (call, index, `.field`, `->field`) chain left to right.
+- Postfix operations (call, index `[expr]`, slice `[..]`, `[start..]`,
+  `[..end]`, `[start..end]`, `.field`, `->field`) chain left to right.
 - Struct initializers are recognized only as `IDENT { ... }` in expression
   position, so a block cannot start with a bare identifier followed by `{` in
   an expression statement without being parsed as an initializer.

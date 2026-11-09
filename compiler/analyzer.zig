@@ -161,8 +161,9 @@ pub const Analyzer = struct {
             },
             .slice => |slice| {
                 try self.checkExpr(slice.base);
-                try self.checkExpr(slice.start);
-                try self.checkExpr(slice.end);
+                if (slice.start) |start_expr| try self.checkExpr(start_expr);
+                if (slice.end) |end_expr| try self.checkExpr(end_expr);
+                try self.checkSliceFacts(expr, slice);
             },
             .binary => |binary| {
                 try self.checkExpr(binary.lhs);
@@ -182,7 +183,18 @@ pub const Analyzer = struct {
                 try self.checkExpr(call.callee);
                 for (call.args) |arg| try self.checkExpr(arg);
             },
-            .cast => |cast| try self.checkExpr(cast.operand),
+            .cast => |cast| {
+                try self.checkExpr(cast.operand);
+                if (cast.target.resolved) |target_ty| {
+                    if (target_ty.* == .slice) {
+                        if (cast.operand.ty) |src_ty| {
+                            if (src_ty.* == .pointer and constPointerIsNull(cast.operand)) {
+                                try self.reporter.err("E0506", expr.span, "provable null pointer dereference", .{});
+                            }
+                        }
+                    }
+                }
+            },
             .field => |field| {
                 if (field.through_pointer and constPointerIsNull(field.base)) {
                     try self.reporter.err("E0506", expr.span, "provable null pointer dereference", .{});
@@ -202,6 +214,12 @@ pub const Analyzer = struct {
                                 try self.reporter.err("E0502", index.index.span, "constant index {d} is out of bounds for array of length {d}", .{
                                     value, base_ty.array.len,
                                 });
+                            }
+                        }
+                    } else if (base_ty.* == .slice) {
+                        if (constInt(index.index)) |value| {
+                            if (value < 0) {
+                                try self.reporter.err("E0502", index.index.span, "constant slice index {d} is negative", .{value});
                             }
                         }
                     }
@@ -226,6 +244,59 @@ pub const Analyzer = struct {
             .field => |field| self.markAssigned(field.base),
             .index => |index| self.markAssigned(index.base),
             else => {},
+        }
+    }
+
+    fn checkSliceFacts(self: *Analyzer, expr: *ast.Expr, slice: ast.Expr.Kind.SliceAccess) Error!void {
+        const base_ty = slice.base.ty orelse return;
+        if (base_ty.* == .pointer and constPointerIsNull(slice.base)) {
+            try self.reporter.err("E0506", expr.span, "provable null pointer dereference", .{});
+        }
+
+        const known_len: ?i128 = switch (base_ty.*) {
+            .array => |a| @intCast(a.len),
+            .pointer => |p| if (p.elem.* == .array) @intCast(p.elem.array.len) else null,
+            else => null,
+        };
+
+        const start_const: ?i128 = if (slice.start) |s| constInt(s) else 0;
+        const end_const: ?i128 = if (slice.end) |e| constInt(e) else known_len;
+
+        var invalid = false;
+        if (slice.start) |s| {
+            if (start_const) |sv| {
+                if (sv < 0) {
+                    try self.reporter.err("E0502", s.span, "constant slice start {d} is negative", .{sv});
+                    invalid = true;
+                } else if (known_len) |len| {
+                    if (sv > len) {
+                        try self.reporter.err("E0502", s.span, "constant slice start {d} exceeds length {d}", .{ sv, len });
+                        invalid = true;
+                    }
+                }
+            }
+        }
+        if (slice.end) |e| {
+            if (end_const) |ev| {
+                if (ev < 0) {
+                    try self.reporter.err("E0502", e.span, "constant slice end {d} is negative", .{ev});
+                    invalid = true;
+                } else if (known_len) |len| {
+                    if (ev > len) {
+                        try self.reporter.err("E0502", e.span, "constant slice end {d} exceeds length {d}", .{ ev, len });
+                        invalid = true;
+                    }
+                }
+            }
+        }
+        if (!invalid) {
+            if (start_const) |sv| {
+                if (end_const) |ev| {
+                    if (sv > ev) {
+                        try self.reporter.err("E0502", expr.span, "constant slice start {d} exceeds end {d}", .{ sv, ev });
+                    }
+                }
+            }
         }
     }
 
@@ -362,7 +433,17 @@ pub fn constInt(expr: *ast.Expr) ?i128 {
             };
         },
         .cast => |cast| constInt(cast.operand),
-        .field => |field| if (field.is_enum_variant) field.variant_value else null,
+        .field => |field| blk: {
+            if (field.is_enum_variant) break :blk field.variant_value;
+            if (!field.through_pointer and std.mem.eql(u8, field.name, "len")) {
+                if (field.base.ty) |bt| {
+                    if (bt.* == .array and (field.base.kind == .ident or field.base.kind == .array_lit)) {
+                        break :blk @intCast(bt.array.len);
+                    }
+                }
+            }
+            break :blk null;
+        },
         else => null,
     };
 }
@@ -555,4 +636,57 @@ test "analyzer detects provable null pointer dereference" {
         \\    return (null as *Point)->x;
         \\}
     , "E0506");
+}
+
+test "analyzer checks constant subslice bounds and null slice sources" {
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let a: [4]i32 = [1, 2, 3, 4];
+        \\    let s = a[..5];
+        \\    return s.len as i32;
+        \\}
+    , "E0502");
+
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let a: [4]i32 = [1, 2, 3, 4];
+        \\    let s = a[3..2];
+        \\    return s.len as i32;
+        \\}
+    , "E0502");
+
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let a: [4]i32 = [1, 2, 3, 4];
+        \\    let s = a[-1..2];
+        \\    return s.len as i32;
+        \\}
+    , "E0502");
+
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let s = (null as *[4]i32)[..];
+        \\    return s.len as i32;
+        \\}
+    , "E0506");
+
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let s = (null as *[4]i32) as []i32;
+        \\    return s.len as i32;
+        \\}
+    , "E0506");
+
+    var ctx: AnalyzerTest = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    let a: [4]i32 = [1, 2, 3, 4];
+        \\    let tail = a[4..];
+        \\    let head = a[..0];
+        \\    return (tail.len + head.len) as i32;
+        \\}
+    );
+    defer ctx.deinit();
+    try ctx.run();
+    try testing.expect(!ctx.reporter.hasErrors());
 }
