@@ -236,9 +236,13 @@ pointer regardless of how the pointer variable itself was declared.
   type.
 - Aggregate copies lower to contiguous loads/stores; LLVM's optimizer may
   promote or lower them according to the internal ABI.
-- `extern`/`export` functions pass integer-like aggregates ≤16 bytes by value
-  using the System V x86_64 calling convention on Linux. They are rejected
-  (`E0410`) on other hosts or when a field is not integer-like.
+- `extern`/`export` functions pass aggregates through the System V x86_64 ABI
+  on Linux when the current classifier supports their layout. Aggregates ≤16
+  bytes are passed in `INTEGER`-class registers; float and integer fields may
+  share an eightbyte when the merged class is `INTEGER`. Larger supported
+  aggregates use `sret`/`byval` memory passing.
+- Small aggregates with an `SSE`-only eightbyte and fixed arrays by value are
+  rejected with `E0473`; other hosts/unsupported layouts are rejected too.
 - Slices may also cross the C ABI boundary when their layout matches a C
   `struct { ptr, usize }`.
 - A pointer to an aggregate remains the preferred way to avoid large copies.
@@ -258,7 +262,8 @@ Type errors use the `E04xx` range. The most important codes:
 | ---- | ------- |
 | `E0401` | duplicate top-level declaration |
 | `E0403` | struct contains itself by value |
-| `E0410` | void parameter, or aggregate parameter/return at a C ABI boundary |
+| `E0410` | void parameter |
+| `E0473` | unsupported aggregate parameter/return at a C ABI boundary |
 | `E0414` | function may reach the end without returning |
 | `E0426` | integer literal does not fit |
 | `E0427` | unknown identifier |

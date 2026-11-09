@@ -1,0 +1,20 @@
+struct FloatInt { amount: f32, count: i32 }
+struct IntFloat { count: i32, amount: f32 }
+
+extern fn c_transform_fi(value: FloatInt) FloatInt;
+extern fn c_transform_if(value: IntFloat) IntFloat;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_make_fi(amount: f32, count: i32) FloatInt {
+    return FloatInt { amount: amount + 2.0, count: count + 4 };
+}
+
+export fn kyn_make_if(count: i32, amount: f32) IntFloat {
+    return IntFloat { count: count + 4, amount: amount + 2.0 };
+}
+
+fn main() i32 {
+    let fi: FloatInt = c_transform_fi(FloatInt { amount: 1.5, count: 8 });
+    let int_float: IntFloat = c_transform_if(IntFloat { count: 10, amount: 1.5 });
+    return fi.count + int_float.count + c_verify_kyn();
+}

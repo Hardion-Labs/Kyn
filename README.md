@@ -125,7 +125,7 @@ fn main() i32 {
   qualified references; each file has its own top-level namespace, while
   unaliased imports open public names transitively and diagnose ambiguity.
   `private` declarations are enforced.
-- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, integer-like structs (`<= 16` bytes in registers, larger structs via `sret`/`byval`), and slices (`struct { T *ptr; size_t len; }`) cross `extern`/`export` boundaries directly. Variadics and floating-point aggregates in boundary signatures are not supported yet.
+- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, integer-class aggregates (`<= 16` bytes in registers, including float/integer fields merged within one eightbyte; larger supported structs via `sret`/`byval`), and slices (`struct { T *ptr; size_t len; }`) cross `extern`/`export` boundaries directly. Variadics and small aggregates with `SSE`-only eightbytes remain unsupported.
 
 ---
 
@@ -208,9 +208,10 @@ Aggregate by-value support across the C ABI is limited:
 
 - Struct and array parameters/returns inside Kyn: ✅
 - Aggregate assignment and copies inside Kyn: ✅
-- Integer-like aggregates ≤16 bytes by value across `extern`/`export`: ✅ (`E0410` rejected; `x86_64`-Linux)
-- Aggregate types containing floating-point fields across `extern`/`export`: ❌ (`E0410`)
-- Arrays by value across `extern`/`export`: ❌ (`E0410`); pass a pointer
+- `INTEGER`-class aggregates ≤16 bytes across `extern`/`export`: ✅ (includes float/integer members merged within one eightbyte; `x86_64` Linux)
+- Larger supported aggregates via `sret`/`byval`: ✅
+- Small aggregates with an `SSE`-only eightbyte: ❌ (`E0473`)
+- Arrays by value across `extern`/`export`: ❌ (`E0473`); pass a pointer
 - Slices by value (`[]T`, `[]const T`) across `extern`/`export`: ✅ (`{ ptr, usize }` layout)
 
 Unsupported constructs are rejected with diagnostics, rather than silently compiled as undefined behavior.
@@ -292,7 +293,9 @@ build.zig            Builds the toolchain and wires test steps
 | C ABI lowering for integer-like aggregates and slices | ✅ Shipped in `v0.1.0-alpha.2` |
 | Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Implemented |
 | Relative-path imports, qualified aliases and module namespaces | 🟡 Partial |
-| Floating-point/SSE aggregate C ABI classification & profile-selective runtime checks | 🔜 Planned |
+| Integer-class mixed float/integer aggregate C ABI cases | ✅ Implemented |
+| Full SSE aggregate C ABI classification | 🔜 Planned |
+| Explicit all-check runtime policy across profiles | ✅ Implemented |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.
 

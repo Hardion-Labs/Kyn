@@ -61,9 +61,9 @@ Milestones below are directions, not release promises.
 ## Next direction
 
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
-- Decide and specify general-purpose C ABI lowering for floating-point/SSE
-  aggregate members and cross-compilation targets before exposing them across
-  `extern`/`export` unconditionally.
+- Complete System V C ABI coercions for remaining `SSE`/`SSEUP` aggregate
+  classes and specify cross-compilation targets before exposing those layouts
+  across `extern`/`export`.
 - Keep the all-checks-enabled runtime policy stable across profiles unless a
   separate language-level decision explicitly specifies observable profile
   differences and adds profile-specific regressions.

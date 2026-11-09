@@ -198,13 +198,15 @@ fn log_message() {
 - Parameters are `name: Type`, separated by commas.
 - The return type follows the parameter list. Omitted means `void`.
 - Aggregate parameters and aggregate return types use the internal Kyn ABI by
-  default. In `extern`/`export` signatures on `x86_64` Linux, integer-like
-  structs and slice types (`[]T`, `[]const T`) are passed and returned
-  following the System V calling convention (`<= 16` bytes in up to two `i64`
-  registers; larger integer-only structs via hidden `sret`/`byval` pointers).
-  Slice boundaries match a C struct `{ T *ptr; size_t len; }`. Fixed arrays
-  and unsupported aggregate layouts (including floating-point-bearing structs)
-  at C boundaries are rejected with `E0473`.
+  default. In `extern`/`export` signatures on `x86_64` Linux, aggregates up to
+  16 bytes are supported when each occupied System V eightbyte merges to the
+  `INTEGER` class; these use up to two `i64` registers with zero-padded partial
+  eightbytes. A float field may participate when an integer field in the same
+  eightbyte makes the merged class `INTEGER`. Larger supported structs use
+  hidden `sret`/`byval` pointers. Slices match a C struct
+  `{ T *ptr; size_t len; }`. Fixed arrays and unsupported target/class layouts
+  (including small aggregates with an `SSE`-only eightbyte) are rejected with
+  `E0473`.
 - A function with a non-void return type must return on every path; otherwise
   `E0414`.
 - `return;` is valid only in a `void` function.
@@ -441,10 +443,10 @@ let sum: i32 = add(1, 2);
   its parameter type.
 - Arguments are evaluated left to right.
 - Aggregate arguments by value are passed by value within Kyn. `extern` and
-  `export` functions pass integer-like structs and slices on `x86_64-linux`
-  (`<= 16` bytes in registers, larger integer-only structs via `byval`); arrays
-  by value and unsupported float-bearing boundary aggregates (`E0473`) are
-  rejected.
+  `export` functions support integer-class aggregates on `x86_64-linux`,
+  including float/integer members merged within one eightbyte, plus larger
+  aggregates passed via `byval`; fixed arrays and unsupported `SSE`-only
+  layouts are rejected with `E0473`.
 
 ### 5.7 Casts
 

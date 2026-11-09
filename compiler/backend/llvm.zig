@@ -1176,6 +1176,7 @@ pub const Lowering = struct {
             }
         }
 
+        const hidden_result_ptr: ?ir.Value = if (ret_class == .memory) args_list.items[0] else null;
         const visible_types = try types_list.toOwnedSlice(self.allocator);
         const args = try args_list.toOwnedSlice(self.allocator);
         const byval_types = try byval_list.toOwnedSlice(self.allocator);
@@ -1219,9 +1220,9 @@ pub const Lowering = struct {
                 return .{ .reg = result };
             },
             .memory => {
-                const hidden_ptr = args_list.items[0].local;
+                const hidden_ptr = hidden_result_ptr orelse unreachable;
                 const result = try self.reg(call_result);
-                try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = hidden_ptr }, .ty = call_result } });
+                try self.emit(.{ .load = .{ .dst = result, .ptr = hidden_ptr, .ty = call_result } });
                 return .{ .reg = result };
             },
         }
@@ -2315,6 +2316,29 @@ pub const Emitter = struct {
         }
     }
 
+    fn emitFloatValue(
+        self: *Emitter,
+        writer: *std.Io.Writer,
+        number: f64,
+        expected: ?*types.Type,
+    ) !void {
+        _ = self;
+        const value = if (expected) |ty| if (ty.* == .float and ty.float == 32)
+            @as(f64, @floatCast(@as(f32, @floatCast(number))))
+        else
+            number else number;
+        const bits: u64 = @bitCast(value);
+        const hex = "0123456789ABCDEF";
+        try writer.writeAll("0x");
+        var shift: u6 = 60;
+        while (true) {
+            const digit: usize = @intCast(@as(u4, @truncate(bits >> shift)));
+            try writer.writeByte(hex[digit]);
+            if (shift == 0) break;
+            shift -= 4;
+        }
+    }
+
     fn emitValue(self: *Emitter, writer: *std.Io.Writer, value: ir.Value, expected: ?*types.Type) !void {
         switch (value) {
             .none => try writer.writeAll("undef"),
@@ -2327,7 +2351,7 @@ pub const Emitter = struct {
                 }
                 try writer.print("{d}", .{number});
             },
-            .float => |number| try writer.print("{d}", .{number}),
+            .float => |number| try self.emitFloatValue(writer, number, expected),
             .boolean => |flag| try writer.writeAll(if (flag) "true" else "false"),
             .null_ptr => try writer.writeAll("null"),
 

@@ -17,14 +17,15 @@ extern fn free(ptr: *u8);
 - The Kyn name is used verbatim as the linker symbol. There is no mangling.
 - Parameters and return types must have a C-compatible representation.
 - Calls use the default C calling convention.
-- Aggregate parameters and aggregate return types, including slices, are
-  supported on `x86_64` Linux when every field is integer-like: aggregates up
-  to 16 bytes are passed/returned in one or two 64-bit integer registers (with
-  safe zero-padded packing for `< 8`-byte and `< 16`-byte values), and larger
-  integer-only structs use hidden `byval`/`sret` pointers. Fixed arrays and
-  unsupported aggregate layouts (including floating-point-bearing structs) are
-  rejected at C boundaries with `E0473`. Slice boundaries match a C struct
-  `{ T *ptr; size_t len; }`.
+- Aggregate parameters and returns, including slices, are supported on
+  `x86_64` Linux when their layout is classifiable by the current lowering.
+  Aggregates up to 16 bytes whose occupied System V eightbytes merge to the
+  `INTEGER` class use one or two 64-bit integer registers, with safe zero-padded
+  packing for partial eightbytes. This includes a float field when an integer
+  field in the same eightbyte causes the merged class to be `INTEGER`. Larger
+  supported structs use hidden `byval`/`sret` pointers. Fixed arrays and small
+  aggregates with an `SSE`-only eightbyte remain unsupported at C boundaries
+  (`E0473`). Slice boundaries match a C struct `{ T *ptr; size_t len; }`.
 - Only the x86_64 System V calling convention is supported in v0.1.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
@@ -68,7 +69,7 @@ available. Other `fn` declarations use internal linkage.
 | `usize`/`isize` | `size_t`/`ssize_t` (currently 64-bit) | `i64` |
 | `*T`, `*const T` | `T *`, `const T *` | `ptr` |
 | `[N]T` | `T[N]` (layout only) | `[N x T]` |
-| `struct S` | `struct S` (by value when integer-only; layout otherwise) | `%struct.S` |
+| `struct S` | `struct S` (by value when its ABI classes are supported) | `%struct.S` |
 | `[]T`, `[]const T` | `struct { T *ptr; size_t len; }` | `%kyn.slice` (`{ ptr, i64 }`) |
 | `enum E: U` | integer backing type `U` | backing integer |
 
@@ -81,10 +82,11 @@ Caveats:
   `u8`/`i32` in `extern` signatures when interoperating with code that is
   sensitive to this.
 - `usize`/`isize` are currently fixed at 64 bits; see the type-system document.
-- Plain C-layout structs are passed by value up to 16 bytes on x86_64-linux
-  when every field is integer-like. Larger aggregates use the hidden-pointer
-  `byval`/`sret` form, matching the System V calling convention. Arrays are
-  not allowed by value in C prototypes; pass a pointer instead.
+- Plain C-layout structs up to 16 bytes are passed by value when every
+  occupied eightbyte merges to the `INTEGER` class; float+integer fields in the
+  same eightbyte are supported. Larger supported aggregates use the
+  hidden-pointer `byval`/`sret` form. Fixed arrays by value and small structs
+  with an `SSE`-only eightbyte remain unsupported; pass a pointer instead.
 - Slices are passed by value as pointer+length, matching a C
   `struct { ptr base; size_t len; }` layout.
 - Enums are passed as their backing integer, but a C enum's width is
@@ -177,8 +179,9 @@ clang hello.o -o hello
 ## 8. Not supported in v0.1
 
 - variadic extern functions;
-- fixed-size array parameters and returns by value, and unsupported aggregate
-  parameter/return layouts at C boundaries (`E0473`);
+- fixed-size array parameters and returns by value, and aggregate layouts not
+  supported by the selected target/classifier (including small `SSE`-only
+  eightbytes) (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

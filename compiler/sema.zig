@@ -1751,9 +1751,72 @@ pub const BoundaryClass = enum {
 pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     if (builtin.target.os.tag != .linux or builtin.target.cpu.arch != .x86_64) return null;
     const layout = aggregateLayoutGuess(ty) orelse return null;
+    if (layout.size <= 16) {
+        var eightbytes = [_]AggregateEightbyte{ .{}, .{} };
+        if (!classifyAggregateEightbytes(ty, 0, &eightbytes)) return null;
+        const count: usize = @intCast((layout.size + 7) / 8);
+        for (eightbytes[0..count]) |class| {
+            // The current lowering can pass INTEGER-class aggregates in GPRs.
+            // An SSE-only eightbyte needs a different LLVM coercion/register.
+            if (class.has_sse and !class.has_integer) return null;
+        }
+    }
     if (layout.size <= 8) return .small_1;
     if (layout.size <= 16) return .small_2;
     return .memory;
+}
+
+const AggregateEightbyte = struct {
+    has_integer: bool = false,
+    has_sse: bool = false,
+};
+
+fn classifyAggregateEightbytes(
+    ty: *Type,
+    base_offset: u64,
+    classes: *[2]AggregateEightbyte,
+) bool {
+    switch (ty.*) {
+        .struct_type => |info| {
+            var offset = base_offset;
+            for (info.fields) |field| {
+                const field_layout = aggregateLayoutGuess(field.ty) orelse return false;
+                offset = std.mem.alignForward(u64, offset, field_layout.align_);
+                if (!classifyAggregateEightbytes(field.ty, offset, classes)) return false;
+                offset += field_layout.size;
+            }
+            return true;
+        },
+        .enum_type => |info| return classifyAggregateEightbytes(info.backing, base_offset, classes),
+        .slice => return markAggregateEightbytes(classes, base_offset, 16, false),
+        .float => |bits| return markAggregateEightbytes(classes, base_offset, bits / 8, true),
+        .bool => return markAggregateEightbytes(classes, base_offset, 1, false),
+        .char => return markAggregateEightbytes(classes, base_offset, 4, false),
+        .int => |info| return markAggregateEightbytes(classes, base_offset, info.bits / 8, false),
+        .pointer => return markAggregateEightbytes(classes, base_offset, 8, false),
+        else => return false,
+    }
+}
+
+fn markAggregateEightbytes(
+    classes: *[2]AggregateEightbyte,
+    offset: u64,
+    size: u64,
+    is_sse: bool,
+) bool {
+    if (size == 0) return true;
+    const last_byte = offset + size - 1;
+    if (last_byte >= 16) return false;
+    const first: usize = @intCast(offset / 8);
+    const last: usize = @intCast(last_byte / 8);
+    for (classes[first .. last + 1]) |*class| {
+        if (is_sse) {
+            class.has_sse = true;
+        } else {
+            class.has_integer = true;
+        }
+    }
+    return true;
 }
 
 pub const AggregateLayout = struct {
@@ -1779,7 +1842,7 @@ pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
         .bool => .{ .size = 1, .align_ = 1 },
         .char => .{ .size = 4, .align_ = 4 },
         .int => |info| .{ .size = @intCast(info.bits / 8), .align_ = @intCast(@min(@as(u64, info.bits / 8), 16)) },
-        .float => null,
+        .float => |bits| .{ .size = @intCast(bits / 8), .align_ = @intCast(bits / 8) },
         .pointer => .{ .size = 8, .align_ = 8 },
         .enum_type => |info| aggregateLayoutGuess(info.backing),
         else => null,
@@ -2035,6 +2098,28 @@ test "aggregate parameters and returns are supported within Kyn" {
         \\    let q: Point = p;
         \\    return sum(q);
         \\}
+    );
+}
+
+test "C ABI INTEGER eightbytes accept mixed float and integer fields" {
+    try expectSemanticError(
+        \\struct SseInteger { amount: f64, count: i32 }
+        \\extern fn c_take(value: SseInteger);
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectClean(
+        \\struct FloatInt { amount: f32, count: i32 }
+        \\struct IntFloat { count: i32, amount: f32 }
+        \\extern fn c_take_fi(value: FloatInt);
+        \\extern fn c_take_if(value: IntFloat);
+        \\export fn kyn_make_fi(amount: f32, count: i32) FloatInt {
+        \\    return FloatInt { amount: amount, count: count };
+        \\}
+        \\export fn kyn_make_if(count: i32, amount: f32) IntFloat {
+        \\    return IntFloat { count: count, amount: amount };
+        \\}
+        \\fn main() i32 { return 0; }
     );
 }
 

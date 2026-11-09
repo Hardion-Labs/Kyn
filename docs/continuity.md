@@ -47,13 +47,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 - **C ABI interoperability (`compiler/sema.zig`, `compiler/backend/llvm.zig`, [abi.md](abi.md)):**
   - *Implemented & validated:* Scalars, pointers, enums (via explicit backing
     integers), slices (`[]T`, `[]const T` as two `i64` registers matching
-    `struct { T *ptr; size_t len; }`), integer-only structs `<= 16` bytes in
-    1–2 `i64` registers (with zero-padded packing for `< 8` / `< 16` bytes),
-    and integer-only structs `> 16` bytes via `sret`/`byval` on `x86_64` Linux.
-  - *Not yet implemented:* Floating-point/SSE struct fields at `extern`/`export`
-    boundaries and by-value fixed arrays (rejected with `E0473`), variadic
-    `extern fn`, non-`x86_64-linux` calling conventions, and function
-    pointers/callbacks.
+    `struct { T *ptr; size_t len; }`), and aggregates with supported
+    `INTEGER`-class eightbytes. Aggregates `<= 16` bytes use 1–2 `i64` registers
+    (with zero-padded packing for partial eightbytes); larger supported layouts
+    use `sret`/`byval` on `x86_64` Linux.
+  - *Not yet implemented:* Small aggregate eightbytes classified as `SSE` or
+    `SSEUP` without an `INTEGER` merge (rejected with `E0473`), by-value fixed
+    arrays, variadic `extern fn`, non-`x86_64-linux` calling conventions, and
+    function pointers/callbacks.
 - **Safety profiles (`compiler/driver.zig`, [safety-model.md](safety-model.md)):**
   - *Implemented & validated:* All four profiles (`debug`, `safe`, `release`,
     `fast`) map to Clang optimization flags and emit the full set of runtime
@@ -89,9 +90,9 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 1. **Explicit module re-exports** (if needed, specify a syntax and visibility
    model; current unaliased imports are transitively open, while aliased edges
    are not re-exported unqualified).
-2. **Extended C ABI classification** (`x86_64` System V SSE/EIGHTBYTE class
-   merging for float-bearing structs, function pointers, and target ABI
-   selection instead of host-assumed `64`-bit `usize`).
+2. **Extended C ABI classification** (remaining System V SSE/SSEUP coercions,
+   complete eightbyte-class merging, function pointers, and target ABI selection
+   instead of host-assumed `64`-bit `usize`).
 3. **Tagged unions / explicit error-return types** (`Result`-style value flow
    without hidden exceptions or unwinding).
 4. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
@@ -155,9 +156,10 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 - `sema.Sema.checkSlice(expr, slice_expr, expected)`: resolves slice bounds and
   propagates `expected` `[]const T` context for const-polymorphic slicing.
 - `sema.aggregateBoundaryClass(ty)` / `sema.aggregateLayoutGuess(ty)`:
-  classifies C ABI aggregates into `.small_1` (`<= 8B`), `.small_2` (`9..16B`),
-  or `.memory` (`> 16B` `sret`/`byval`), returning `null` for float-bearing
-  aggregates.
+  classifies supported C ABI aggregates into `.small_1` (`<= 8B`), `.small_2`
+  (`9..16B`), or `.memory` (`> 16B` `sret`/`byval`). The classifier tracks
+  integer/SSE presence per eightbyte and currently accepts SSE+INTEGER merges
+  into `INTEGER`; small SSE-only eightbytes remain unsupported.
 
 ## 7. Files modified / added in the current increment
 
@@ -215,22 +217,18 @@ branch history; this increment does not redo them.
 ## 10. Latest validation and Git state
 
 - Toolchain: Zig `0.17.0`; Clang `22.1.8` through `zig cc`.
-- `zig fmt --check build.zig compiler build-system`, `zig build`,
-  `zig build test`, `zig build -Doptimize=ReleaseSafe`, and ReleaseSafe unit
-tests passed.
-- `tests/integration/run.sh`: `128 passed, 0 failed` against Debug and
-  ReleaseSafe. This includes the four-profile runtime trap matrix, ABI
-  diagnostics, docs gates, version metadata, 900 robustness cases, LLVM/object
-  generation, Kyn+C+Zig integration, and cache invalidation.
-- Diagnostic documentation covers 127 codes; Markdown links and version
-  metadata (`0.1.0-alpha.2`) passed.
-- Sanitizers were not run; the repository has no sanitizer gate. The current
-  increment only changes semantic diagnostic selection and tests/docs; it does
-  not enable additional ABI layouts.
-- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. This C ABI
-  diagnostic increment is committed and pushed as `7ea4f50`
-  (`fix(sema): distinguish unsupported C ABI aggregates`). The working tree is
-  clean; no merge or release/version change was made.
+- `zig fmt --check build.zig compiler build-system`, Debug and ReleaseSafe
+  builds/unit tests, and Debug/ReleaseSafe `tests/integration/run.sh` passed.
+  Both integration runs reported `131 passed, 0 failed`, including ABI
+  diagnostics, the four-profile trap matrix, docs gates, 900 robustness cases,
+  LLVM/object generation, Kyn+C+Zig interop, and cache tests.
+- Diagnostic documentation covers 127 codes; Markdown links across 19 files
+  and version metadata (`0.1.0-alpha.2`) passed.
+- Sanitizers were not run; the repository has no sanitizer gate. New ABI paths
+  were verified by native Clang C↔Kyn integration and generated LLVM output.
+- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. The mixed-class ABI
+  implementation is currently uncommitted; no merge or release/version change
+  was made.
 
 ## 11. C ABI diagnostic correction increment
 
@@ -239,21 +237,38 @@ tests passed.
   ABI documentation incorrectly attributed these cases to `E0412`/`E0413`,
   which actually describe global initializer errors.
 - Added `E0473` for aggregate parameters/returns whose `aggregateBoundaryClass`
-  is unavailable for the current target/layout. This covers the currently
-  unsupported fixed-array-by-value and float-bearing aggregate boundaries while
-  preserving the existing rejection behavior. `E0410` remains the void-parameter
-  diagnostic.
-- Added semantic regressions for void parameters, float aggregate parameters
-  and returns, plus array parameters; integration fixtures assert `E0473`.
-  Updated `docs/diagnostics.md`, `docs/abi.md`, `docs/language-reference.md`,
-  `CHANGELOG.md`, and this continuity record. General floating-point/SSE ABI
-  lowering remains pending; no ABI layout was enabled in this increment.
+  is unavailable for the current target/layout. This covers fixed-array-by-value
+  and currently unsupported ABI layouts while preserving rejection. `E0410`
+  remains the void-parameter diagnostic.
+- Added regressions for void parameters, float aggregate parameters and
+  returns, plus array parameters; integration fixtures assert `E0473`.
+  Documentation and changelog corrections were committed in `7ea4f50` and
+  `f165fd8`.
 
-## 12. Next logical task for resumption
+## 12. Mixed INTEGER-class float aggregate ABI increment
 
-The explicit runtime-check policy and module isolation are complete and
-validated. Review remaining roadmap items before selecting the next bounded
-implementation, especially the ABI specification/classification work; do not
-enable float-bearing aggregate boundaries until correct System V class merging
-and cross-language regressions are implemented. Module re-export syntax also
-remains a language-design decision, not an assumed feature.
+- `aggregateLayoutGuess` now computes natural layout for `f32`/`f64` fields.
+  The target-gated x86_64 Linux classifier tracks INTEGER/SSE presence per
+  eightbyte. For aggregates up to 16 bytes, it accepts an eightbyte when its
+  merged class is INTEGER, including float+integer members in that same
+  eightbyte; an SSE-only eightbyte still yields `E0473`. Larger supported
+  layouts continue through the existing memory (`sret`/`byval`) ABI path.
+- Extended C↔Kyn fixtures verify both field orders (`{ float, i32 }`,
+  `{ i32, float }`) in register-passed arguments and returns, plus a
+  float-bearing large aggregate through `sret`/`byval`. Added an invalid SSE-only
+  mixed aggregate regression.
+- Fixed two paths exposed by those fixtures: LLVM float constants now emit
+  correctly rounded hexadecimal encodings, and `lowerCall` preserves the hidden
+  sret pointer before transferring its argument list to owned storage.
+- Updated `README.md`, `CHANGELOG.md`, `docs/abi.md`, `docs/type-system.md`,
+  `docs/language-reference.md`, `docs/roadmap.md`, and this record. Full SSE/SSEUP
+  coercion for small SSE-only aggregates, fixed arrays, function pointers, and
+  non-x86_64 Linux targets remain unsupported.
+
+## 13. Next logical task for resumption
+
+Continue the ABI increment only after reviewing its current tests and classifier.
+The next ABI task is either a separately specified SSE/SSEUP coercion subset or
+another roadmap item; do not enable unsupported eightbyte classes without exact
+Clang/C interoperability coverage. Explicit module re-export syntax remains a
+language-design decision, not an assumed feature.
