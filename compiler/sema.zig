@@ -445,7 +445,7 @@ pub const Sema = struct {
             if (ty.* == .void) {
                 try self.reporter.err("E0410", param.span, "parameter '{s}' cannot have type 'void'", .{param.name});
             } else if (is_c_boundary and ty.isAggregate() and aggregateBoundaryClass(ty) == null) {
-                try self.reporter.err("E0410", param.span, "aggregate parameter '{s}' is not supported across the C ABI; pass a pointer or use integer-like scalar fields", .{param.name});
+                try self.reporter.err("E0473", param.span, "aggregate parameter '{s}' is not supported by the current C ABI target; pass a pointer or use a supported aggregate layout", .{param.name});
             }
             params[i] = ty;
         }
@@ -456,7 +456,7 @@ pub const Sema = struct {
         } else self.prims.void;
 
         if (is_c_boundary and ret.isAggregate() and aggregateBoundaryClass(ret) == null) {
-            try self.reporter.err("E0410", fd.span, "aggregate return type is not supported across the C ABI; return a pointer or use integer-like scalar fields", .{});
+            try self.reporter.err("E0473", fd.span, "aggregate return type is not supported by the current C ABI target; return a pointer or use a supported aggregate layout", .{});
         }
         const fn_ty = try types.makeFn(self.allocator, params, ret);
         fd.ty = fn_ty;
@@ -2036,6 +2036,30 @@ test "aggregate parameters and returns are supported within Kyn" {
         \\    return sum(q);
         \\}
     );
+}
+
+test "unsupported C ABI aggregate parameters and returns use a dedicated diagnostic" {
+    try expectSemanticError(
+        \\fn takes_void(value: void) {}
+        \\fn main() i32 { return 0; }
+    , "E0410");
+
+    try expectSemanticError(
+        \\struct FloatPair { x: f32, y: f32 }
+        \\extern fn c_take(pair: FloatPair);
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectSemanticError(
+        \\struct FloatPair { x: f32, y: f32 }
+        \\export fn kyn_make() FloatPair { return FloatPair { x: 1.0, y: 2.0 }; }
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectSemanticError(
+        \\extern fn c_take(values: [2]i32);
+        \\fn main() i32 { return 0; }
+    , "E0473");
 }
 
 test "external functions accept aggregate parameters and returns in the C ABI" {

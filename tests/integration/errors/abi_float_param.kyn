@@ -1,0 +1,3 @@
+struct FloatPair { x: f32, y: f32 }
+extern fn c_take(pair: FloatPair);
+fn main() i32 { return 0; }

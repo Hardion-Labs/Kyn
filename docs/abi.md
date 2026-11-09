@@ -21,9 +21,10 @@ extern fn free(ptr: *u8);
   supported on `x86_64` Linux when every field is integer-like: aggregates up
   to 16 bytes are passed/returned in one or two 64-bit integer registers (with
   safe zero-padded packing for `< 8`-byte and `< 16`-byte values), and larger
-  integer-only structs use hidden `byval`/`sret` pointers. Arrays by value
-  (`E0410`, `E0411`) and floating-point aggregates (`E0412`, `E0413`) are
-  rejected. Slice boundaries match a C struct `{ T *ptr; size_t len; }`.
+  integer-only structs use hidden `byval`/`sret` pointers. Fixed arrays and
+  unsupported aggregate layouts (including floating-point-bearing structs) are
+  rejected at C boundaries with `E0473`. Slice boundaries match a C struct
+  `{ T *ptr; size_t len; }`.
 - Only the x86_64 System V calling convention is supported in v0.1.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
@@ -176,9 +177,8 @@ clang hello.o -o hello
 ## 8. Not supported in v0.1
 
 - variadic extern functions;
-- fixed-size array parameters and returns by value (`E0410`, `E0411`) and
-  floating-point or array-containing aggregate parameters/returns by value at
-  C boundaries (`E0412`, `E0413`);
+- fixed-size array parameters and returns by value, and unsupported aggregate
+  parameter/return layouts at C boundaries (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

@@ -51,9 +51,9 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     1–2 `i64` registers (with zero-padded packing for `< 8` / `< 16` bytes),
     and integer-only structs `> 16` bytes via `sret`/`byval` on `x86_64` Linux.
   - *Not yet implemented:* Floating-point/SSE struct fields at `extern`/`export`
-    boundaries (rejected with `E0412`/`E0413`), by-value fixed arrays (`E0410`/
-    `E0411`), variadic `extern fn`, non-`x86_64-linux` calling conventions, and
-    function pointers/callbacks.
+    boundaries and by-value fixed arrays (rejected with `E0473`), variadic
+    `extern fn`, non-`x86_64-linux` calling conventions, and function
+    pointers/callbacks.
 - **Safety profiles (`compiler/driver.zig`, [safety-model.md](safety-model.md)):**
   - *Implemented & validated:* All four profiles (`debug`, `safe`, `release`,
     `fast`) map to Clang optimization flags and emit the full set of runtime
@@ -215,39 +215,44 @@ branch history; this increment does not redo them.
 ## 10. Latest validation and Git state
 
 - Toolchain: Zig `0.17.0`; Clang `22.1.8` through `zig cc`.
-- `zig fmt` on modified Zig files, `zig build`, and `zig build test`: passed.
-- `zig build -Doptimize=ReleaseSafe`: passed.
-- `tests/integration/run.sh`: `125 passed, 0 failed` against the Debug build and
-  `125 passed, 0 failed` against ReleaseSafe. This includes all four profile
-  trap regressions, diagnostic/docs gates, version metadata, 900 robustness
-  cases, LLVM/object generation, Kyn+C+Zig ABI integration, and cache tests.
-- Documentation gates report 126 diagnostic codes synchronized; Markdown links
-  and version metadata (`0.1.0-alpha.2`) passed in the latest integration run.
-- A documentation-only reconciliation in this increment corrects stale claims
-  that imported modules share one namespace, that the build system lacks module
-  aliases/visibility, and that compiler profiles affect optimization only.
-  It also marks explicit all-check runtime policy complete in the roadmap and
-  removes it from pending items. Files: `docs/compiler-architecture.md`,
-  `docs/build-system.md`, `docs/language-design.md`, `docs/roadmap.md`, and this
-  continuity record.
-- `zig fmt --check build.zig compiler build-system`, `git diff --check`, and
-  `tests/integration/run.sh` passed; integration reported `125 passed, 0 failed`
-  with profile traps, documentation gates, robustness cases, code generation,
-  ABI interop and build-cache tests.
-- Sanitizers were not run; the repository does not currently expose a sanitizer
-  gate. This increment changes documentation only and does not modify compiler
-  behavior.
-- Git branch is `arena/2b67c8fb-kyn`; the existing PR #1 remains open against
-  `main`. Runtime policy is implemented in commit `431a727`; this documentation
-  reconciliation is committed and pushed as `cff6fe5` (`docs: reconcile module
-  and profile contracts`). Earlier module isolation work remains in branch
-  history. No merge or release/version change was made.
+- `zig fmt --check build.zig compiler build-system`, `zig build`,
+  `zig build test`, `zig build -Doptimize=ReleaseSafe`, and ReleaseSafe unit
+tests passed.
+- `tests/integration/run.sh`: `128 passed, 0 failed` against Debug and
+  ReleaseSafe. This includes the four-profile runtime trap matrix, ABI
+  diagnostics, docs gates, version metadata, 900 robustness cases, LLVM/object
+  generation, Kyn+C+Zig integration, and cache invalidation.
+- Diagnostic documentation covers 127 codes; Markdown links and version
+  metadata (`0.1.0-alpha.2`) passed.
+- Sanitizers were not run; the repository has no sanitizer gate. The current
+  increment only changes semantic diagnostic selection and tests/docs; it does
+  not enable additional ABI layouts.
+- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. The latest pushed
+  commit before this increment is `3a5f82a`; the current C ABI diagnostic work
+  is uncommitted. No merge or release/version change was made.
 
-## 11. Next logical task for resumption
+## 11. C ABI diagnostic correction increment
 
-The runtime-policy increment is complete, validated, committed, and pushed; no
-follow-up is pending within its scope. For the next increment, review the
-current roadmap and source state to select one coherent compiler task. Any
-future runtime-check policy change must be independently justified by a
-documented language decision and profile-specific regression; otherwise keep
-every implemented check enabled.
+- Inspection found unsupported aggregate C ABI signatures were reported as
+  `E0410`, which is also the documented and implemented void-parameter error.
+  ABI documentation incorrectly attributed these cases to `E0412`/`E0413`,
+  which actually describe global initializer errors.
+- Added `E0473` for aggregate parameters/returns whose `aggregateBoundaryClass`
+  is unavailable for the current target/layout. This covers the currently
+  unsupported fixed-array-by-value and float-bearing aggregate boundaries while
+  preserving the existing rejection behavior. `E0410` remains the void-parameter
+  diagnostic.
+- Added semantic regressions for void parameters, float aggregate parameters
+  and returns, plus array parameters; integration fixtures assert `E0473`.
+  Updated `docs/diagnostics.md`, `docs/abi.md`, `docs/language-reference.md`,
+  `CHANGELOG.md`, and this continuity record. General floating-point/SSE ABI
+  lowering remains pending; no ABI layout was enabled in this increment.
+
+## 12. Next logical task for resumption
+
+The explicit runtime-check policy and module isolation are complete and
+validated. Review remaining roadmap items before selecting the next bounded
+implementation, especially the ABI specification/classification work; do not
+enable float-bearing aggregate boundaries until correct System V class merging
+and cross-language regressions are implemented. Module re-export syntax also
+remains a language-design decision, not an assumed feature.

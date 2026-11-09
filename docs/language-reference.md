@@ -202,9 +202,9 @@ fn log_message() {
   structs and slice types (`[]T`, `[]const T`) are passed and returned
   following the System V calling convention (`<= 16` bytes in up to two `i64`
   registers; larger integer-only structs via hidden `sret`/`byval` pointers).
-  Slice boundaries match a C struct `{ T *ptr; size_t len; }`. Arrays by value
-  (`E0410`, `E0411`) and floating-point aggregates at C boundaries (`E0412`,
-  `E0413`) are rejected.
+  Slice boundaries match a C struct `{ T *ptr; size_t len; }`. Fixed arrays
+  and unsupported aggregate layouts (including floating-point-bearing structs)
+  at C boundaries are rejected with `E0473`.
 - A function with a non-void return type must return on every path; otherwise
   `E0414`.
 - `return;` is valid only in a `void` function.
@@ -443,7 +443,7 @@ let sum: i32 = add(1, 2);
 - Aggregate arguments by value are passed by value within Kyn. `extern` and
   `export` functions pass integer-like structs and slices on `x86_64-linux`
   (`<= 16` bytes in registers, larger integer-only structs via `byval`); arrays
-  by value (`E0410`) and float-bearing boundary aggregates (`E0412`) are
+  by value and unsupported float-bearing boundary aggregates (`E0473`) are
   rejected.
 
 ### 5.7 Casts

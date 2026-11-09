@@ -8,6 +8,9 @@ promised between alpha releases.
 
 ### Added
 
+- Dedicated diagnostic `E0473` for aggregate parameters and returns whose layout
+  is unsupported at the selected C ABI boundary; `E0410` remains specific to
+  void parameters.
 - Explicit relative-path Kyn imports with deterministic dependency-first loading, once-only module graph traversal, source-aware diagnostics, and cycle/missing-file checks. Each source owns a top-level namespace; aliases qualify declarations and unaliased imports open public names transitively. Ambiguous opens are diagnosed; top-level `private` declarations are enforced across source files.
 - Transitive `.kyn` import contents are included in `kyn-build` SHA-256 cache stamps.
 - Open-ended and bounded slice expressions (`base[..]`, `base[start..]`,

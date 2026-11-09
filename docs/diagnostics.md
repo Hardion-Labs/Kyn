@@ -145,6 +145,7 @@ unsupported construct or an internal compiler invariant violation.
 | `E0470` | imported module has no declaration with that name |
 | `E0471` | unqualified imported name is ambiguous |
 | `E0472` | external function symbol has conflicting declarations or definitions |
+| `E0473` | aggregate parameter or return layout is unsupported at the C ABI boundary |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 
