@@ -1,4 +1,10 @@
-
+<p align="center">
+  <img
+    src="assets/branding/LogoBanner_Kyn_1.png"
+    alt="Kyn logo banner"
+    width="100%"
+  />
+</p>
 <div align="center">
 
 # ⚡ Kyn

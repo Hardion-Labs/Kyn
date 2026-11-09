@@ -20,6 +20,7 @@ kyn-cache/
 .idea/
 .vscode/
 *.swp
+.*.kate-swp
 .DS_Store
 
 # Local environment
