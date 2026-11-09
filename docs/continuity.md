@@ -19,9 +19,9 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **Latest module-system increment implemented and validated in the working
-  tree:** Per-source top-level namespaces layered on deterministic relative
-  imports and aliases. Unaliased imports open public names through their
+- **Latest module-system increment implemented, validated, and committed:**
+  Per-source top-level namespaces layered on deterministic relative imports
+  and aliases. Unaliased imports open public names through their
   transitive unaliased dependency closure; local declarations shadow opens;
   multiple distinct public candidates are ambiguous at use (`E0471`). Alias-only
   edges remain qualified-only. Same-module duplicates are `E0401`; same-spelled
@@ -223,9 +223,9 @@ imports independent of optimization profiles.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
   gate. Static/dynamic regression coverage is the existing unit, integration,
   ABI and robustness suites.
-- Git: branch `arena/2b67c8fb-kyn` at `7bc7d3a`; the module-isolation
-  increment is currently uncommitted. Earlier aliases/visibility, imports and
-  slicing work is in the branch history, including the merge reconciliation
-  commit `f31533e`; the remote branch was last pushed at `7bc7d3a`. No `main`
-  merge or release/version change was made. Stage/commit only after final review
-  and keep all work on this branch.
+- Git: branch `arena/2b67c8fb-kyn`; module isolation is committed as
+  `2cd25da` (`feat(sema): isolate module namespaces and name linkage`). Earlier
+  aliases/visibility, imports and slicing work remains in branch history,
+  including merge reconciliation `f31533e`. This continuity update is a
+  documentation-only follow-up; push both commits only to the session branch.
+  No `main` merge or release/version change was made.
