@@ -235,6 +235,7 @@ The integration suite covers:
 - Positive programs whose exit status and stdout are verified
 - The four safety profiles
 - Negative programs with required diagnostic codes
+- Diagnostic documentation and Markdown link resolution checks
 - Diagnostic documentation coverage against compiler sources
 - Deterministic lexer/parser robustness corpus
 - Version metadata consistency across build files and installed tools

@@ -2,7 +2,7 @@
 
 This document describes the language as implemented by Kyn v0.1. If a
 construct is not described here or is listed under
-[Unsupported constructs](#unsupported-constructs), it is not part of the
+[Unsupported constructs](#7-unsupported-constructs), it is not part of the
 current language.
 
 ## 1. Lexical structure

@@ -40,9 +40,9 @@ First vertically functional compiler milestone.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
-  profiles, negative diagnostics, code generation, hybrid builds, diagnostic
-  documentation coverage, version metadata consistency and a deterministic
-  lexer/parser robustness corpus.
+  profiles, negative diagnostics, code generation, hybrid builds, documentation
+  coverage (diagnostic codes and Markdown links/anchors), version metadata
+  consistency and a deterministic lexer/parser robustness corpus.
 - Language, type-system, memory, safety, ABI, build-system and compiler
   architecture documentation.
 - GitHub Actions CI for formatting, build, unit tests and integration tests.

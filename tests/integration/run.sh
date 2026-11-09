@@ -163,6 +163,12 @@ else
     bad "diagnostic codes documented" "$(cat "$TMP/diagnostic-docs.log")"
 fi
 
+if "${PYTHON:-python3}" "$ROOT/tests/integration/check_docs_links.py" >"$TMP/docs-links.log" 2>&1; then
+    ok "documentation links resolve"
+else
+    bad "documentation links resolve" "$(cat "$TMP/docs-links.log")"
+fi
+
 echo "tool metadata"
 
 if "${PYTHON:-python3}" "$ROOT/tests/integration/check_versions.py" --kync "$KYNC" --kyn-build "$KYNBUILD" >"$TMP/tool-metadata.log" 2>&1; then
