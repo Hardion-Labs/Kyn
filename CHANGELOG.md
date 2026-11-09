@@ -37,6 +37,9 @@ First vertically functional compiler milestone.
 - Runtime integer arithmetic checks in every profile: addition, subtraction,
   multiplication and unary negation trap on signed and unsigned overflow.
   Dynamic shift amounts trap when negative or at/above the integer width.
+- Initial slice support (`[]T`): fat-pointer representation, fixed-array
+  construction with `as`, `.len`, internal parameter/return passing and
+  runtime bounds checks. Slice signatures at C ABI boundaries remain rejected.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,

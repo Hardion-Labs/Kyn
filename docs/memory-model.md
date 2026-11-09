@@ -130,7 +130,23 @@ bounds-checked at runtime; out-of-bounds access traps. Indexing a pointer has
 no bounds information and is not checked. Constant out-of-bounds indexes are
 diagnosed (`E0502`).
 
-### 3.3 Enums and characters
+### 3.3 Slices
+
+A slice is represented at runtime as `{ ptr T, usize }`:
+
+- a raw pointer to the first element;
+- the number of `T` elements the pointer refers to.
+
+Slices have no ownership and do not copy their backing array. They may refer
+to stack, global or externally allocated storage as long as that storage is
+alive during the slice's use. Slice copies copy the pointer/length pair, not
+the backing elements.
+
+Indexing a slice bounds-checks against its runtime length and traps on an
+out-of-range access. `slice.len` reads only the length field. Slices are not
+nullable at the type level and are not valid C ABI aggregates in v0.1.
+
+### 3.4 Enums and characters
 
 Enums use their declared integer backing type as their representation.
 `char` is represented as an unsigned 32-bit integer. `bool` is represented as

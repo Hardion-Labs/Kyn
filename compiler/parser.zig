@@ -354,6 +354,17 @@ pub const Parser = struct {
         }
         if (tok.kind == .l_bracket) {
             _ = self.advance();
+            if (self.check(.r_bracket)) {
+                _ = self.advance();
+                const elem = (try self.parseType()) orelse return null;
+                const is_const = false;
+                const expr = try self.allocator.create(ast.TypeExpr);
+                expr.* = .{
+                    .span = Span.join(tok.span, elem.span),
+                    .kind = .{ .slice = .{ .elem = elem, .is_const = is_const } },
+                };
+                return expr;
+            }
             var len: ?*ast.Expr = null;
             if (!self.check(.r_bracket)) {
                 len = try self.parseExpr();

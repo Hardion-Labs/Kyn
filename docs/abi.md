@@ -17,8 +17,9 @@ extern fn free(ptr: *u8);
 - The Kyn name is used verbatim as the linker symbol. There is no mangling.
 - Parameters and return types must have a C-compatible representation.
 - Calls use the default C calling convention.
-- Aggregate parameters and aggregate return types are not supported across the
-  C ABI in v0.1 (`E0410`); pass a pointer to the aggregate instead.
+- Aggregate parameters and aggregate return types, including slices, are not
+  supported across the C ABI in v0.1 (`E0410`); pass a pointer plus length, or
+  use a plain C struct/pointer ABI instead.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
 
@@ -74,9 +75,10 @@ Caveats:
   sensitive to this.
 - `usize`/`isize` are currently fixed at 64 bits; see the type-system document.
 - Arrays and structs are compatible in layout for plain C declarations, but
-  v0.1 cannot pass or return them by value across the C ABI. Use pointers.
-  Internal Kyn functions can use aggregates by value; that ABI is not a C ABI
-  contract.
+  v0.1 cannot pass or return them by value across the C ABI. Slices are also
+  not C-compatible aggregates. Use pointers.
+  Internal Kyn functions can use aggregates and slices by value; those ABIs
+  are not C ABI contracts.
 - Enums are passed as their backing integer, but a C enum's width is
   implementation-defined. Declare the same backing width explicitly on both
   sides.

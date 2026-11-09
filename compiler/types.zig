@@ -56,6 +56,11 @@ pub const Field = struct {
     index: u32,
 };
 
+pub const SliceInfo = struct {
+    elem: *Type,
+    is_const: bool,
+};
+
 pub const StructInfo = struct {
     name: []const u8,
     fields: []Field = &.{},
@@ -91,6 +96,7 @@ pub const Type = union(enum) {
     float: u16,
     pointer: PointerInfo,
     array: ArrayInfo,
+    slice: SliceInfo,
     struct_type: *StructInfo,
     enum_type: *EnumInfo,
     fn_type: *FnInfo,
@@ -120,7 +126,7 @@ pub const Type = union(enum) {
 
     pub fn isAggregate(self: *const Type) bool {
         return switch (self.*) {
-            .struct_type, .array => true,
+            .struct_type, .array, .slice => true,
             else => false,
         };
     }
@@ -159,6 +165,10 @@ pub const Type = union(enum) {
                 .array => |ba| aa.len == ba.len and eql(aa.elem, ba.elem),
                 else => false,
             },
+            .slice => |as| switch (b.*) {
+                .slice => |bs| as.is_const == bs.is_const and eql(as.elem, bs.elem),
+                else => false,
+            },
             .struct_type => |as| switch (b.*) {
                 .struct_type => |bs| as == bs,
                 else => false,
@@ -194,6 +204,7 @@ pub const Type = union(enum) {
                 p.elem.displayName(buffer[@min(buffer.len, 8)..]),
             }) catch "*?",
             .array => |a| std.fmt.bufPrint(buffer, "[{d}]?", .{a.len}) catch "[?]",
+            .slice => "slice",
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
             .fn_type => "fn",
@@ -214,6 +225,12 @@ pub fn makePointer(allocator: std.mem.Allocator, elem: *Type, is_const: bool) !*
 pub fn makeArray(allocator: std.mem.Allocator, elem: *Type, len: usize) !*Type {
     const ty = try allocator.create(Type);
     ty.* = .{ .array = .{ .elem = elem, .len = len } };
+    return ty;
+}
+
+pub fn makeSlice(allocator: std.mem.Allocator, elem: *Type, is_const: bool) !*Type {
+    const ty = try allocator.create(Type);
+    ty.* = .{ .slice = .{ .elem = elem, .is_const = is_const } };
     return ty;
 }
 

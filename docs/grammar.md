@@ -12,7 +12,7 @@ fn          := "fn" IDENT "(" params? ")" type? block
 struct      := "struct" IDENT "{" (field ("," field)* ","?)? "}"
 enum        := "enum" IDENT (":" type)? "{" (variant ("," variant)* ","?)? "}"
 global      := ("const"|"let"|"var") IDENT (":" type)? ("=" expr)? ";"
-type        := "*" ["const"] type | "[" expr "]" type | IDENT | primitive
+type        := "*" ["const"] type | "[" "]" type | "[" expr "]" type | IDENT | primitive
 statement   := block | if | while | return | break | continue | local | expr ";"
 expression  := assignment, with precedence documented in the language reference
 ```

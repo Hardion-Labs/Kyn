@@ -58,9 +58,11 @@ global_var     = ( "const" | "let" | "var" ) , identifier ,
 
 (* Types *)
 
-type           = pointer_type | array_type | named_type | primitive_type ;
+Type           = pointer_type | slice_type | array_type | named_type | primitive_type ;
 
 pointer_type   = "*" , [ "const" ] , type ;
+
+slice_type     = "[" , "]" , type ;
 
 array_type     = "[" , expression , "]" , type ;
 

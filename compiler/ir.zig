@@ -151,6 +151,11 @@ pub const Inst = union(enum) {
         arg_types: []*Type,
         ret: *Type,
     },
+    slice_field_ptr: struct {
+        dst: u32,
+        base: Value,
+        field: u32,
+    },
     field_ptr: struct {
         dst: u32,
         base: Value,

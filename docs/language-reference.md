@@ -99,8 +99,9 @@ Supported escapes in strings and characters: `\n`, `\r`, `\t`, `\0`, `\\`,
 The concrete type grammar is:
 
 ```
-Type       = PointerType | ArrayType | NamedType | PrimitiveType
+Type       = PointerType | SliceType | ArrayType | NamedType | PrimitiveType
 PointerType = "*" [ "const" ] Type
+SliceType   = "[" "]" Type
 ArrayType   = "[" IntegerLiteral "]" Type
 NamedType   = Identifier
 ```
@@ -108,8 +109,10 @@ NamedType   = Identifier
 - `*T` is a mutable pointer to `T`.
 - `*const T` is a pointer to immutable `T`; mutation through it is rejected.
 - `[N]T` is a fixed-size array of exactly `N` elements. `N` must be a positive
-  constant integer known at compile time. Inferred lengths (`[]T`) are not
-  supported.
+  constant integer known at compile time.
+- `[]T` is a slice: a fat pointer holding a data pointer and a `usize` length.
+  A slice is constructed with an explicit cast from a pointer to a fixed-size
+  array, such as `&values as []i32`.
 - Struct, enum and primitive names resolve to their declarations.
 - `void` is valid only as a function return type; parameters and variables
   cannot have type `void`.
@@ -425,14 +428,16 @@ let x: i32 = (*pointer).x;  // equivalent
 let value: i32 = array[2];
 array[2] = 9;
 let value: i32 = pointer[3];
+let total: i32 = slice.len as i32;
+let element: i32 = slice[index];
 ```
 
-- The base may be an lvalue array, an array literal, or a pointer.
+- The base may be an lvalue array, an array literal, a pointer, or a slice.
 - The index must be an integer type; it is not automatically converted.
 - Constant indexes outside the array bounds are `E0502`.
-- Dynamic indexes into fixed arrays are bounds-checked at runtime and trap on
-  out-of-range access.
-- There is no slice type and no bounds check for arbitrary pointers.
+- Dynamic indexes into fixed arrays and slices are bounds-checked at runtime
+  and trap on out-of-range access.
+- `slice.len` returns the slice length as `usize`.
 
 ### 5.10 Struct and array literals
 
@@ -470,7 +475,7 @@ The following are rejected or simply not part of v0.1:
 - modules, imports, namespaces and packages;
 - `for`, `switch`, `match`, `do`, `goto`, labels;
 - `defer`, `errdefer`, exceptions, closures, lambdas;
-- slices (`[]T`), inferred array lengths, multidimensional array sugar;
+- slice construction beyond `&array as []T`, subslice syntax, and const-polymorphic slice operations;
 - generics, traits, interfaces, operator overloading;
 - variadic functions and variadic `extern` declarations;
 - aggregate parameters/returns across `extern`/`export` C ABI boundaries;

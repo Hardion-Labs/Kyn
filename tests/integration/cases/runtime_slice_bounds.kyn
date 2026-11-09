@@ -1,0 +1,6 @@
+fn main() i32 {
+    var values: [3]i32 = [1, 2, 3];
+    let slice: []i32 = &values as []i32;
+    var index: i32 = 3;
+    return slice[index];
+}

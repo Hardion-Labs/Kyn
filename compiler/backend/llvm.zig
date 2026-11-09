@@ -193,10 +193,21 @@ pub const Lowering = struct {
         index_value: ir.Value,
         index_ty: *types.Type,
     ) Error!void {
-        const len = base_ty.array.len;
+        const usize_ty = try self.allocator.create(types.Type);
+        usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
+        return self.emitIndexBoundsCheck(index_value, index_ty, .{ .int = @intCast(base_ty.array.len) }, usize_ty);
+    }
+
+    fn emitIndexBoundsCheck(
+        self: *Lowering,
+        index_value: ir.Value,
+        index_ty: *types.Type,
+        input_len_value: ir.Value,
+        len_ty: *types.Type,
+    ) Error!void {
         const i128_ty = try self.i128Type();
         const bool_ty = try self.booleanType();
-        const len_value: ir.Value = .{ .int = @intCast(len) };
+        const len_value = try self.castIntegerValue(input_len_value, len_ty, i128_ty);
         const zero_value: ir.Value = .{ .int = 0 };
 
         var normalized = index_value;
@@ -489,6 +500,12 @@ pub const Lowering = struct {
             .cast => |cast| try self.lowerCast(expr, cast),
             .field => |field| blk: {
                 if (field.is_enum_variant) break :blk .{ .int = field.variant_value };
+                if (field.base.ty) |base_ty| {
+                    if (base_ty.* == .slice and std.mem.eql(u8, field.name, "len")) {
+                        const slice_ptr = try self.lowerAggregateBase(field.base, base_ty);
+                        break :blk try self.loadSliceLength(slice_ptr);
+                    }
+                }
                 const ptr = try self.lowerLvalue(expr);
                 const ty = expr.ty orelse return .none;
                 const dst = try self.reg(ty);
@@ -764,11 +781,79 @@ pub const Lowering = struct {
         return if (dst) |id| .{ .reg = id } else .none;
     }
 
+    fn lowerSliceCast(self: *Lowering, target: *types.Type, source: *types.Type, value: ir.Value) Error!ir.Value {
+        const array = source.pointer.elem.array;
+        const id = self.module.temp();
+        try self.addLocal(id, "tmp.slice", target);
+
+        const elem_ty = target.slice.elem;
+        const pointer_slot_ty = try self.makePointer(elem_ty, false);
+        const field0 = try self.reg(pointer_slot_ty);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = field0, .base = .{ .local = id }, .field = 0 } });
+        try self.emit(.{ .store = .{ .ptr = .{ .reg = field0 }, .value = value, .ty = pointer_slot_ty } });
+
+        const usize_ty = try self.allocator.create(types.Type);
+        usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
+        const field1 = try self.reg(usize_ty);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = field1, .base = .{ .local = id }, .field = 1 } });
+        try self.emit(.{ .store = .{ .ptr = .{ .reg = field1 }, .value = .{ .int = @intCast(array.len) }, .ty = usize_ty } });
+
+        const dst = try self.reg(target);
+        try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = id }, .ty = target } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerAggregateBase(self: *Lowering, expr: *ast.Expr, ty: *types.Type) Error!ir.Value {
+        const lowered = try self.lowerLvalue(expr);
+        switch (lowered) {
+            .none => {},
+            else => return lowered,
+        }
+        const value = try self.lowerExpr(expr);
+        const id = self.module.temp();
+        try self.addLocal(id, "tmp.agg", ty);
+        try self.emit(.{ .store = .{ .ptr = .{ .local = id }, .value = value, .ty = ty } });
+        return .{ .local = id };
+    }
+
+    fn loadSliceLength(self: *Lowering, slice_ptr: ir.Value) Error!ir.Value {
+        const usize_ty = try self.allocator.create(types.Type);
+        usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
+        const usize_slot = try self.makePointer(usize_ty, false);
+        const len_slot = try self.reg(usize_slot);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = len_slot, .base = slice_ptr, .field = 1 } });
+        const len_value = try self.reg(usize_ty);
+        try self.emit(.{ .load = .{ .dst = len_value, .ptr = .{ .reg = len_slot }, .ty = usize_ty } });
+        return .{ .reg = len_value };
+    }
+
+    fn loadSliceElementPointer(
+        self: *Lowering,
+        slice_ptr: ir.Value,
+        elem_ty: *types.Type,
+        index_value: ir.Value,
+        index_ty: *types.Type,
+    ) Error!ir.Value {
+        const usize_ty = try self.allocator.create(types.Type);
+        usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
+
+        const len_value = try self.loadSliceLength(slice_ptr);
+        try self.emitIndexBoundsCheck(index_value, index_ty, len_value, usize_ty);
+
+        const element_slot = try self.makePointer(elem_ty, false);
+        const data_slot = try self.reg(element_slot);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = data_slot, .base = slice_ptr, .field = 0 } });
+        const data = try self.reg(element_slot);
+        try self.emit(.{ .load = .{ .dst = data, .ptr = .{ .reg = data_slot }, .ty = element_slot } });
+        return .{ .reg = data };
+    }
+
     fn lowerCast(self: *Lowering, expr: *ast.Expr, cast: ast.Expr.Kind.Cast) Error!ir.Value {
         const target = cast.target.resolved orelse return .none;
         const source = cast.operand.ty orelse return .none;
         const value = try self.lowerExpr(cast.operand);
         if (source.* == .null_type or target.* == .invalid) return value;
+        if (target.* == .slice) return self.lowerSliceCast(target, source, value);
         if (isSameRepresentation(source, target)) return value;
         const kind = castKind(source, target) orelse {
             try self.reporter.err("E0605", expr.span, "internal: unsupported cast from the semantic layer", .{});
@@ -813,8 +898,11 @@ pub const Lowering = struct {
                 const base_ty = index.base.ty orelse return .none;
                 var base_ptr: ir.Value = undefined;
                 var is_array = false;
+                var is_slice = false;
                 if (base_ty.* == .pointer) {
                     base_ptr = try self.lowerExpr(index.base);
+                } else if (base_ty.* == .slice) {
+                    is_slice = true;
                 } else {
                     base_ptr = try self.lowerLvalue(index.base);
                     is_array = true;
@@ -822,12 +910,18 @@ pub const Lowering = struct {
                 const index_ty = index.index.ty orelse return .none;
                 const index_value = try self.lowerExpr(index.index);
                 if (is_array) try self.emitArrayBoundsCheck(base_ty, index_value, index_ty);
-                const elem_ty = try self.makePointer(if (is_array) base_ty.array.elem else base_ty.pointer.elem, if (base_ty.* == .pointer) base_ty.pointer.is_const else false);
+                if (is_slice) {
+                    const slice_ptr = try self.lowerAggregateBase(index.base, base_ty);
+                    base_ptr = try self.loadSliceElementPointer(slice_ptr, base_ty.slice.elem, index_value, index_ty);
+                }
+                const element = if (is_array) base_ty.array.elem else if (is_slice) base_ty.slice.elem else base_ty.pointer.elem;
+                const container = if (is_slice) try self.makePointer(element, base_ty.slice.is_const) else base_ty;
+                const elem_ty = try self.makePointer(element, if (base_ty.* == .pointer) base_ty.pointer.is_const else base_ty.* == .slice and base_ty.slice.is_const);
                 const dst = try self.reg(elem_ty);
                 try self.emit(.{ .elem_ptr = .{
                     .dst = dst,
                     .base = base_ptr,
-                    .container = base_ty,
+                    .container = container,
                     .index = index_value,
                     .index_ty = index_ty,
                     .is_array = is_array,
@@ -1153,6 +1247,8 @@ pub const Emitter = struct {
         try writer.writeAll("; ModuleID = 'kyn'\n");
         try writer.writeAll("; Generated by the Kyn compiler. Do not edit.\n\n");
         try writer.writeAll("declare void @llvm.trap() noreturn nounwind\n\n");
+        try writer.writeAll("%kyn.slice = type { ptr, i64 }\n");
+        if (self.module.structs.items.len > 0) try writer.writeByte('\n');
         for ([_]u16{ 8, 16, 32, 64, 128 }) |bits| {
             for ([_][]const u8{ "add", "sub", "mul" }) |op| {
                 try writer.print("declare {{ i{d}, i1 }} @llvm.s{s}.with.overflow.i{d}(i{d}, i{d})\n", .{ bits, op, bits, bits, bits });
@@ -1343,6 +1439,11 @@ pub const Emitter = struct {
                 }
                 try writer.writeAll(")\n");
             },
+            .slice_field_ptr => |field| {
+                try writer.print("  %t{d} = getelementptr inbounds %kyn.slice, ptr ", .{field.dst});
+                try self.emitValue(writer, field.base, null);
+                try writer.print(", i32 0, i32 {d}\n", .{field.field});
+            },
             .field_ptr => |field| {
                 try writer.print("  %t{d} = getelementptr inbounds %struct.{s}, ptr ", .{ field.dst, field.struct_ty.name });
                 try self.emitValue(writer, field.base, null);
@@ -1485,6 +1586,7 @@ pub const Emitter = struct {
                 array.len,
                 try self.typeString(array.elem),
             }),
+            .slice => "%kyn.slice",
             .struct_type => |info| try std.fmt.allocPrint(self.allocator, "%struct.{s}", .{info.name}),
             .enum_type => |info| try self.typeString(info.backing),
             .fn_type => "ptr",

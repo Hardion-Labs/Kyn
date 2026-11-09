@@ -34,8 +34,8 @@ array elements and pointers to `void` are rejected.
 ```
 
 Pointers are explicit and are not nullable at the type level: `null` is a
-separate type assignable to any pointer. There are no references, no slices
-and no fat pointers in v0.1.
+separate type assignable to any pointer. There are no references and no
+nullable references in v0.1; slices are documented separately.
 
 Mutability is part of the pointer type:
 
@@ -47,7 +47,25 @@ Mutability is part of the pointer type:
 Pointer arithmetic is scaled by the pointee type. `p - q` requires identical
 element types and yields `isize`.
 
-### 1.3 Arrays
+### 1.3 Slices
+
+```
+[]T
+```
+
+A slice stores two values at runtime:
+
+- a raw pointer to `T` elements;
+- a `usize` length.
+
+Slices are aggregate values and may be passed, returned and copied inside Kyn.
+They are rejected at `extern`/`export` C ABI boundaries (`E0410`). A slice is
+currently constructed with an explicit cast from a pointer to a fixed-size
+array, such as `&values as []i32`, and carries mutability from that source.
+`slice.len` returns the length as `usize`, and slice indexing is
+bounds-checked at runtime.
+
+### 1.4 Arrays
 
 ```
 [N]T
@@ -61,7 +79,7 @@ Array indexing accepts any integer index type; it does not implicitly convert
 the index to `usize`. Constant indexes are checked against the length during
 static analysis.
 
-### 1.4 Structs
+### 1.5 Structs
 
 Structs are nominal types. Two structurally identical declarations are still
 different types, because each declaration owns a distinct `StructInfo`.
@@ -71,14 +89,14 @@ Kyn v0.1 has no `packed`, `align` or explicit layout syntax.
 A struct cannot contain itself by value, directly or through an array
 (`E0403`). Recursion through a pointer is allowed.
 
-### 1.5 Enums
+### 1.6 Enums
 
 Enums are nominal types with an explicit integer backing type (default `i32`).
 The backing type determines representation; the enum itself is distinct from
 that integer. Variants are compile-time constants of the enum type. `as`
 converts between enum and integer types.
 
-### 1.6 Function types
+### 1.7 Function types
 
 Function signatures are represented internally as `fn(params...) -> ret`.
 They are used to type declarations and calls. Function types cannot be written

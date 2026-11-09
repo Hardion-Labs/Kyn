@@ -98,6 +98,7 @@ pub const TypeExpr = struct {
         name: []const u8,
         pointer: Pointer,
         array: Array,
+        slice: Slice,
 
         pub const Pointer = struct {
             elem: *TypeExpr,
@@ -108,6 +109,11 @@ pub const TypeExpr = struct {
             elem: *TypeExpr,
             /// Null for an inferred-length array; currently only used in types.
             len: ?*Expr,
+        };
+
+        pub const Slice = struct {
+            elem: *TypeExpr,
+            is_const: bool,
         };
     };
 };

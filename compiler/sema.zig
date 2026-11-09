@@ -490,6 +490,10 @@ pub const Sema = struct {
                 const elem = try self.resolveType(p.elem);
                 break :blk try types.makePointer(self.allocator, elem, p.is_const);
             },
+            .slice => |s| blk: {
+                const elem = try self.resolveType(s.elem);
+                break :blk try types.makeSlice(self.allocator, elem, s.is_const);
+            },
             .array => |a| blk: {
                 const elem = try self.resolveType(a.elem);
                 if (a.len) |len_expr| {
@@ -902,7 +906,7 @@ pub const Sema = struct {
             .float => target_ty.isFloat() or self.isIntegerType(target_ty) or target_ty.* == .bool,
             .bool => self.isIntegerType(target_ty) or target_ty.isFloat() or target_ty.* == .bool,
             .enum_type => self.isIntegerType(target_ty) or target_ty.* == .enum_type,
-            .pointer => target_ty.isPointer() or self.isIntegerType(target_ty) or target_ty.* == .bool,
+            .pointer => self.isPointerCast(source_ty, target_ty),
             .null_type => target_ty.isPointer(),
             else => false,
         };
@@ -914,8 +918,34 @@ pub const Sema = struct {
         return target_ty;
     }
 
+    fn isPointerCast(self: *const Sema, source_ty: *Type, target_ty: *Type) bool {
+        _ = self;
+        if (target_ty.* == .slice) {
+            const source_info = source_ty.pointer;
+            if (source_info.elem.* != .array) return false;
+            const array = source_info.elem.array;
+            const target_info = target_ty.slice;
+            if (target_info.is_const != source_info.is_const) return false;
+            return Type.eql(target_info.elem, array.elem);
+        }
+        return target_ty.isPointer() or target_ty.isInteger() or target_ty.* == .bool;
+    }
+
     fn checkField(self: *Sema, expr: *ast.Expr, field: *ast.Expr.Kind.Field) Error!*Type {
         const base_ty = try self.checkExpr(field.base, null);
+
+        if (base_ty.* == .slice) {
+            if (field.through_pointer) {
+                try self.reporter.err("E0451", expr.span, "'->' requires a pointer operand", .{});
+                return self.prims.invalid;
+            }
+            if (std.mem.eql(u8, field.name, "len")) {
+                field.field_index = 1;
+                return self.prims.usize;
+            }
+            try self.reporter.err("E0453", expr.span, "slice has no field '{s}'", .{field.name});
+            return self.prims.invalid;
+        }
 
         if (base_ty.* == .enum_type) {
             if (field.through_pointer) {
@@ -970,12 +1000,13 @@ pub const Sema = struct {
         if (!self.isIntegerType(index_ty) and index_ty.* != .comptime_int) {
             try self.reporter.err("E0454", index.index.span, "array index must be an integer, found '{s}'", .{self.typeName(index_ty)});
         }
-        if (base_ty.* != .pointer and !self.isLvalue(index.base) and std.meta.activeTag(index.base.kind) != .array_lit) {
+        if (base_ty.* != .pointer and base_ty.* != .slice and !self.isLvalue(index.base) and std.meta.activeTag(index.base.kind) != .array_lit) {
             try self.reporter.err("E0466", index.base.span, "indexing requires an lvalue array, an array literal or a pointer", .{});
         }
         return switch (base_ty.*) {
             .array => |a| a.elem,
             .pointer => |p| p.elem,
+            .slice => |s| s.elem,
             else => blk: {
                 try self.reporter.err("E0455", expr.span, "cannot index value of type '{s}'", .{self.typeName(base_ty)});
                 break :blk self.prims.invalid;
@@ -1122,7 +1153,12 @@ pub const Sema = struct {
             .ident => |ident| if (ident.sym) |sym| sym.kind == .local or sym.kind == .global else false,
             .unary => |unary| unary.op == .dereference,
             .field => |field| !field.is_enum_variant and self.isLvalue(field.base),
-            .index => |index| self.isLvalue(index.base) or self.isPointerExpr(index.base),
+            .index => |index| blk: {
+                if (index.base.ty) |base_ty| {
+                    if (base_ty.* == .slice) break :blk !base_ty.slice.is_const;
+                }
+                break :blk self.isLvalue(index.base) or self.isPointerExpr(index.base);
+            },
             else => false,
         };
     }
@@ -1148,6 +1184,8 @@ pub const Sema = struct {
                     const base_ty = index.base.ty orelse break :blk false;
                     break :blk base_ty.* == .pointer and !base_ty.pointer.is_const;
                 }
+                const base_ty = index.base.ty orelse break :blk self.lvalueMutable(index.base);
+                if (base_ty.* == .slice) break :blk !base_ty.slice.is_const;
                 break :blk self.lvalueMutable(index.base);
             },
             else => false,
@@ -1242,7 +1280,8 @@ pub const Sema = struct {
             .int => |info| info.name(),
             .float => |bits| if (bits == 32) "f32" else "f64",
             .pointer => |p| if (p.is_const) "*const ?" else "*?",
-            .array => |a| if (a.len == 0) "[?]?" else "[?]?",
+            .array => "[?]?",
+            .slice => "slice",
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
             .fn_type => "fn",
@@ -1553,4 +1592,27 @@ test "global initializer with a function call is rejected" {
         \\const VALUE: i32 = make();
         \\fn main() i32 { return VALUE; }
     , "E0412");
+}
+
+test "slices are accepted inside Kyn and rejected at C ABI boundaries" {
+    try expectClean(
+        \\fn sum(values: []i32) i32 {
+        \\    var total: i32 = 0;
+        \\    var index: usize = 0;
+        \\    while (index < values.len) {
+        \\        total += values[index];
+        \\        index += 1;
+        \\    }
+        \\    return total;
+        \\}
+        \\fn main() i32 {
+        \\    var values: [3]i32 = [1, 2, 3];
+        \\    return sum(&values as []i32);
+        \\}
+    );
+
+    try expectSemanticError(
+        \\extern fn c_sum(values: []i32) i32;
+        \\fn main() i32 { return 0; }
+    , "E0410");
 }

@@ -180,7 +180,8 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | Limitation | Status |
 |:---|:---|
 | ❌ Modules, imports or package system | Planned |
-| ❌ Slices, generics or traits | Planned |
+| ✅ Slices (`[]T`) | Fixed `&array as []T` construction, `.len`, runtime bounds; no subslicing yet |
+| ❌ Generics or traits | Planned |
 | ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
 | ❌ Variadic extern functions | Planned / C wrapper required |
 | ❌ Indirect calls and first-class function values | Planned |
