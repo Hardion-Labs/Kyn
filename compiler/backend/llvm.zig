@@ -470,7 +470,8 @@ pub const Lowering = struct {
         try self.emitTrapBranch(cond);
     }
 
-    fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {        const function = findFunction(self.module, fd.name) orelse return;
+    fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {
+        const function = findFunction(self.module, fd.name) orelse return;
         const ctx = try self.allocator.create(FnCtx);
         ctx.* = .{ .function = function };
         self.ctx = ctx;
