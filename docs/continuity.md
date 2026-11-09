@@ -24,8 +24,8 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   `private` visibility, deterministic dependency-first loading, per-source
   diagnostic spans, cycle/missing-file handling, and transitive Kyn build-stamp
   hashing. Aliases coexist with the shared unqualified global namespace;
-  same-name declarations across files still collide. Active extension remains
-  uncommitted on the session branch.
+  same-name declarations across files still collide. The implementation is
+  committed and pushed on the session branch.
 
 ## 2. Validated completed components
 
@@ -162,8 +162,9 @@ ast,parser,driver,sema,symbol,types,analyzer}.zig`, new `compiler/modules.zig`,
   build, memory, safety, type-system, grammar, diagnostics, roadmap and
   continuity documents.
 
-Check `git status --short` and `git diff --stat` for the exact uncommitted file
-list; do not assume prior session-memory commit IDs exist in this checkout.
+The alias/visibility increment is committed on top of the existing import
+implementation; inspect `git log --graph` and `git status --short` for current
+history and cleanliness.
 
 ## 8. Known limitations
 
@@ -208,9 +209,10 @@ source-aware diagnostics, and transitive SHA-256 caching.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
   gate. Static/dynamic regression coverage is the existing unit, integration,
   ABI and robustness suites.
-- Git state at this inspection: branch `arena/2b67c8fb-kyn`, `HEAD` at
-  `7f9cb2c` (`v0.1.0-alpha.2`, grafted checkout); accumulated implementation,
-  tests, and docs are uncommitted in the working tree. Inspect `git status
-  --short` and `git diff --stat` before staging or committing. No commit, push,
-  `main` merge, or release/version change was made. Earlier session-memory commit
-  IDs are not present in this checkout and must not be assumed.
+- Git: branch `arena/2b67c8fb-kyn`; alias/visibility and accumulated safety
+  work are committed as `a5d44ab` (`feat: add visibility-aware module imports
+  and harden slices`). The checkout was shallow/grafted at the release base, so
+  a no-content-change merge commit `f31533e` records the already-pushed import
+  history (`74e17b2`, `ae1ab25`) and permits a fast-forward push. Branch is
+  pushed to `origin/arena/2b67c8fb-kyn`; no `main` merge or release/version
+  change was made. Keep the working tree clean.
