@@ -282,9 +282,6 @@ pub const Sema = struct {
         }
 
         if (vd.init) |init_expr| {
-            if (!isConstInitializer(init_expr)) {
-                try self.reporter.err("E0412", init_expr.span, "global initializer for '{s}' must be a constant expression", .{vd.name});
-            }
             if (explicit_ty) |ty| {
                 const init_ty = try self.checkExpr(init_expr, ty);
                 try self.requireAssignable(ty, init_expr, init_ty, true);
@@ -293,6 +290,9 @@ pub const Sema = struct {
                 const concrete = self.materialize(init_ty, init_expr.span);
                 vd.ty = concrete;
                 if (vd.sym) |sym| sym.ty = concrete;
+            }
+            if (!isConstInitializer(init_expr)) {
+                try self.reporter.err("E0412", init_expr.span, "global initializer for '{s}' must be a constant expression", .{vd.name});
             }
         } else {
             try self.reporter.err("E0413", vd.span, "global '{s}' must have an initializer", .{vd.name});
@@ -1284,6 +1284,18 @@ pub fn literalIntValue(expr: *ast.Expr) ?i128 {
 pub fn isConstInitializer(expr: *ast.Expr) bool {
     return switch (expr.kind) {
         .int_lit, .float_lit, .bool_lit, .char_lit, .string_lit, .null_lit => true,
+        .struct_init => |initializer| blk: {
+            for (initializer.fields) |field| {
+                if (!isConstInitializer(field.value)) break :blk false;
+            }
+            break :blk true;
+        },
+        .array_lit => |elements| blk: {
+            for (elements) |element| {
+                if (!isConstInitializer(element)) break :blk false;
+            }
+            break :blk true;
+        },
         .unary => |unary| unary.op != .dereference and unary.op != .address_of and isConstInitializer(unary.operand),
         .binary => |binary| isConstInitializer(binary.lhs) and isConstInitializer(binary.rhs),
         .cast => |cast| isConstInitializer(cast.operand),
@@ -1531,4 +1543,25 @@ test "external functions reject aggregate parameters and returns" {
         \\}
         \\fn main() i32 { return 0; }
     , "E0410");
+}
+
+test "global enum and aggregate constants are accepted" {
+    try expectClean(
+        \\enum Color: u8 { Red = 2 }
+        \\struct Point { x: i32, y: i32 }
+        \\const C: Color = Color.Red;
+        \\const P: Point = Point { x: 3, y: 4 };
+        \\const VALUES: [2]i32 = [5, 6];
+        \\fn main() i32 {
+        \\    return C as i32 + P.x + P.y + VALUES[0] + VALUES[1];
+        \\}
+    );
+}
+
+test "global initializer with a function call is rejected" {
+    try expectSemanticError(
+        \\fn make() i32 { return 1; }
+        \\const VALUE: i32 = make();
+        \\fn main() i32 { return VALUE; }
+    , "E0412");
 }

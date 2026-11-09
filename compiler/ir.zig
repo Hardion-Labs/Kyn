@@ -36,7 +36,7 @@ pub const Linkage = enum {
 pub const Global = struct {
     name: []const u8,
     ty: *Type,
-    init: Value,
+    init: Constant,
     mutable: bool,
 };
 
@@ -328,3 +328,9 @@ test "module assigns monotonically increasing temporaries and labels" {
     try testing.expectEqual(@as(u32, 1), module.label());
     try testing.expectEqual(@as(u32, 2), module.label());
 }
+
+pub const Constant = union(enum) {
+    scalar: Value,
+    array: []Constant,
+    struct_fields: []Constant,
+};

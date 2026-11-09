@@ -201,6 +201,9 @@ enum Color: u8 {
 
 ```kyn
 const GREETING: *const u8 = "Kyn";
+const ORIGIN: Point = Point { x: 1, y: 2 };
+const VALUES: [4]i32 = [1, 2, 3, 4];
+const COLOR: Color = Color.Red;
 var counter: i32 = 0;
 let version: i32 = 1;
 ```
@@ -208,10 +211,13 @@ let version: i32 = 1;
 - `const` and `let` globals are immutable; `var` globals are mutable.
 - Globals require an initializer (`E0413`).
 - Global initializers must be constant expressions: literals, unary/binary
-  operations on constants, casts, enum variants and string literals. Function
-  calls, address-of and dereference are rejected (`E0412`).
+  operations on constants, casts, enum variants, string literals, and struct
+  or array initializers whose contents are also constant. Function calls,
+  address-of, dereference and identifiers other than enum variants are
+  rejected (`E0412`).
 - Globals are emitted as LLVM globals with explicit storage; no constructor or
-  runtime initialization is generated.
+  runtime initialization is generated. Aggregate constants are emitted in the
+  same constant section.
 
 ## 4. Statements
 

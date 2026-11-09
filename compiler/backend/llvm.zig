@@ -79,7 +79,7 @@ pub const Lowering = struct {
             try self.reporter.err("E0601", span, "internal: global '{s}' has no resolved type", .{vd.name});
             return;
         };
-        const init_value = (try self.lowerConst(vd.init.?, ty)) orelse {
+        const init_value = (try self.lowerConstant(vd.init.?, ty)) orelse {
             try self.reporter.err("E0602", span, "global initializer for '{s}' cannot be emitted as a constant", .{vd.name});
             return;
         };
@@ -770,6 +770,37 @@ pub const Lowering = struct {
         }
         return null;
     }
+
+    fn lowerConstant(self: *Lowering, expr: *ast.Expr, ty: *types.Type) Error!?ir.Constant {
+        switch (ty.*) {
+            .struct_type => |info| {
+                if (expr.kind != .struct_init) return null;
+                const initializer = expr.kind.struct_init;
+                const values = try self.allocator.alloc(ir.Constant, info.fields.len);
+                for (initializer.fields) |field| {
+                    const field_ty = info.fields[field.index].ty;
+                    const value = (try self.lowerConstant(field.value, field_ty)) orelse return null;
+                    values[field.index] = value;
+                }
+                return .{ .struct_fields = values };
+            },
+            .array => |array| {
+                if (expr.kind != .array_lit) return null;
+                const elements = expr.kind.array_lit;
+                if (elements.len != array.len) return null;
+                const values = try self.allocator.alloc(ir.Constant, elements.len);
+                for (elements, 0..) |element, i| {
+                    const value = (try self.lowerConstant(element, array.elem)) orelse return null;
+                    values[i] = value;
+                }
+                return .{ .array = values };
+            },
+            else => {
+                const value = (try self.lowerConst(expr, ty)) orelse return null;
+                return .{ .scalar = value };
+            },
+        }
+    }
 };
 
 fn findFunction(module: *ir.Module, name: []const u8) ?*ir.Function {
@@ -958,7 +989,7 @@ pub const Emitter = struct {
             try writer.print("@{s} = {s} ", .{ global.name, if (global.mutable) "global" else "constant" });
             try self.emitType(writer, global.ty);
             try writer.writeByte(' ');
-            try self.emitValue(writer, global.init, global.ty);
+            try self.emitConstant(writer, global.init, global.ty);
             try writer.writeByte('\n');
         }
         if (self.module.globals.items.len > 0) try writer.writeByte('\n');
@@ -1162,6 +1193,34 @@ pub const Emitter = struct {
     }
 
     // The label needs a formatted index; handled by a small buffer.
+    fn emitConstant(self: *Emitter, writer: *std.Io.Writer, constant: ir.Constant, ty: *types.Type) !void {
+        switch (constant) {
+            .scalar => |value| try self.emitValue(writer, value, ty),
+            .array => |elements| {
+                const array_ty = ty.array;
+                try writer.writeAll("[");
+                for (elements, 0..) |element, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try self.emitType(writer, array_ty.elem);
+                    try writer.writeByte(' ');
+                    try self.emitConstant(writer, element, array_ty.elem);
+                }
+                try writer.writeAll("]");
+            },
+            .struct_fields => |fields| {
+                const info = ty.struct_type;
+                try writer.writeAll("{ ");
+                for (fields, 0..) |field, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try self.emitType(writer, info.fields[i].ty);
+                    try writer.writeByte(' ');
+                    try self.emitConstant(writer, field, info.fields[i].ty);
+                }
+                try writer.writeAll(" }");
+            },
+        }
+    }
+
     fn emitValue(self: *Emitter, writer: *std.Io.Writer, value: ir.Value, expected: ?*types.Type) !void {
         switch (value) {
             .none => try writer.writeAll("undef"),

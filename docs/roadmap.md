@@ -35,7 +35,9 @@ and reproducible clean-build/CI checks from this milestone are implemented on
 ## v0.1.0-alpha.3 — memory and aggregates
 
 Status: in progress. Aggregate parameters and returns by value inside Kyn and
-aggregate copies/assignment are implemented and tested. `extern`/`export`
+aggregate copies/assignment are implemented and tested. Global aggregate
+constants, including nested structs and arrays, are implemented and emitted as
+LLVM constants. Scalar enum globals are also supported. `extern`/`export`
 functions still reject aggregates (`E0410`) until C ABI lowering is specified
 and validated. Explicit heap allocator experiments and slices are pending.
 

@@ -32,7 +32,8 @@ fn main() i32 {
 ### 1.2 Globals
 
 Globals have static storage duration and are emitted as LLVM globals with a
-constant initializer. They are initialized before `main` by the platform's
+constant initializer. Scalar and aggregate globals are emitted directly as
+constant LLVM globals. They are initialized before `main` by the platform's
 loader; Kyn does not emit constructors. A global without an initializer is a
 compile error (`E0413`).
 

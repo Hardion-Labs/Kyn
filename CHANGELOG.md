@@ -29,6 +29,8 @@ First vertically functional compiler milestone.
 - Aggregate parameters and returns by value inside Kyn, aggregate assignment
   and aggregate copies. `extern`/`export` functions reject aggregates in v0.1;
   pass pointers across the C ABI.
+- Global scalar and aggregate constants, including nested structs/arrays and
+  enum globals, emitted as LLVM constants.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
@@ -52,6 +54,8 @@ First vertically functional compiler milestone.
   its tests.
 - Documentation and integration tests now cover aggregate by-value support
   within Kyn and its rejection at C ABI boundaries.
+- Scalar enum global initializers (for example `const C: Color = Color.Red`)
+  are now accepted; constant validation runs after expression resolution.
 - README factually documents aggregate support, documentation links and the
   release-readiness gate after the visual refresh.
 - `kync --version` and `kyn-build --version` now print exactly the version

@@ -1,0 +1,26 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+enum Color: u8 {
+    Red = 2,
+}
+
+struct Entry {
+    color: Color,
+    values: [3]i32,
+}
+
+const ORIGIN: Point = Point { x: 10, y: 32 };
+const VALUES: [4]i32 = [1, 2, 3, 4];
+const ENTRY: Entry = Entry { color: Color.Red, values: [4, 5, 6] };
+var mutable: [2]i32 = [7, 9];
+
+fn main() i32 {
+    let value: i32 = ORIGIN.x + ORIGIN.y;
+    let second: i32 = VALUES[1];
+    let entry: i32 = ENTRY.color as i32;
+    let checksum: i32 = mutable[1];
+    return value + second + entry + checksum + ENTRY.values[2];
+}
