@@ -19,19 +19,24 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
+- **Latest increment validated:** Explicit relative-path imports, deterministic
+  dependency-first loading, per-source diagnostic spans, cycle/missing-file
+  diagnostics, and transitive Kyn build-stamp hashing. Imported declarations
+  share one unqualified global namespace. Qualified aliases and visibility
+  remain pending; do not claim those as implemented.
 
 ## 2. Validated completed components
 
 | Component | Primary files | Validation |
 | --------- | ------------- | ---------- |
-| Source buffer, byte spans, line/col lookup & structured diagnostics (`E01xx`–`E06xx`, `W05xx`) | `compiler/source.zig`, `compiler/diagnostics.zig`, `docs/diagnostics.md` | `zig build test`, `check_diagnostic_docs.py` |
+| Source buffers with stable per-file span IDs, line/col lookup & multi-source diagnostics (`E01xx`–`E06xx`, `W05xx`) | `compiler/source.zig`, `compiler/diagnostics.zig`, `docs/diagnostics.md` | `zig build test`, `check_diagnostic_docs.py`, import integration errors |
 | UTF-8 lexer (keywords, hex/dec/float/char/string literals, nested `/* */` comments) | `compiler/token.zig`, `compiler/lexer.zig` | `zig build test`, `robustness.py` |
-| Recursive-descent + precedence-climbing parser with error recovery and open-ended/bounded slicing | `compiler/ast.zig`, `compiler/parser.zig`, `docs/grammar.ebnf` | `zig build test`, `tests/integration/errors/*`, `robustness.py` |
+| Recursive-descent + precedence-climbing parser with error recovery, open-ended/bounded slicing and top-level imports | `compiler/ast.zig`, `compiler/parser.zig`, `docs/grammar.ebnf` | `zig build test`, `tests/integration/errors/*`, `robustness.py` |
 | 3-phase semantic resolver & type checker (`Sema`), const-eval, lvalue/mutability, const-polymorphic slicing, `[]T -> []const T`, `.ptr`/`.len` | `compiler/symbol.zig`, `compiler/types.zig`, `compiler/sema.zig` | `zig build test`, `tests/integration/cases/*`, `tests/integration/errors/*` |
 | Flow-sensitive static analyzer (`E0501`–`E0506`, `W0501`–`W0502`), including constant slice range bounds and provable null slice sources | `compiler/analyzer.zig` | `zig build test`, `tests/integration/errors/*` |
 | Typed CFG IR + textual LLVM IR backend, runtime safety traps (`llvm.trap`), zero-branch `base[..]` fast path, pointer arithmetic, internal & `x86_64` Linux C ABI aggregate/slice lowering | `compiler/ir.zig`, `compiler/backend/llvm.zig` | `zig build test`, `tests/integration/cases/*`, `tests/integration/abi/*` |
-| Compiler CLI (`check`, `emit-llvm`, `emit-obj`, `build`, `run`) and profile driver (`debug`, `safe`, `release`, `fast`) | `compiler/main.zig`, `compiler/driver.zig` | `tests/integration/run.sh` |
-| Declarative hybrid Kyn/C/Zig builder with SHA-256 stamp caching | `build-system/main.zig`, `examples/hybrid/` | `zig build test`, `tests/integration/run.sh` |
+| Compiler CLI (`check`, `emit-llvm`, `emit-obj`, `build`, `run`) and deterministic dependency-first import loader | `compiler/main.zig`, `compiler/driver.zig`, `compiler/modules.zig` | `tests/integration/run.sh` |
+| Declarative hybrid Kyn/C/Zig builder with SHA-256 stamps including transitive Kyn imports | `build-system/main.zig`, `examples/hybrid/` | `zig build test`, `tests/integration/run.sh` |
 
 ## 3. Partial components (with exact scope boundaries)
 
@@ -53,16 +58,23 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     dereference/index/field/slice).
   - *Not yet implemented:* Profile-selective trap elision or configurable panic
     handlers.
-- **Single-unit compilation (`compiler/driver.zig`, `compiler/sema.zig`):**
-  - *Implemented & validated:* Single `.kyn` translation unit per `kync`
-    invocation; multi-language linking with C and Zig via `kyn-build`.
-  - *Not yet implemented:* Multi-file `.kyn` `import`/module resolution.
+- **Multi-file import graph (`compiler/driver.zig`, `compiler/ast.zig`,
+  `compiler/parser.zig`, `build-system/main.zig`):**
+  - *Implemented & validated:* `import "relative/path.kyn";`, paths resolved
+    relative to the containing file, normalized-path once-only depth-first
+    loading, dependency-first shared compilation, global duplicate detection,
+    source-aware diagnostics, cycle detection (`E0231`), missing-source errors
+    (`E0232`), and transitive import path/content inclusion in SHA-256 build
+    stamps. Multi-language linking with C/Zig remains supported.
+  - *Not yet implemented:* Module aliases, qualified value/type lookup, or
+    per-module visibility; all imported declarations are currently unqualified
+    members of the global namespace.
 
 ## 4. Pending items (ordered by technical dependency)
 
-1. **Multi-file Kyn module system & explicit imports** (`import`, deterministic
-   file resolution, cycle detection, module-qualified symbol lookup, and
-   `kyn-build` dependency tracking across `.kyn` files).
+1. **Qualified Kyn modules & visibility** (module aliases, qualified value/type
+   lookup, explicit visibility rules, while preserving deterministic imports and
+   SHA-256 transitive dependency tracking already implemented).
 2. **Profile-specific runtime check policy** (explicit IR/backend configuration
    from `driver.Profile` without silent UB introduction).
 3. **Extended C ABI classification** (`x86_64` System V SSE/EIGHTBYTE class
@@ -97,10 +109,21 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   3. `zig build test`
   4. `tests/integration/run.sh` (includes `check_diagnostic_docs.py`,
      `check_docs_links.py`, `check_versions.py`, `robustness.py`, all 4
-     profiles, C ABI tests, and `examples/hybrid` incremental rebuild).
+     profiles, C ABI tests, `examples/hybrid`, and transitive Kyn cache tests).
 
 ## 6. Core structures & module interfaces
 
+- `source.Span`: `{ start: u32, end: u32, source_id: u32 = 0 }`; lexer spans
+  retain their owning source ID, and `diagnostics.Reporter` resolves the ID to
+  the registered `Source` for path/line/column rendering.
+- `ast.Program`: `{ decls: []*Decl, imports: []ImportDecl }`; `ImportDecl` is
+  `{ span: Span, path: []const u8 }` with the path decoded from a string token.
+- `driver.ModuleLoader`: DFS over normalized paths with `.visiting`/`.complete`
+  states; declarations append dependency-first into a unified program. Import
+  declarations are removed from the semantic input after resolution.
+- `kyn-build.hashKynImports(arena, io, hasher, path, visited, hash_self)` uses
+  the compiler's shared lexer/parser frontend and hashes each transitive import
+  edge plus imported path/content once per listed root.
 - `ast.Expr.Kind.SliceAccess`: `{ base: *Expr, start: ?*Expr, end: ?*Expr }`
   representing `[..]`, `[start..]`, `[..end]`, and `[start..end]`.
 - `ast.Expr.Kind.Field`: `{ base: *Expr, name: []const u8, field_index: u32, is_enum_variant: bool, variant_value: i128, through_pointer: bool }`
@@ -115,27 +138,27 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 ## 7. Files modified / added in the latest validated increment
 
-- **Compiler:** `compiler/ast.zig`, `compiler/parser.zig`, `compiler/sema.zig`,
-  `compiler/analyzer.zig`, `compiler/backend/llvm.zig`.
-- **Tests:** `tests/integration/cases/slice_ergonomics.{kyn,exit}`,
-  `tests/integration/cases/runtime_open_subslice_bounds.{kyn,exit}`,
-  `tests/integration/cases/runtime_null_slice.{kyn,exit}`,
-  `tests/integration/abi/cabi_slice.{kyn,c,exit}`,
-  `tests/integration/errors/address_of_rvalue.{kyn,code}`,
-  `tests/integration/errors/slice_out_of_bounds.{kyn,code}`,
-  `tests/integration/errors/slice_len_assign.{kyn,code}`,
-  `tests/integration/errors/const_slice_coercion_mismatch.{kyn,code}`,
-  `tests/integration/robustness.py`.
-- **Documentation:** `README.md`, `CHANGELOG.md`, `docs/abi.md`,
+- **Compiler/source infrastructure:** `build.zig`, `compiler/source.zig`,
+  `compiler/diagnostics.zig`, `compiler/token.zig`, `compiler/lexer.zig`,
+  `compiler/ast.zig`, `compiler/parser.zig`, `compiler/driver.zig`, and new
+  `compiler/modules.zig` (shared lexer/parser exports for `kyn-build`).
+- **Build system:** `build-system/main.zig` parses Kyn imports to hash
+  transitive paths/content; build target imports the shared compiler frontend.
+- **Tests:** `tests/integration/cases/import_modules.{kyn,exit}` and nested
+  transitive fixtures; `tests/integration/errors/import_{syntax,cycle,missing}`
+  and `imported_unknown` cases plus nested fixtures; `tests/integration/run.sh`
+  checks multi-source diagnostics and transitive cache invalidation.
+- **Documentation:** `README.md`, `CHANGELOG.md`, `docs/build-system.md`,
   `docs/compiler-architecture.md`, `docs/continuity.md`, `docs/diagnostics.md`,
-  `docs/grammar.ebnf`, `docs/grammar.md`, `docs/language-reference.md`,
-  `docs/memory-model.md`, `docs/roadmap.md`, `docs/safety-model.md`,
-  `docs/type-system.md`.
+  `docs/grammar.ebnf`, `docs/language-design.md`, `docs/language-reference.md`,
+  and `docs/roadmap.md`.
 
 ## 8. Known limitations
 
-- Single `.kyn` source file per `kync` compilation unit (multi-file Kyn
-  modules are the next planned increment).
+- Imports currently flatten declarations into one global, unqualified namespace;
+  aliases, qualified references, and module visibility boundaries remain pending.
+- Import paths are resolved lexically relative to the importing file; no
+  package registry, search path, or symlink-canonical module identity exists.
 - `usize` / `isize` and C ABI lowering assume 64-bit `x86_64` Linux System V.
 - Floating-point structs, fixed-size arrays by value, variadic functions, and
   function pointers are rejected across `extern`/`export` C ABI boundaries.
@@ -145,15 +168,30 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 ## 9. Next logical task for resumption
 
-Implement **deterministic multi-file Kyn modules (`import`)**:
+Complete the module system by designing and implementing explicit import aliases,
+qualified type/value resolution, and visibility boundaries. Current imports are
+usable and validated but flatten all declarations into the existing global
+namespace; do not report qualified namespaces or privacy as implemented. Keep
+import traversal deterministic and preserve source-aware spans and transitive
+SHA-256 cache invalidation. Add integration tests for qualified functions/types,
+private access failures, cross-file duplicate behavior, import path edge cases,
+and cycle diagnostics; update this record against source/Git before continuing.
 
-1. Specify minimal, explicit file/module import syntax in `docs/grammar.ebnf`
-   and `docs/language-reference.md` (no glob imports, no implicit prelude,
-   deterministic path resolution, compile-time import cycle diagnostic).
-2. Extend `driver.zig`, `ast.zig`, `parser.zig`, `symbol.zig`, and `sema.zig`
-   to load, parse, and resolve imported `.kyn` modules in a shared arena and
-   emit unified IR in `backend/llvm.zig`.
-3. Update `kyn-build` (`build-system/main.zig`) so SHA-256 build stamps include
-   transitively imported `.kyn` files.
-4. Validate with unit tests, multi-file positive/negative integration cases
-   (including circular-import and visibility errors), and documentation updates.
+## 10. Latest validation and Git state
+
+- Toolchain: Zig `0.17.0`; Clang `22.1.8` through `zig cc`.
+- `zig fmt --check build.zig compiler build-system`: passed.
+- `zig build`, `zig build test`, and `zig build -Doptimize=ReleaseSafe`: passed.
+- `tests/integration/run.sh`: `73 passed, 0 failed` against the Debug build and
+  `73 passed, 0 failed` against the ReleaseSafe build. This includes all four
+  native profiles, ABI interop, 900 robustness cases, source-aware imported
+  diagnostics, cycle/missing-import diagnostics, and transitive cache invalidation.
+- Documentation gates: 119 diagnostic codes synchronized; 19 Markdown files
+  link-checked; version metadata remains `0.1.0-alpha.2`.
+- Sanitizers were not run; the repository does not currently expose a sanitizer
+  gate. Static/dynamic regression coverage is the existing unit, integration,
+  ABI and robustness suites.
+- Git branch: `arena/2b67c8fb-kyn`, based on the previously published
+  incremental branch state. This module-import increment is validated and
+  prepared for its branch-local commit; no `main` merge or release/version
+  change was made.

@@ -86,7 +86,7 @@ pub const Lexer = struct {
                 '>' => try self.lexGreater(start),
                 else => {
                     self.pos += 1;
-                    try self.reportError(Span.init(start, self.pos), "E0101", "invalid byte 0x{x:0>2} in source", .{byte});
+                    try self.reportError(self.source.span(start, self.pos), "E0101", "invalid byte 0x{x:0>2} in source", .{byte});
                 },
             }
         }
@@ -96,7 +96,7 @@ pub const Lexer = struct {
     fn emit(self: *Lexer, kind: Kind, start: usize, end: usize) !void {
         try self.tokens.append(self.allocator, .{
             .kind = kind,
-            .span = Span.init(start, end),
+            .span = self.source.span(start, end),
             .lexeme = self.text[start..end],
         });
     }
@@ -241,7 +241,7 @@ pub const Lexer = struct {
             const digit_start = self.pos;
             while (self.pos < self.text.len and (isHexDigit(self.text[self.pos]) or self.text[self.pos] == '_')) : (self.pos += 1) {}
             if (self.pos == digit_start) {
-                try self.reportError(Span.init(start, self.pos), "E0102", "expected digits after base prefix", .{});
+                try self.reportError(self.source.span(start, self.pos), "E0102", "expected digits after base prefix", .{});
                 return;
             }
             try self.emit(.int_literal, start, self.pos);
@@ -265,7 +265,7 @@ pub const Lexer = struct {
             const digits_start = self.pos;
             while (self.pos < self.text.len and (isDigit(self.text[self.pos]) or self.text[self.pos] == '_')) : (self.pos += 1) {}
             if (self.pos == digits_start) {
-                try self.reportError(Span.init(exp_start, self.pos), "E0103", "expected exponent digits", .{});
+                try self.reportError(self.source.span(exp_start, self.pos), "E0103", "expected exponent digits", .{});
                 return;
             }
             is_float = true;
@@ -293,7 +293,7 @@ pub const Lexer = struct {
             self.pos += 1;
         }
         if (!terminated) {
-            try self.reportError(Span.init(start, self.pos), "E0104", "unterminated string literal", .{});
+            try self.reportError(self.source.span(start, self.pos), "E0104", "unterminated string literal", .{});
             return;
         }
         try self.emit(.string_literal, start, self.pos);
@@ -318,7 +318,7 @@ pub const Lexer = struct {
             self.pos += 1;
         }
         if (!terminated) {
-            try self.reportError(Span.init(start, self.pos), "E0105", "unterminated character literal", .{});
+            try self.reportError(self.source.span(start, self.pos), "E0105", "unterminated character literal", .{});
             return;
         }
         try self.emit(.char_literal, start, self.pos);
@@ -352,7 +352,7 @@ pub const Lexer = struct {
                     }
                 }
                 if (depth != 0) {
-                    try self.reportError(Span.init(start, self.pos), "E0106", "unterminated block comment", .{});
+                    try self.reportError(self.source.span(start, self.pos), "E0106", "unterminated block comment", .{});
                     return;
                 }
                 continue;

@@ -1,0 +1,2 @@
+import "modules/not_found.kyn";
+fn main() i32 { return 0; }

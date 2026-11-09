@@ -13,6 +13,12 @@ pub const Type = types.Type;
 
 pub const Program = struct {
     decls: []*Decl,
+    imports: []ImportDecl = &.{},
+};
+
+pub const ImportDecl = struct {
+    span: Span,
+    path: []const u8,
 };
 
 pub const Decl = struct {

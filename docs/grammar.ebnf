@@ -11,7 +11,9 @@
  * Lexical rules (identifier, literals, comments) are summarized at the end.
  *)
 
-program        = { declaration } , end_of_file ;
+program        = { import_decl | declaration } , end_of_file ;
+
+import_decl    = "import" , string_literal , ";" ;
 
 declaration    = function_decl
                | extern_decl
@@ -207,6 +209,7 @@ array_element_list
  * digit         = "0".."9" ;
  * hex_digit     = digit | "a".."f" | "A".."F" ;
  * identifier    = ( letter | "_" ) , { letter | digit | "_" } ;
+ * keyword       = "import" | "fn" | "extern" | "export" | "struct" | "enum" ;
  *
  * decimal_int   = digit , { digit | "_" } ;
  * hex_int       = "0" , ( "x" | "X" ) , hex_digit , { hex_digit | "_" } ;

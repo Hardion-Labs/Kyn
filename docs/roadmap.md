@@ -40,10 +40,18 @@ Milestones below are directions, not release promises.
   with integer literals and non-integer pointees, and safe `< 8`-byte /
   `< 16`-byte C ABI aggregate register packing with executable slice ABI tests.
 
+## Implemented after `v0.1.0-alpha.2` (continued)
+
+- Explicit `import "relative/path.kyn";` declarations, deterministic
+  dependency-first module loading, once-only normalized-path visits, source-aware
+  diagnostics across files, and cycle/missing-file diagnostics (`E0231`/`E0232`).
+- Imported declarations compile in one shared unqualified namespace; `kyn-build`
+  hashes transitive Kyn imports in target stamps. Module aliases, qualified
+  lookup and visibility boundaries remain pending and are not claimed complete.
+
 ## Next direction
 
-- Add multi-file Kyn modules, explicit `import` declarations, and deterministic
-  module graph support in `kync` and `kyn-build`.
+- Design and implement module aliases, qualified type/value lookup and visibility rules without weakening current name/type checks.
 - Decide and specify general-purpose C ABI lowering for floating-point/SSE
   aggregate members and cross-compilation targets before exposing them across
   `extern`/`export` unconditionally.

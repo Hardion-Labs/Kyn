@@ -99,8 +99,10 @@ coupled to LLVM internals. Kyn semantics remain defined by this repository.
   function types (used for direct calls; function values are not first-class
   in v0.1).
 
-There are no modules yet: a compilation unit is one file, and all top-level
-names share one global namespace.
+Compilation roots can explicitly import relative `.kyn` files. Import graphs
+are loaded deterministically and imported declarations join the compilation's
+shared global namespace. Module aliases, qualified lookup and per-module
+visibility are not implemented yet.
 
 ## Control and cost
 

@@ -1,0 +1,2 @@
+import "cycle_a.kyn";
+fn cycle_b() i32 { return 2; }

@@ -114,6 +114,7 @@ For each selected target:
    - target name and kind;
    - profile;
    - each Kyn/C/Zig source path and its full content;
+   - each transitive `.kyn` import path and full content;
    - `cflags`, `include_dirs`, `libs`, `lib_dirs`;
    - the `kync`, `cc` and `zig` executable paths.
 2. Compare the digest with `build/<target>/.kyn-stamp`. If it matches and the
@@ -156,7 +157,7 @@ optimization only; the static analyzer always runs.
 
 The cache is content-based, not timestamp-based:
 
-- editing a source changes the digest and rebuilds the target;
+- editing a listed source or any transitively imported `.kyn` source changes the digest and rebuilds the target;
 - changing a flag, include directory, library or tool path changes the digest;
 - running twice with no changes prints `up to date` for each target;
 - `--force` rebuilds regardless;
@@ -168,6 +169,7 @@ Limitations of the current cache:
   not trigger a rebuild; use `--force` or touch/change a listed source.
 - The Kyn compiler's own version is not part of the digest, only its path.
 - Zig's transitive imports are not hashed; only listed `zig_sources`.
+- Kyn imports currently share one global namespace; module aliases and visibility are not implemented.
 - Builds are sequential; there is no parallel job scheduling.
 - There is no dependency graph between multiple targets; every target is built
   independently.

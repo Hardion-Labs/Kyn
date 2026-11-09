@@ -121,6 +121,9 @@ fn main() i32 {
 - Field access through pointers uses `->`; field access on values uses `.`.
 - Conditions must be `bool`.
 - Numeric conversions require `as`.
+- Files compose through `import "relative/path.kyn";`; imports are deterministic
+  and transitive, with one shared unqualified namespace (module aliases and
+  visibility are pending).
 - Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, integer-like structs (`<= 16` bytes in registers, larger structs via `sret`/`byval`), and slices (`struct { T *ptr; size_t len; }`) cross `extern`/`export` boundaries directly. Variadics and floating-point aggregates in boundary signatures are not supported yet.
 
 ---
@@ -185,7 +188,7 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 
 | Limitation | Status |
 |:---|:---|
-| ❌ Modules, imports or package system | Planned |
+| 🟡 Relative-path imports | Shared global namespace; module aliases/visibility and package system pending |
 | ✅ Slices (`[]T`, `[]const T`) | `&array as []T`, `slice[a..b]`, `.len`, runtime bounds |
 | ❌ Generics or traits | Planned |
 | ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
@@ -287,7 +290,7 @@ build.zig            Builds the toolchain and wires test steps
 | `v0.1.0-alpha.2` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2) |
 | C ABI lowering for integer-like aggregates and slices | ✅ Shipped in `v0.1.0-alpha.2` |
 | Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Implemented |
-| Modules and multi-file Kyn compilation | 🔜 Planned |
+| Relative-path Kyn imports and multi-file compilation (shared namespace; aliases/visibility pending) | 🟡 Partial |
 | Floating-point/SSE aggregate C ABI classification & profile-selective runtime checks | 🔜 Planned |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.

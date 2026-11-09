@@ -64,6 +64,9 @@ unsupported construct or an internal compiler invariant violation.
 | `E0227` | incomplete hex escape in a character literal |
 | `E0228` | unknown escape sequence in a character literal |
 | `E0229` | invalid UTF-8 in a character literal |
+| `E0230` | expected a quoted path after `import` |
+| `E0231` | cyclic import |
+| `E0232` | source file cannot be read |
 
 ## Name resolution and type checking (`E04xx`)
 

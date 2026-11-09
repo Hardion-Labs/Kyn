@@ -9,7 +9,15 @@ current language.
 
 ### 1.1 Source files
 
-- A compilation unit is one UTF-8 source file with the `.kyn` extension.
+- Each module is a UTF-8 source file with the `.kyn` extension.
+- A root compilation may use explicit `import "relative/path.kyn";` declarations;
+  each imported file is resolved relative to the file containing that import.
+- Imported modules are parsed once per normalized path and their declarations
+  join the compilation-wide top-level namespace. Names are referenced
+  unqualified; duplicate names across files produce `E0401`. Import cycles are
+  rejected (`E0231`), and unreadable files produce `E0232`. There is no implicit
+  prelude or glob import. Module aliases, qualified lookup and per-module
+  visibility are not implemented yet.
 - Source text is processed as bytes. Invalid bytes inside comments, strings and
   characters are diagnosed by the lexer.
 - Line endings may be `\n` or `\r\n`.
@@ -32,7 +40,7 @@ digits or `_`. Keywords are reserved and cannot be used as identifiers.
 
 ```
 as      break   const   continue    else    enum    export  extern
-false   fn      for     if          let     null    return  struct
+false   fn      for     if          import  let     null    return  struct
 true    var     while
 ```
 
@@ -134,10 +142,24 @@ cast in v0.1). Mutable slices `[]T` convert implicitly to `[]const T` when
 
 ## 3. Top-level declarations
 
-A program is a sequence of declarations. Top-level names share one namespace
-within the compilation unit.
+A program consists of top-level imports and declarations. Top-level names
+share one namespace across the root file and all imported files.
 
-### 3.1 Functions
+### 3.1 Imports
+
+An import is written at file scope with a quoted path:
+
+```kyn
+import "math/vector.kyn";
+```
+
+Paths resolve relative to the importing file. The compiler traverses imports in
+depth-first source order, loads each normalized path once, then analyzes its
+declarations before the importer. Names remain unqualified in the shared
+namespace; aliases and per-module visibility are not implemented. Cycles
+(`E0231`) and unreadable files (`E0232`) are errors.
+
+### 3.2 Functions
 
 ```kyn
 fn add(a: i32, b: i32) i32 {
@@ -163,7 +185,7 @@ fn log_message() {
   `E0414`.
 - `return;` is valid only in a `void` function.
 
-### 3.2 External and exported functions
+### 3.3 External and exported functions
 
 ```kyn
 extern fn puts(s: *const u8) i32;
@@ -520,7 +542,7 @@ expected by the linker; use `i32` for executables.
 
 The following are rejected or simply not part of v0.1:
 
-- modules, imports, namespaces and packages;
+- qualified module aliases, per-module visibility, namespaces and packages (basic relative-path imports are implemented);
 - `for`, `switch`, `match`, `do`, `goto`, labels;
 - `defer`, `errdefer`, exceptions, closures, lambdas;
 - const-polymorphic slice constructors and additional slice ergonomics;

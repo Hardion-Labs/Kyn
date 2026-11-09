@@ -8,6 +8,8 @@ promised between alpha releases.
 
 ### Added
 
+- Explicit relative-path Kyn imports with deterministic dependency-first loading, once-only module graph traversal, source-aware diagnostics, and cycle/missing-file checks. Imported declarations currently share the global namespace.
+- Transitive `.kyn` import contents are included in `kyn-build` SHA-256 cache stamps.
 - Open-ended and bounded slice expressions (`base[..]`, `base[start..]`,
   `base[..end]`, `base[start..end]`) across fixed arrays, pointers to fixed
   arrays, and slices, with a zero-branch fast path for `base[..]`.

@@ -28,9 +28,12 @@ pub const Parser = struct {
 
     pub fn parse(self: *Parser) !*ast.Program {
         var decls: std.ArrayList(*ast.Decl) = .empty;
+        var imports: std.ArrayList(ast.ImportDecl) = .empty;
         while (!self.check(.eof)) {
             const before = self.pos;
-            if (try self.parseDecl()) |decl| {
+            if (self.check(.kw_import)) {
+                if (try self.parseImport()) |imp| try imports.append(self.allocator, imp);
+            } else if (try self.parseDecl()) |decl| {
                 try decls.append(self.allocator, decl);
             }
             if (self.pos == before) {
@@ -38,8 +41,23 @@ pub const Parser = struct {
             }
         }
         const program = try self.allocator.create(ast.Program);
-        program.* = .{ .decls = try decls.toOwnedSlice(self.allocator) };
+        program.* = .{ .decls = try decls.toOwnedSlice(self.allocator), .imports = try imports.toOwnedSlice(self.allocator) };
         return program;
+    }
+
+    fn parseImport(self: *Parser) !?ast.ImportDecl {
+        const start = self.advance();
+        if (!self.check(.string_literal)) {
+            try self.reporter.err("E0230", self.peek().span, "expected a quoted path after 'import'", .{});
+            self.synchronize(.semicolon);
+            _ = self.match(.semicolon);
+            return null;
+        }
+        const path_token = self.advance();
+        const path = try self.decodeString(path_token);
+        const end = self.peek().span;
+        _ = try self.expect(.semicolon, "after import path");
+        return .{ .span = source.Span.join(start.span, end), .path = path };
     }
 
     // ------------------------------------------------------------------
