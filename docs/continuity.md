@@ -227,9 +227,10 @@ tests passed.
 - Sanitizers were not run; the repository has no sanitizer gate. The current
   increment only changes semantic diagnostic selection and tests/docs; it does
   not enable additional ABI layouts.
-- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. The latest pushed
-  commit before this increment is `3a5f82a`; the current C ABI diagnostic work
-  is uncommitted. No merge or release/version change was made.
+- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. This C ABI
+  diagnostic increment is committed and pushed as `7ea4f50`
+  (`fix(sema): distinguish unsupported C ABI aggregates`). The working tree is
+  clean; no merge or release/version change was made.
 
 ## 11. C ABI diagnostic correction increment
 
