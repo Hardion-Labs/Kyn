@@ -21,8 +21,8 @@
 
 ---
 
-> 🧪 **Status:** `v0.1.0-alpha.1` — *Early experimental. Actively developed.*  
-> A working compiler pipeline and end-to-end tests exist.  
+> 🧪 **Status:** `v0.1.0-alpha.1` — *published preview, actively developed.*  
+> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1).  
 > Features listed under [Current Limitations](#-current-limitations) are **not implemented**.
 
 </div>
@@ -278,12 +278,10 @@ build.zig            Builds the toolchain and wires test steps
 
 | Milestone | Status |
 |:---|:---|
-| `v0.1.0-alpha.1` — Vertically functional compiler | ✅ In `main`, not released |
-| `v0.1.0-alpha.2` — Frontend hardening | ✅ In `main`, not released |
-| `v0.1.0-alpha.3` — Aggregates and ABI | 🚧 In progress |
-| `v0.1.0-beta.1` — Runtime safety checks | 🔜 Planned |
-| `v0.1.0-rc.1` — Interop and toolchain | 🔜 Planned |
-| `v0.1.0` — First stabilized alpha-quality release | 🔜 Planned |
+| `v0.1.0-alpha.1` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1) |
+| C ABI lowering for aggregates and slices | 🔜 Planned |
+| Const-polymorphic slicing and subslice syntax | 🔜 Planned |
+| Modules and package manifest | 🔜 Planned |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.
 

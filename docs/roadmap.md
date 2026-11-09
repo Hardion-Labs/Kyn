@@ -1,93 +1,51 @@
 # Kyn roadmap
 
-This is a technical sequence, not a promise of dates. Each milestone requires
-implementation, tests and documentation before it is announced as available.
+`v0.1.0-alpha.1` is the current principal release:
+https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1
 
-## v0.1.0-alpha.1 — vertically functional compiler
+Subsequent work builds from that published toolchain. There are no published
+`alpha.2`, `alpha.3` or `beta.1` pre-release artifacts and no selected next
+version number yet. Milestones below are directions, not release promises.
 
-Status: implemented and validated on `main` by GitHub Actions. A clean-room
-release-readiness gate is available at `tools/release-check.sh`. No tag or
-GitHub release has been created yet.
+## v0.1.0-alpha.1 — published preview
 
-- source manager, lexer, parser and AST;
-- name resolution, type checking and lvalues;
-- static analyzer for provable facts;
-- typed IR and LLVM text backend;
-- object/executable generation through Clang;
-- `check`, `emit-llvm`, `emit-obj`, `build`, `run`;
-- C ABI calls and exports;
-- `kyn-build` hybrid Kyn/C/Zig projects with content-hash caching;
-- unit, regression and integration tests;
-- documentation of the implemented subset and limitations.
+- Source manager, lexer, parser and AST.
+- Name resolution, type checking and lvalues.
+- Static analyzer for provable facts.
+- Typed CFG IR and textual LLVM backend.
+- `check`, `emit-llvm`, `emit-obj`, `build` and `run`.
+- C ABI calls and exports, plus a hybrid Kyn/C/Zig example.
+- Global scalar/aggregate/enum constants.
+- Aggregates by value inside Kyn and slices (`[]T`, `[]const T`).
+- Runtime fixed-array and slice bounds checks.
+- Integer addition/subtraction/multiplication overflow traps.
+- Division/remainder by zero traps and checked shifts.
+- Diagnostics with stable codes and documented coverage.
+- Fuzzing/robustness corpus and clean-room release gate.
+- Documented limitations and no hidden runtime.
 
-## v0.1.0-alpha.2 — frontend hardening
+## Next direction
 
-Status: the parser recovery, diagnostic reference/coverage, robustness corpus
-and reproducible clean-build/CI checks from this milestone are implemented on
-`main`. No tag or GitHub release has been created yet.
-
-- expansion of parser recovery tests and diagnostic regression coverage;
-- fuzz/robustness passes for lexer and parser;
-- complete diagnostic reference and examples;
-- build metadata and reproducible clean-build checks;
-- no new unsafe runtime promises.
-
-## v0.1.0-alpha.3 — memory and aggregates
-
-Status: in progress. Aggregate parameters and returns by value inside Kyn and
-aggregate copies/assignment are implemented and tested. Global aggregate
-constants, including nested structs and arrays, are implemented and emitted as
-LLVM constants. Scalar enum globals are also supported. Slices (`[]T` and `[]const T`) are
-available with pointer+length construction from fixed arrays, `.len`,
-runtime bounds checks and const/read-only slices. Subslice syntax and
-`extern`/`export` signatures are not available. `extern`/`export` functions still reject aggregates including
-slices (`E0410`) until C ABI lowering is specified and validated. Explicit
-heap allocator experiments are pending.
-
-- aggregate parameters and returns by value with documented ABI lowering;
-- aggregate copies and assignment;
-- explicit heap allocator interface experiments;
-- slices, only after pointer/array semantics are specified and tested.
-
-## v0.1.0-beta.1 — safety checks
-
-Status: in progress. Integer arithmetic overflow checks (signed and unsigned
-`+`, `-`, `*`, unary `-`), shift range checks, fixed-array dynamic bounds
-checks and integer division/remainder traps (including `INT_MIN / -1`) are
-implemented in `main`, enabled in every profile, and covered by integration
-tests. Null dereference and profile-specific trap policy remain pending.
-
-- explicit runtime check layer for bounds, overflow, division and null;
-- profile policy that never silently removes a promised check;
-- freestanding-compatible trap/handler strategy;
-- positive (trap) and negative (proven-safe) tests per check category;
-- documentation of remaining undefined behavior.
-
-## v0.1.0-rc.1 — interoperability and toolchain
-
-- variadic extern declarations or documented C wrappers;
-- function pointers and indirect calls;
-- header dependency scanning in `kyn-build`;
-- cross-compilation options and target declarations;
-- expanded C ABI conformance tests on supported targets.
-
-## v0.1.0 — first stabilized experimental release
-
-- modules, visibility and a package/build manifest;
-- initial standard library and optional runtime;
-- documented supported targets and ABI within the release line;
-- release notes with exact compiler, Zig and LLVM versions.
+- Decide and specify C ABI lowering for aggregates and slices before exposing
+  them across `extern`/`export`.
+- Add const-polymorphic slicing and a safe subslice construction syntax.
+- Add remaining runtime checks: null dereference and a documented policy for
+  any future profile-specific behavior.
+- Add modules and a deterministic package manifest.
+- Keep the compiler and docs aligned: grammar, reference, type system, memory,
+  safety, ABI, architecture, build system and release notes.
+- Evaluate explicit allocator abstractions and a minimal runtime only after
+  their ownership and failure model is specified.
 
 ## Explicitly deferred
 
 - garbage collection;
 - mandatory ownership/borrow checking;
 - macros or a preprocessor;
-- a self-hosted Kyn compiler before the Zig implementation is stable;
-- replacing LLVM with a custom backend without a documented technical reason.
+- a self-hosted compiler before the Zig implementation is stable;
+- replacing LLVM with a custom backend without a clear technical reason.
 
 ## Ordering rule
 
-Do not advance to a later milestone while earlier invariants are unstable.
-Correctness, diagnostics and tests take priority over feature count or
-benchmarks.
+Correctness, diagnostics and tests take priority over features or benchmarks.
+No milestone is complete until implementation, tests and documentation agree.

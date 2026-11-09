@@ -70,6 +70,10 @@ the blocker explicitly.
 
 ## Current alpha status
 
-`v0.1.0-alpha.1` is implemented and CI-validated on `main`. No tag or release
-has been created. The release-readiness gate is enforced by
-`tools/release-check.sh`, but final authorization remains a human decision.
+`v0.1.0-alpha.1` is implemented, CI-validated, tagged and published as the
+current principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1
+
+New work builds from that release. No `alpha.2`, `alpha.3` or `beta.1`
+pre-release has been published; their contents are already part of the
+principal release. The release-readiness gate remains enforced by
+`tools/release-check.sh` for any future release.

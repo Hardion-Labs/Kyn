@@ -4,9 +4,10 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
-## [0.1.0-alpha.1] - 2026-11-08
+## [0.1.0-alpha.1] - 2026-11-09
 
-First vertically functional compiler milestone.
+First vertically functional compiler milestone. Published as the current
+principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1
 
 ### Added
 
