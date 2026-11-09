@@ -19,15 +19,19 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **Latest module-system increment implemented, validated, and committed:**
-  Per-source top-level namespaces layered on deterministic relative imports
-  and aliases. Unaliased imports open public names through their
-  transitive unaliased dependency closure; local declarations shadow opens;
-  multiple distinct public candidates are ambiguous at use (`E0471`). Alias-only
-  edges remain qualified-only. Same-module duplicates are `E0401`; same-spelled
-  declarations across modules are distinct. `private` remains enforced
-  (`E0467`), and backend names are module-qualified while C `extern`/`export`
-  names retain ABI spellings.
+- **Latest ABI increment completed and locally validated:** exact reverse
+  direct mixed-class structs `{ i32, f64 }` / `{ u32, f64 }` at natural offsets
+  0/8, size 16. Clang and Kyn both use `i32, double` parameters and
+  `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
+  remain `E0473` unless separately specified.
+- **Latest merged module-system increment:** Per-source top-level namespaces
+  layered on deterministic relative imports and aliases. Unaliased imports open
+  public names through their transitive unaliased dependency closure; local
+  declarations shadow opens; multiple distinct public candidates are ambiguous
+  at use (`E0471`). Alias-only edges remain qualified-only. Same-module
+  duplicates are `E0401`; same-spelled declarations across modules are
+  distinct. `private` remains enforced (`E0467`), and backend names are
+  module-qualified while C `extern`/`export` names retain ABI spellings.
 
 ## 2. Validated completed components
 
@@ -54,9 +58,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   - *Implemented & validated:* A one-field direct `f32`/`f64` struct crosses
     the boundary as a scalar SSE value. Exactly two adjacent direct `f32` fields
     use LLVM `<2 x float>` for SSE/SSEUP; exactly two direct `f64` fields use
-    two SSE argument registers and an LLVM `{ double, double }` return; and a
-    direct `{ f64, i32 }` at offsets 0/8 uses SSE `double` plus INTEGER `i32`.
-    Other unsupported small mixed-class layouts remain rejected with `E0473`.
+    two SSE argument registers and an LLVM `{ double, double }` return; direct
+    `{ f64, i32 }` / `{ f64, u32 }` use SSE `double` then INTEGER `i32`; and
+    direct `{ i32, f64 }` / `{ u32, f64 }` use INTEGER `i32` then SSE `double`.
+    Only these exact two-field mixed layouts are accepted; other unsupported
+    small mixed-class layouts remain rejected with `E0473`.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
     by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
     conventions, and function pointers/callbacks.
@@ -224,7 +230,7 @@ branch history; this increment does not redo them.
   scope. This increment does not introduce a check-removal mode or alter module
   visibility, C ABI behavior, or optimization flags.
 
-## 10. Latest validation and Git state
+## 10. Validation and Git snapshot at the module/profile increment
 
 - Toolchain: Zig `0.17.0`; Clang `22.1.8` through `zig cc`.
 - `zig fmt --check build.zig compiler build-system`, Debug and ReleaseSafe
@@ -236,10 +242,10 @@ branch history; this increment does not redo them.
   and version metadata (`0.1.0-alpha.2`) passed.
 - Sanitizers were not run; the repository has no sanitizer gate. New ABI paths
   were verified by native Clang C↔Kyn integration and generated LLVM output.
-- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. The mixed-class
-  ABI implementation is committed and pushed as `4274907`
-  (`feat(abi): support INTEGER-class mixed float aggregates`); the working tree
-  is clean. No merge or release/version change was made.
+- Historical Git snapshot at this point in the timeline: branch
+  `arena/2b67c8fb-kyn` had PR #1 open against `main`; the mixed-class ABI
+  implementation was committed as `4274907`. This was superseded by later
+  merges recorded in the final continuity section.
 
 ## 11. C ABI diagnostic correction increment
 
@@ -353,14 +359,46 @@ branch history; this increment does not redo them.
   PR divergence recorded in section 15 remains unchanged; preserve every
   existing uncommitted file and do not reset, commit, push or force-push.
 
-## 17. Next logical ABI increment
+## 17. Direct f64+i32 SSE/INTEGER aggregate ABI increment (completed)
 
-- Evaluate the reverse direct order `{ i32, f64 }` at offsets 0/8. Clang 22
-  emits `i32, double` arguments and `{ i32, double }` returns; this probe was
-  confirmed locally, but the compiler still rejects the layout with `E0473`.
-- Implement only with exact-shape classification and bidirectional C↔Kyn
-  argument/return coverage. Do not generalize other mixed eightbyte orders or
-  nested forms without equivalent ABI evidence.
+- Scope: exactly two direct fields, `f64` at offset 0 and `i32`/`u32` at
+  offset 8, natural size 16; LLVM parameters `double, i32`, return
+  `{ double, i32 }`. This exact layout passed C↔Kyn argument/return tests.
+- Other split mixed layouts were rejected until independently specified.
+
+## 18. Reverse i32+f64 INTEGER/SSE aggregate ABI increment (completed)
+
+- Scope: exactly two direct fields, `i32`/`u32` at offset 0 and `f64` at
+  offset 8, natural size 16. Clang 22 IR probe confirms parameters
+  `i32, double` and return `{ i32, double }`.
+- Sema classifies only this direct shape after verifying INTEGER then SSE in
+  separate eightbytes. The backend flattens parameters in field order and uses
+  the internal transport type `{ i32, double }` for returns. The internal Kyn
+  ABI is unchanged; nested wrappers, 64-bit integer fields and other layouts
+  remain rejected with `E0473`.
+- Tests cover semantic acceptance for signed/unsigned 32-bit fields, rejection
+  of nested and wider variants in both parameter and return positions, and
+  C↔Kyn arguments/returns in both directions. The C fixture asserts offsets
+  0/8 and size 16 and exits 43. Generated Kyn IR is
+  `i32, double` arguments and `{ i32, double }` return.
+- Zig 0.17.0 formatting/build/unit gates and Debug/ReleaseSafe integration
+  gates pass. Each full integration run reports `137 passed, 0 failed`, with
+  diagnostics, docs, 900 robustness inputs, codegen and Kyn+C+Zig linking.
+  `git diff --check` passes. Sanitizers were not run; no sanitizer gate exists.
+
+## 19. Current repository/Git state and next step
+
+- PR #1 is merged into `main` at `da20545`, and main CI passed. Its old remote
+  Arena branch was deleted. This session is on `arena/6aa18c81-kyn`, based on
+  that merge commit. The checkout is shallow; the worktree was clean before
+  this increment and now contains only this ABI increment's changes. Preserve
+  the session branch; do not switch branches or push anywhere else.
+- No release/version metadata was changed. Main integration should occur only
+  through the session branch after its commit and PR CI pass. No sanitizer gate
+  is configured.
+- Next ABI candidate must be selected only after fresh ABI evidence and an
+  exact-shape regression plan; do not infer support for other mixed-class
+  layouts. Explicit module re-export remains a language-design decision.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

@@ -1706,6 +1706,7 @@ pub const Sema = struct {
             .abi_vec2_f32 => "<internal ABI vector>",
             .abi_pair_f64 => "<internal ABI pair>",
             .abi_f64_i32 => "<internal ABI pair>",
+            .abi_i32_f64 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1753,6 +1754,7 @@ pub const BoundaryClass = enum {
     sse_f32x2,
     sse_f64x2,
     sse_f64_i32,
+    sse_i32_f64,
     memory,
 };
 
@@ -1783,6 +1785,17 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 // INTEGER in eightbyte 1: LLVM uses double/i32 parameters and
                 // a { double, i32 } return coercion; signedness is irrelevant.
                 return .sse_f64_i32;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .int and fields[0].ty.int.bits == 32 and
+                fields[1].ty.* == .float and fields[1].ty.float == 64 and
+                eightbytes[0].has_integer and !eightbytes[0].has_sse and
+                eightbytes[1].has_sse and !eightbytes[1].has_integer)
+            {
+                // The reverse exact layout is INTEGER then SSE. LLVM uses
+                // i32/double parameters and a { i32, double } return value.
+                // Integer signedness does not affect the register class.
+                return .sse_i32_f64;
             }
         }
         const count: usize = @intCast((layout.size + 7) / 8);
@@ -2156,12 +2169,46 @@ test "aggregate parameters and returns are supported within Kyn" {
     );
 }
 
-test "C ABI INTEGER eightbytes accept mixed float and integer fields" {
+test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
     try expectSemanticError(
-        \\struct SseInteger { count: i32, amount: f64 }
-        \\extern fn c_take(value: SseInteger);
+        \\struct Inner { count: i32 }
+        \\struct Nested { inner: Inner, amount: f64 }
+        \\extern fn c_take(value: Nested);
         \\fn main() i32 { return 0; }
     , "E0473");
+
+    try expectSemanticError(
+        \\struct WideInt { amount: f64, count: i64 }
+        \\extern fn c_take(value: WideInt);
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectSemanticError(
+        \\struct WideInt { amount: f64, count: i64 }
+        \\export fn kyn_make() WideInt { return WideInt { amount: 2.0, count: 1 }; }
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectSemanticError(
+        \\struct Inner { count: i32 }
+        \\struct Nested { inner: Inner, amount: f64 }
+        \\export fn kyn_make() Nested { return Nested { inner: Inner { count: 1 }, amount: 2.0 }; }
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectClean(
+        \\struct IntDouble { count: i32, amount: f64 }
+        \\extern fn c_take(value: IntDouble) IntDouble;
+        \\export fn kyn_identity(value: IntDouble) IntDouble { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct UIntDouble { count: u32, amount: f64 }
+        \\extern fn c_take(value: UIntDouble) UIntDouble;
+        \\export fn kyn_identity(value: UIntDouble) UIntDouble { return value; }
+        \\fn main() i32 { return 0; }
+    );
 
     try expectClean(
         \\struct DoubleInt { amount: f64, count: i32 }
