@@ -228,9 +228,11 @@ branch history; this increment does not redo them.
   for this increment.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
   gate. The runtime checks and profile matrix demonstrate covered behavior only.
-- Git branch is `arena/2b67c8fb-kyn`. The runtime-policy changes are presently
-  uncommitted and not yet pushed. Earlier module isolation remains committed
-  and pushed on this branch; no `main` merge or release/version change was made.
+- Git branch is `arena/2b67c8fb-kyn`. Runtime-policy implementation and docs
+  are committed as `431a727` (`feat(driver): pass runtime-check policy to LLVM
+  lowering`) and pushed to `origin/arena/2b67c8fb-kyn`. Earlier module
+  isolation remains committed on this branch; no `main` merge or release/version
+  change was made.
 
 ## 11. Next logical task for resumption
 
