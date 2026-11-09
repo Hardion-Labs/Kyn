@@ -1,0 +1,15 @@
+fn sum(values: []const i32) i32 {
+    var total: i32 = 0;
+    var index: usize = 0;
+    while (index < values.len) {
+        total += values[index];
+        index += 1;
+    }
+    return total;
+}
+
+fn main() i32 {
+    let values: [3]i32 = [10, 20, 30];
+    let slice: []const i32 = &values as []const i32;
+    return sum(slice);
+}

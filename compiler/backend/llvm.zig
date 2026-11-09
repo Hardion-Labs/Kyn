@@ -853,6 +853,7 @@ pub const Lowering = struct {
         const source = cast.operand.ty orelse return .none;
         const value = try self.lowerExpr(cast.operand);
         if (source.* == .null_type or target.* == .invalid) return value;
+        if (source.* == .slice and target.* == .slice) return value;
         if (target.* == .slice) return self.lowerSliceCast(target, source, value);
         if (isSameRepresentation(source, target)) return value;
         const kind = castKind(source, target) orelse {
@@ -1119,6 +1120,7 @@ fn binaryOp(op: ast.BinaryOp) ?ir.BinaryOp {
 fn isSameRepresentation(from: *types.Type, to: *types.Type) bool {
     if (types.Type.eql(from, to)) return true;
     if (from.isPointer() and to.isPointer()) return true;
+    if (from.* == .slice and to.* == .slice) return types.Type.eql(from.slice.elem, to.slice.elem);
     const from_bits = intBits(from);
     const to_bits = intBits(to);
     if (from_bits != null and to_bits != null and from_bits.? == to_bits.?) return true;

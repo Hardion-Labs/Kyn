@@ -907,6 +907,7 @@ pub const Sema = struct {
             .bool => self.isIntegerType(target_ty) or target_ty.isFloat() or target_ty.* == .bool,
             .enum_type => self.isIntegerType(target_ty) or target_ty.* == .enum_type,
             .pointer => self.isPointerCast(source_ty, target_ty),
+            .slice => self.isSliceCast(source_ty, target_ty),
             .null_type => target_ty.isPointer(),
             else => false,
         };
@@ -925,10 +926,19 @@ pub const Sema = struct {
             if (source_info.elem.* != .array) return false;
             const array = source_info.elem.array;
             const target_info = target_ty.slice;
-            if (target_info.is_const != source_info.is_const) return false;
+            if (source_info.is_const and !target_info.is_const) return false;
             return Type.eql(target_info.elem, array.elem);
         }
         return target_ty.isPointer() or target_ty.isInteger() or target_ty.* == .bool;
+    }
+
+    fn isSliceCast(self: *const Sema, source_ty: *Type, target_ty: *Type) bool {
+        _ = self;
+        if (source_ty.* != .slice or target_ty.* != .slice) return false;
+        const source_info = source_ty.slice;
+        const target_info = target_ty.slice;
+        if (source_info.is_const and !target_info.is_const) return false;
+        return Type.eql(source_info.elem, target_info.elem);
     }
 
     fn checkField(self: *Sema, expr: *ast.Expr, field: *ast.Expr.Kind.Field) Error!*Type {
@@ -1155,7 +1165,7 @@ pub const Sema = struct {
             .field => |field| !field.is_enum_variant and self.isLvalue(field.base),
             .index => |index| blk: {
                 if (index.base.ty) |base_ty| {
-                    if (base_ty.* == .slice) break :blk !base_ty.slice.is_const;
+                    if (base_ty.* == .slice) break :blk true;
                 }
                 break :blk self.isLvalue(index.base) or self.isPointerExpr(index.base);
             },
@@ -1615,4 +1625,54 @@ test "slices are accepted inside Kyn and rejected at C ABI boundaries" {
         \\extern fn c_sum(values: []i32) i32;
         \\fn main() i32 { return 0; }
     , "E0410");
+}
+
+test "const slices can be created from immutable arrays and read" {
+    try expectClean(
+        \\fn sum(values: []const i32) i32 {
+        \\    var total: i32 = 0;
+        \\    var index: usize = 0;
+        \\    while (index < values.len) {
+        \\        total += values[index];
+        \\        index += 1;
+        \\    }
+        \\    return total;
+        \\}
+        \\fn main() i32 {
+        \\    let values: [3]i32 = [1, 2, 3];
+        \\    let slice: []const i32 = &values as []const i32;
+        \\    return sum(slice);
+        \\}
+    );
+}
+
+test "const slices can be assigned from mutable slices but not upgraded" {
+    try expectClean(
+        \\fn main() i32 {
+        \\    var values: [3]i32 = [1, 2, 3];
+        \\    let slice: []i32 = &values as []i32;
+        \\    let read_only: []const i32 = slice as []const i32;
+        \\    return read_only[0];
+        \\}
+    );
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let values: [3]i32 = [1, 2, 3];
+        \\    let read_only: []const i32 = &values as []const i32;
+        \\    let writable: []i32 = read_only as []i32;
+        \\    return writable[0];
+        \\}
+    , "E0447");
+}
+
+test "const slices reject indexed assignment" {
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let values: [3]i32 = [1, 2, 3];
+        \\    let slice: []const i32 = &values as []const i32;
+        \\    slice[0] = 9;
+        \\    return slice[0];
+        \\}
+    , "E0442");
 }

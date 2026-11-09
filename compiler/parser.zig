@@ -356,8 +356,8 @@ pub const Parser = struct {
             _ = self.advance();
             if (self.check(.r_bracket)) {
                 _ = self.advance();
+                const is_const = self.match(.kw_const);
                 const elem = (try self.parseType()) orelse return null;
-                const is_const = false;
                 const expr = try self.allocator.create(ast.TypeExpr);
                 expr.* = .{
                     .span = Span.join(tok.span, elem.span),

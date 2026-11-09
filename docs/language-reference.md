@@ -101,7 +101,7 @@ The concrete type grammar is:
 ```
 Type       = PointerType | SliceType | ArrayType | NamedType | PrimitiveType
 PointerType = "*" [ "const" ] Type
-SliceType   = "[" "]" Type
+SliceType   = "[" "]" [ "const" ] Type
 ArrayType   = "[" IntegerLiteral "]" Type
 NamedType   = Identifier
 ```
@@ -111,8 +111,9 @@ NamedType   = Identifier
 - `[N]T` is a fixed-size array of exactly `N` elements. `N` must be a positive
   constant integer known at compile time.
 - `[]T` is a slice: a fat pointer holding a data pointer and a `usize` length.
-  A slice is constructed with an explicit cast from a pointer to a fixed-size
-  array, such as `&values as []i32`.
+  A mutable slice is constructed with an explicit cast from a pointer to a
+  fixed-size array, such as `&values as []i32`. `[]const T` is constructed in
+  the same way from an immutable array pointer, or cast from a mutable slice.
 - Struct, enum and primitive names resolve to their declarations.
 - `void` is valid only as a function return type; parameters and variables
   cannot have type `void`.
@@ -438,6 +439,7 @@ let element: i32 = slice[index];
 - Dynamic indexes into fixed arrays and slices are bounds-checked at runtime
   and trap on out-of-range access.
 - `slice.len` returns the slice length as `usize`.
+- Indexed assignment through `[]const T` is rejected (`E0442`).
 
 ### 5.10 Struct and array literals
 

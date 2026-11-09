@@ -51,6 +51,7 @@ element types and yields `isize`.
 
 ```
 []T
+[]const T
 ```
 
 A slice stores two values at runtime:
@@ -60,10 +61,10 @@ A slice stores two values at runtime:
 
 Slices are aggregate values and may be passed, returned and copied inside Kyn.
 They are rejected at `extern`/`export` C ABI boundaries (`E0410`). A slice is
-currently constructed with an explicit cast from a pointer to a fixed-size
-array, such as `&values as []i32`, and carries mutability from that source.
-`slice.len` returns the length as `usize`, and slice indexing is
-bounds-checked at runtime.
+constructed with an explicit cast from a pointer to a fixed-size array.
+`[]const T` prevents assignment to the pointed-at elements; `[]T` carries the
+mutability of its source array pointer. `slice.len` returns the length as
+`usize`, and slice indexing is bounds-checked at runtime.
 
 ### 1.4 Arrays
 

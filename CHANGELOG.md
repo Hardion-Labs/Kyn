@@ -39,7 +39,9 @@ First vertically functional compiler milestone.
   Dynamic shift amounts trap when negative or at/above the integer width.
 - Initial slice support (`[]T`): fat-pointer representation, fixed-array
   construction with `as`, `.len`, internal parameter/return passing and
-  runtime bounds checks. Slice signatures at C ABI boundaries remain rejected.
+  runtime bounds checks. Const/read-only slices (`[]const T`) support
+  immutable construction, weakening from mutable slices and indexed-read
+  semantics. Slice signatures at C ABI boundaries remain rejected.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,

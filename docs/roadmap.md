@@ -37,10 +37,10 @@ and reproducible clean-build/CI checks from this milestone are implemented on
 Status: in progress. Aggregate parameters and returns by value inside Kyn and
 aggregate copies/assignment are implemented and tested. Global aggregate
 constants, including nested structs and arrays, are implemented and emitted as
-LLVM constants. Scalar enum globals are also supported. Slices (`[]T`) are
-available with pointer+length construction from fixed arrays, `.len`, and
-runtime bounds checks; subslice syntax and `extern`/`export` signatures are
-not available. `extern`/`export` functions still reject aggregates including
+LLVM constants. Scalar enum globals are also supported. Slices (`[]T` and `[]const T`) are
+available with pointer+length construction from fixed arrays, `.len`,
+runtime bounds checks and const/read-only slices. Subslice syntax and
+`extern`/`export` signatures are not available. `extern`/`export` functions still reject aggregates including
 slices (`E0410`) until C ABI lowering is specified and validated. Explicit
 heap allocator experiments are pending.
 

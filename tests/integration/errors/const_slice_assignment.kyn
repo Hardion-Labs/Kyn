@@ -1,0 +1,6 @@
+fn main() i32 {
+    let values: [3]i32 = [1, 2, 3];
+    let slice: []const i32 = &values as []const i32;
+    slice[0] = 9;
+    return slice[0];
+}

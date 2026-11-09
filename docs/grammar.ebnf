@@ -62,7 +62,7 @@ Type           = pointer_type | slice_type | array_type | named_type | primitive
 
 pointer_type   = "*" , [ "const" ] , type ;
 
-slice_type     = "[" , "]" , type ;
+slice_type     = "[" , "]" , [ "const" ] , type ;
 
 array_type     = "[" , expression , "]" , type ;
 
