@@ -102,6 +102,14 @@ pub const CastKind = enum {
 };
 
 pub const Inst = union(enum) {
+    checked_binary: struct {
+        dst: u32,
+        overflow: u32,
+        op: BinaryOp,
+        ty: *Type,
+        lhs: Value,
+        rhs: Value,
+    },
     binary: struct {
         dst: u32,
         op: BinaryOp,

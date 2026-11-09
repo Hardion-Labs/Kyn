@@ -42,8 +42,12 @@ The backend emits checks before the affected operation:
 
 - Dynamic fixed-array indexes are bounds-checked. An index below zero or at
   or above the array length calls `llvm.trap()`.
+- Integer addition, subtraction and multiplication trap on signed and unsigned
+  overflow. Integer negation is checked as `0 - x`.
 - Integer division and remainder check the divisor. A zero divisor traps.
 - Signed integer division and remainder also trap on `INT_MIN / -1`.
+- Dynamic shift amounts are checked against the integer width. A negative or
+  out-of-range amount traps.
 
 Traps use LLVM's `llvm.trap()` intrinsic, which lowers to a CPU trap and
 terminates the process. There is no unwinding, recovery or handler in v0.1.
@@ -112,7 +116,6 @@ The following are **not** checked at runtime or, in the dynamic case, at
 compile time:
 
 - pointer arithmetic bounds;
-- runtime integer overflow;
 - null pointer dereference;
 - dangling pointer and use-after-free;
 - double free and leaks;
@@ -170,9 +173,9 @@ The planned runtime-check layer must satisfy these constraints:
 5. **Testable.** Every check category gets positive (traps) and negative
    (proven-safe) integration tests in each profile that enables it.
 
-Implemented runtime checks (fixed-array bounds and signed/unsigned division by
-zero, including `INT_MIN / -1`) are emitted in every profile. The remaining
-unimplemented categories (integer overflow and null dereference) are still
+Implemented runtime checks (fixed-array bounds, signed and unsigned integer
+addition/subtraction/multiplication, checked negation, checked division and
+shift bounds) are emitted in every profile. Null dereference is still
 documented as undefined behavior.
 
 ## 6. Verification strategy

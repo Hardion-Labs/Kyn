@@ -34,6 +34,9 @@ First vertically functional compiler milestone.
 - Runtime bounds checks for fixed arrays and runtime integer division traps.
   Dynamic indexes outside `[0, len)`, a zero divisor, and signed `INT_MIN / -1`
   call `llvm.trap()` in every profile.
+- Runtime integer arithmetic checks in every profile: addition, subtraction,
+  multiplication and unary negation trap on signed and unsigned overflow.
+  Dynamic shift amounts trap when negative or at/above the integer width.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
@@ -65,6 +68,8 @@ First vertically functional compiler milestone.
   line on stdout; help output is no longer printed after `--version`.
 - Trap blocks now emit `unreachable` after `llvm.trap()` so the LLVM parser
   recognizes the terminating path.
+- Constant expression adaptation handles arbitrary integer constant expressions,
+  not only bare literals, when guided by an expected integer type.
 
 ### Known limitations
 

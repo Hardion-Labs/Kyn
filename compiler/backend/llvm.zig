@@ -225,13 +225,11 @@ pub const Lowering = struct {
 
     fn emitDivisionByZeroTrap(
         self: *Lowering,
-        binary: ast.Expr.Kind.Binary,
         lhs: ir.Value,
         rhs: ir.Value,
         lhs_ty: *types.Type,
         rhs_ty: *types.Type,
     ) Error!void {
-        _ = binary;
         if (!rhs_ty.isInteger()) return;
         const bool_ty = try self.booleanType();
 
@@ -252,6 +250,93 @@ pub const Lowering = struct {
             try self.emit(.{ .binary = .{ .dst = cond, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = is_zero }, .rhs = .{ .reg = is_min_div } } });
         }
 
+        try self.emitTrapBranch(cond);
+    }
+
+    fn castIntegerValue(self: *Lowering, value: ir.Value, from_ty: *types.Type, to_ty: *types.Type) Error!ir.Value {
+        if (types.Type.eql(from_ty, to_ty)) return value;
+        if (!from_ty.isInteger() or !to_ty.isInteger()) return value;
+        switch (value) {
+            .int => return value,
+            else => {},
+        }
+        const from_bits: u16 = if (from_ty.* == .comptime_int) 64 else from_ty.intInfo().bits;
+        const to_bits: u16 = if (to_ty.* == .comptime_int) 64 else to_ty.intInfo().bits;
+        const signed = from_ty.isInteger() and from_ty.intInfo().signed;
+        const kind: ir.CastKind = if (from_bits < to_bits) (if (signed) .sext else .zext) else .trunc;
+        const dst = try self.reg(to_ty);
+        try self.emit(.{ .cast = .{ .dst = dst, .kind = kind, .from = from_ty, .to = to_ty, .value = value } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerCheckedBinary(
+        self: *Lowering,
+        op: ir.BinaryOp,
+        lhs: ir.Value,
+        lhs_ty: *types.Type,
+        rhs: ir.Value,
+        rhs_ty: *types.Type,
+        ty: *types.Type,
+    ) Error!ir.Value {
+        var lhs_value = lhs;
+        var rhs_value = rhs;
+        const is_int_op = ty.isInteger() and (op == .add or op == .sub or op == .mul);
+        lhs_value = try self.castIntegerValue(lhs_value, lhs_ty, ty);
+        rhs_value = try self.castIntegerValue(rhs_value, rhs_ty, ty);
+
+        if (!is_int_op) {
+            const dst = try self.reg(ty);
+            try self.emit(.{ .binary = .{ .dst = dst, .op = op, .ty = ty, .lhs = lhs_value, .rhs = rhs_value } });
+            return .{ .reg = dst };
+        }
+        const bool_ty = try self.booleanType();
+        const dst = try self.reg(ty);
+        const overflow = try self.reg(bool_ty);
+        try self.emit(.{ .checked_binary = .{
+            .dst = dst,
+            .overflow = overflow,
+            .op = op,
+            .ty = ty,
+            .lhs = lhs_value,
+            .rhs = rhs_value,
+        } });
+        try self.emitTrapBranch(overflow);
+        return .{ .reg = dst };
+    }
+
+    fn emitShiftBoundsCheck(
+        self: *Lowering,
+        lhs_ty: *types.Type,
+        rhs: ir.Value,
+        rhs_ty: *types.Type,
+    ) Error!void {
+        if (!lhs_ty.isInteger() or !rhs_ty.isInteger()) return;
+        const i128_ty = try self.i128Type();
+        const bool_ty = try self.booleanType();
+        const bits: i128 = @intCast(lhs_ty.intInfo().bits);
+
+        var normalized = rhs;
+        if (rhs_ty.* != .int or rhs_ty.int.bits != 128) {
+            const signed = rhs_ty.intInfo().signed;
+            const kind: ir.CastKind = if (signed) .sext else .zext;
+            const dst = try self.reg(i128_ty);
+            try self.emit(.{ .cast = .{ .dst = dst, .kind = kind, .from = rhs_ty, .to = i128_ty, .value = rhs } });
+            normalized = .{ .reg = dst };
+        }
+
+        var cond: u32 = undefined;
+        const limit: ir.Value = .{ .int = bits };
+        if (rhs_ty.intInfo().signed) {
+            const negative = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = normalized, .rhs = .{ .int = 0 } } });
+            const too_large = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = too_large, .op = .ge, .ty = i128_ty, .lhs = normalized, .rhs = limit } });
+            cond = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = cond, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = too_large } } });
+        } else {
+            cond = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = cond, .op = .ge, .ty = i128_ty, .lhs = normalized, .rhs = limit } });
+        }
         try self.emitTrapBranch(cond);
     }
 
@@ -456,6 +541,10 @@ pub const Lowering = struct {
         }
         const operand = try self.lowerExpr(unary.operand);
         const ty = expr.ty orelse return .none;
+        if (unary.op == .negate and ty.isInteger()) {
+            const operand_ty = unary.operand.ty orelse ty;
+            return self.lowerCheckedBinary(.sub, .{ .int = 0 }, ty, operand, operand_ty, ty);
+        }
         const dst = try self.reg(ty);
         const op: ir.UnOp = switch (unary.op) {
             .negate => .negate,
@@ -497,18 +586,16 @@ pub const Lowering = struct {
         const rhs = try self.lowerExpr(binary.rhs);
         const ty = expr.ty orelse return .none;
         if (binary.op == .div or binary.op == .mod) {
-            try self.emitDivisionByZeroTrap(binary, lhs, rhs, lhs_ty, rhs_ty);
+            try self.emitDivisionByZeroTrap(lhs, rhs, lhs_ty, rhs_ty);
         }
 
         switch (binary.op) {
             .eq, .ne, .lt, .le, .gt, .ge => return self.lowerComparison(expr, binary, lhs, rhs, lhs_ty),
+            .shl, .shr => try self.emitShiftBoundsCheck(ty, rhs, rhs_ty),
             else => {},
         }
-
         const op = binaryOp(binary.op) orelse return .none;
-        const dst = try self.reg(ty);
-        try self.emit(.{ .binary = .{ .dst = dst, .op = op, .ty = ty, .lhs = lhs, .rhs = rhs } });
-        return .{ .reg = dst };
+        return self.lowerCheckedBinary(op, lhs, lhs_ty, rhs, rhs_ty, ty);
     }
 
     fn lowerComparison(
@@ -624,6 +711,7 @@ pub const Lowering = struct {
         const current = try self.reg(target_ty);
         try self.emit(.{ .load = .{ .dst = current, .ptr = ptr, .ty = target_ty } });
         const rhs = try self.lowerExpr(assign.value);
+        const rhs_ty = assign.value.ty orelse return .none;
         const op: ir.BinaryOp = switch (assign.op) {
             .add => .add,
             .sub => .sub,
@@ -637,10 +725,14 @@ pub const Lowering = struct {
             .shr => .shr,
             .assign => unreachable,
         };
-        const result = try self.reg(target_ty);
-        try self.emit(.{ .binary = .{ .dst = result, .op = op, .ty = target_ty, .lhs = .{ .reg = current }, .rhs = rhs } });
-        try self.emit(.{ .store = .{ .ptr = ptr, .value = .{ .reg = result }, .ty = target_ty } });
-        return .{ .reg = result };
+        if (op == .div or op == .mod) {
+            try self.emitDivisionByZeroTrap(.{ .reg = current }, rhs, target_ty, rhs_ty);
+        } else if (op == .shl or op == .shr) {
+            try self.emitShiftBoundsCheck(target_ty, rhs, rhs_ty);
+        }
+        const result = try self.lowerCheckedBinary(op, .{ .reg = current }, target_ty, rhs, rhs_ty, target_ty);
+        try self.emit(.{ .store = .{ .ptr = ptr, .value = result, .ty = target_ty } });
+        return result;
     }
 
     fn lowerCall(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!ir.Value {
@@ -1061,6 +1153,13 @@ pub const Emitter = struct {
         try writer.writeAll("; ModuleID = 'kyn'\n");
         try writer.writeAll("; Generated by the Kyn compiler. Do not edit.\n\n");
         try writer.writeAll("declare void @llvm.trap() noreturn nounwind\n\n");
+        for ([_]u16{ 8, 16, 32, 64, 128 }) |bits| {
+            for ([_][]const u8{ "add", "sub", "mul" }) |op| {
+                try writer.print("declare {{ i{d}, i1 }} @llvm.s{s}.with.overflow.i{d}(i{d}, i{d})\n", .{ bits, op, bits, bits, bits });
+                try writer.print("declare {{ i{d}, i1 }} @llvm.u{s}.with.overflow.i{d}(i{d}, i{d})\n", .{ bits, op, bits, bits, bits });
+            }
+        }
+        try writer.writeByte('\n');
 
         for (self.module.structs.items) |info| {
             try writer.print("%struct.{s} = type {{ ", .{info.name});
@@ -1135,6 +1234,29 @@ pub const Emitter = struct {
 
     fn emitInst(self: *Emitter, writer: *std.Io.Writer, inst: ir.Inst) !void {
         switch (inst) {
+            .checked_binary => |checked| {
+                const type_name = try self.typeString(checked.ty);
+                const signed = checked.ty.isInteger() and checked.ty.intInfo().signed;
+                const base: []const u8 = switch (checked.op) {
+                    .add => "add",
+                    .sub => "sub",
+                    .mul => "mul",
+                    else => unreachable,
+                };
+                const prefix: []const u8 = if (signed) "s" else "u";
+                const call_reg = self.module.temp();
+                try writer.print("  %t{d} = call {{ {s}, i1 }} @llvm.{s}{s}.with.overflow.{s}({s} ", .{
+                    call_reg, type_name, prefix, base, type_name, type_name,
+                });
+                try self.emitValue(writer, checked.lhs, checked.ty);
+                try writer.writeAll(", ");
+                try self.emitType(writer, checked.ty);
+                try writer.writeByte(' ');
+                try self.emitValue(writer, checked.rhs, checked.ty);
+                try writer.writeAll(")\n");
+                try writer.print("  %t{d} = extractvalue {{ {s}, i1 }} %t{d}, 0\n", .{ checked.dst, type_name, call_reg });
+                try writer.print("  %t{d} = extractvalue {{ {s}, i1 }} %t{d}, 1\n", .{ checked.overflow, type_name, call_reg });
+            },
             .binary => |binary| {
                 const op = binaryName(binary.op, binary.ty);
                 try writer.print("  %t{d} = {s} {s} ", .{ binary.dst, op, try self.typeString(binary.ty) });
@@ -1338,6 +1460,7 @@ pub const Emitter = struct {
             .float => |number| try writer.print("{d}", .{number}),
             .boolean => |flag| try writer.writeAll(if (flag) "true" else "false"),
             .null_ptr => try writer.writeAll("null"),
+
             .local => |id| try writer.print("%v{d}", .{id}),
             .global => |index| try writer.print("@{s}", .{self.module.globals.items[index].name}),
             .string => |index| try writer.print("@.str{d}", .{index}),

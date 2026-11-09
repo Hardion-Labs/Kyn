@@ -15,6 +15,7 @@ const types = @import("types.zig");
 const symbol = @import("symbol.zig");
 const diagnostics = @import("diagnostics.zig");
 const source = @import("source.zig");
+const analyzer_mod = @import("analyzer.zig");
 
 pub const Span = source.Span;
 pub const Type = types.Type;
@@ -1266,19 +1267,7 @@ fn fitsInt(info: types.IntInfo, value: i128) bool {
 
 /// Extract an integer literal value through unary minus/casts.
 pub fn literalIntValue(expr: *ast.Expr) ?i128 {
-    return switch (expr.kind) {
-        .int_lit => |lit| if (lit.value <= @as(u128, @intCast(std.math.maxInt(i128)))) @intCast(lit.value) else null,
-        .char_lit => |value| @intCast(value),
-        .bool_lit => |value| if (value) 1 else 0,
-        .unary => |unary| switch (unary.op) {
-            .negate => if (literalIntValue(unary.operand)) |value| -value else null,
-            .bit_not => if (literalIntValue(unary.operand)) |value| ~value else null,
-            else => null,
-        },
-        .cast => |cast| literalIntValue(cast.operand),
-        .field => |field| if (field.is_enum_variant) field.variant_value else null,
-        else => null,
-    };
+    return analyzer_mod.constInt(expr);
 }
 
 pub fn isConstInitializer(expr: *ast.Expr) bool {

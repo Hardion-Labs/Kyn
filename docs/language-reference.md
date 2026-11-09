@@ -309,13 +309,16 @@ Parentheses group expressions. `as` binds tighter than arithmetic, so
 
 - `+ - * / %` require numeric operands of the same type. An integer literal is
   adapted to the concrete operand type when it fits.
+- Integer `+ - *` and unary `-` trap at runtime on signed and unsigned
+  overflow. `%` and shifts are also checked at runtime.
 - `/` and `%` on signed integers truncate toward zero; on unsigned integers
   they use unsigned division. A dynamic zero divisor traps. Signed division
   and remainder also trap on `INT_MIN / -1`.
 - Mixing different concrete numeric types is an error (`E0439`); use `as`.
 - `& | ^` require integer operands.
 - `<< >>` require integer operands; the left operand determines the result
-  type. Shifting by a constant outside `[0, bits)` is `E0504`.
+  type. A constant shift amount outside `[0, bits)` is `E0504`; a dynamic
+  out-of-range or negative shift amount traps.
 - Pointer arithmetic: `p + n` and `p - n` produce a pointer of the same type,
   scaled by the pointee size. `p - q` for pointers to the same element type
   produces `isize`. `n + p` is not allowed.
@@ -474,7 +477,7 @@ The following are rejected or simply not part of v0.1:
 - indirect calls and first-class function values;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;
-- runtime integer overflow, null, alignment and full initialization checks;
+- runtime null, alignment and full initialization checks;
 - a preprocessor or macros;
 - threads, atomics and inline assembly syntax.
 

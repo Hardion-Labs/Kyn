@@ -186,7 +186,8 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ❌ Indirect calls and first-class function values | Planned |
 | ✅ Fixed-array dynamic indexes | Bounds-checked at runtime; trap on out-of-range |
 | ✅ Integer division and remainder | Zero divisor traps; signed `INT_MIN / -1` traps |
-| ❌ Runtime overflow / null checks | Planned; not implemented |
+| ✅ Integer arithmetic | `+`, `-`, `*`, unary `-`, shifts and division traps on overflow/out-of-range or zero |
+| ❌ Runtime overflow / null checks for all casts | Casts remain explicit and unchecked |
 | ❌ Runtime checks for raw pointers and arbitrary indexing | No bounds metadata |
 | ❌ Standard library and runtime | Planned |
 

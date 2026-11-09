@@ -161,10 +161,7 @@ The following are not checked at runtime in v0.1 and must be avoided:
 - reading uninitialized storage;
 - dereferencing `null` or a dangling pointer;
 - out-of-bounds pointer arithmetic;
-- signed integer overflow at runtime;
-- overflow of SIMD or architecture-specific integer operations that LLVM does
-  not lower as checked code;
-- shifting by a runtime value outside `[0, bits)`;
+- pointer arithmetic whose provenance or allocation ownership is invalid;
 - freeing memory twice or using it after `free`;
 - data races in code that uses external threading;
 - violating the alignment requirements of a pointer cast.

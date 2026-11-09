@@ -1,0 +1,4 @@
+fn main() i32 {
+    var amount: i32 = 32;
+    return 1 << amount;
+}
