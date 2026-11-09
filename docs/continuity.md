@@ -238,9 +238,10 @@ branch history; this increment does not redo them.
   gate. This increment changes documentation only and does not modify compiler
   behavior.
 - Git branch is `arena/2b67c8fb-kyn`; the existing PR #1 remains open against
-  `main`. Runtime policy is implemented in commit `431a727` and preceding module
-  isolation work remains in branch history. No merge or release/version change
-  was made.
+  `main`. Runtime policy is implemented in commit `431a727`; this documentation
+  reconciliation is committed and pushed as `cff6fe5` (`docs: reconcile module
+  and profile contracts`). Earlier module isolation work remains in branch
+  history. No merge or release/version change was made.
 
 ## 11. Next logical task for resumption
 
