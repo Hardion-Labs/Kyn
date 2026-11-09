@@ -42,6 +42,8 @@ The backend emits checks before the affected operation:
 
 - Dynamic fixed-array and slice indexes are bounds-checked. An index below
   zero or at or above the array/slice length calls `llvm.trap()`.
+- Subslice bounds (`slice[start..end]` and `array[start..end]`) are checked
+  against the base length; invalid ranges trap.
 - Integer addition, subtraction and multiplication trap on signed and unsigned
   overflow. Integer negation is checked as `0 - x`.
 - Integer division and remainder check the divisor. A zero divisor traps.

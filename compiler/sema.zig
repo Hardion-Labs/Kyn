@@ -583,6 +583,7 @@ pub const Sema = struct {
             .assign => |assign| try self.checkAssign(expr, assign),
             .call => |call| try self.checkCall(expr, call),
             .cast => |cast| try self.checkCast(expr, cast),
+            .slice => |slice| try self.checkSlice(expr, slice),
             .field => |*field| try self.checkField(expr, field),
             .index => |index| try self.checkIndex(expr, index),
             .struct_init => |struct_init| try self.checkStructInit(expr, struct_init),
@@ -939,6 +940,51 @@ pub const Sema = struct {
         const target_info = target_ty.slice;
         if (source_info.is_const and !target_info.is_const) return false;
         return Type.eql(source_info.elem, target_info.elem);
+    }
+
+    fn checkSlice(self: *Sema, expr: *ast.Expr, slice_expr: ast.Expr.Kind.SliceAccess) Error!*Type {
+        const base_ty = try self.checkExpr(slice_expr.base, null);
+        const start_ty = try self.checkExpr(slice_expr.start, null);
+        const end_ty = try self.checkExpr(slice_expr.end, null);
+
+        if (!self.isIntegerType(start_ty) and start_ty.* != .comptime_int) {
+            try self.reporter.err("E0454", slice_expr.start.span, "slice start must be an integer, found '{s}'", .{self.typeName(start_ty)});
+        }
+        if (!self.isIntegerType(end_ty) and end_ty.* != .comptime_int) {
+            try self.reporter.err("E0454", slice_expr.end.span, "slice end must be an integer, found '{s}'", .{self.typeName(end_ty)});
+        }
+
+        var elem: *Type = self.prims.invalid;
+        var is_const = false;
+        switch (base_ty.*) {
+            .array => |array| {
+                if (!self.isLvalue(slice_expr.base)) {
+                    try self.reporter.err("E0466", slice_expr.base.span, "slicing requires an lvalue array, a pointer to an array or a slice", .{});
+                }
+                elem = array.elem;
+                is_const = !self.lvalueMutable(slice_expr.base);
+            },
+            .pointer => |pointer| {
+                if (pointer.elem.* != .array) {
+                    try self.reporter.err("E0455", slice_expr.base.span, "slicing a pointer requires a pointer to an array", .{});
+                    return self.prims.invalid;
+                }
+                elem = pointer.elem.array.elem;
+                is_const = pointer.is_const;
+            },
+            .slice => |slice| {
+                elem = slice.elem;
+                is_const = slice.is_const;
+            },
+            else => {
+                try self.reporter.err("E0455", slice_expr.base.span, "cannot slice value of type '{s}'", .{self.typeName(base_ty)});
+                return self.prims.invalid;
+            },
+        }
+
+        const ty = try types.makeSlice(self.allocator, elem, is_const);
+        expr.ty = ty;
+        return ty;
     }
 
     fn checkField(self: *Sema, expr: *ast.Expr, field: *ast.Expr.Kind.Field) Error!*Type {
@@ -1673,6 +1719,28 @@ test "const slices reject indexed assignment" {
         \\    let slice: []const i32 = &values as []const i32;
         \\    slice[0] = 9;
         \\    return slice[0];
+        \\}
+    , "E0442");
+}
+
+test "mutable and immutable subslices are typed and bounds-checked" {
+    try expectClean(
+        \\fn main() i32 {
+        \\    var values: [5]i32 = [1, 2, 3, 4, 5];
+        \\    let whole: []i32 = &values as []i32;
+        \\    let part: []i32 = whole[1..3];
+        \\    part[0] = 20;
+        \\    let empty: []i32 = whole[2..2];
+        \\    return values[1] + empty.len as i32 + part[0];
+        \\}
+    );
+
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let values: [5]i32 = [1, 2, 3, 4, 5];
+        \\    let part: []const i32 = values[1..3];
+        \\    part[0] = 20;
+        \\    return values[1];
         \\}
     , "E0442");
 }

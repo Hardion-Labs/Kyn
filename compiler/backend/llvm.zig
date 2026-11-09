@@ -519,6 +519,7 @@ pub const Lowering = struct {
                 try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
                 break :blk .{ .reg = dst };
             },
+            .slice => |slice| try self.lowerSlice(expr, slice),
             .struct_init, .array_lit => blk: {
                 const ty = expr.ty orelse return .none;
                 const id = self.module.temp();
@@ -840,6 +841,163 @@ pub const Lowering = struct {
         const len_value = try self.loadSliceLength(slice_ptr);
         try self.emitIndexBoundsCheck(index_value, index_ty, len_value, usize_ty);
 
+        const element_slot = try self.makePointer(elem_ty, false);
+        const data_slot = try self.reg(element_slot);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = data_slot, .base = slice_ptr, .field = 0 } });
+        const data = try self.reg(element_slot);
+        try self.emit(.{ .load = .{ .dst = data, .ptr = .{ .reg = data_slot }, .ty = element_slot } });
+        return .{ .reg = data };
+    }
+
+    fn lowerSlice(self: *Lowering, expr: *ast.Expr, slice_expr: ast.Expr.Kind.SliceAccess) Error!ir.Value {
+        const target = expr.ty orelse return .none;
+        const elem_ty = target.slice.elem;
+        const start_value = try self.lowerExpr(slice_expr.start);
+        const start_ty = slice_expr.start.ty orelse return .none;
+        const end_value = try self.lowerExpr(slice_expr.end);
+        const end_ty = slice_expr.end.ty orelse return .none;
+
+        const i128_ty = try self.i128Type();
+        const bool_ty = try self.booleanType();
+        const usize_ty = try self.allocator.create(types.Type);
+        usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
+
+        const start = try self.castIntegerValue(start_value, start_ty, i128_ty);
+        const end = try self.castIntegerValue(end_value, end_ty, i128_ty);
+
+        const base_ty = slice_expr.base.ty orelse return .none;
+        var base_len: ir.Value = undefined;
+        var base_len_ty: *types.Type = i128_ty;
+        var base_data: ir.Value = undefined;
+
+        switch (base_ty.*) {
+            .array => {
+                const base_ptr = try self.lowerLvalue(slice_expr.base);
+                base_len = .{ .int = @intCast(base_ty.array.len) };
+                base_len_ty = i128_ty;
+                base_data = base_ptr;
+            },
+            .pointer => {
+                const base_ptr = try self.lowerExpr(slice_expr.base);
+                base_len = .{ .int = @intCast(base_ty.pointer.elem.array.len) };
+                base_len_ty = i128_ty;
+                base_data = base_ptr;
+            },
+            .slice => {
+                const slice_ptr = try self.lowerAggregateBase(slice_expr.base, base_ty);
+                base_len = try self.loadSliceLength(slice_ptr);
+                base_len_ty = usize_ty;
+                base_data = try self.loadSliceData(slice_ptr, elem_ty);
+            },
+            else => return .none,
+        }
+
+        const normalized_len = try self.castIntegerValue(base_len, base_len_ty, i128_ty);
+        const zero_value: ir.Value = .{ .int = 0 };
+        var start_negative: ?u32 = null;
+        var end_negative: ?u32 = null;
+        if (start_ty.isInteger() and start_ty.intInfo().signed) {
+            const negative = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = start, .rhs = zero_value } });
+            start_negative = negative;
+        }
+        if (end_ty.isInteger() and end_ty.intInfo().signed) {
+            const negative = try self.reg(bool_ty);
+            try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = end, .rhs = zero_value } });
+            end_negative = negative;
+        }
+
+        const start_gt_end = try self.reg(bool_ty);
+        try self.emit(.{ .icmp = .{ .dst = start_gt_end, .op = .gt, .ty = i128_ty, .lhs = start, .rhs = end } });
+        const end_too_large = try self.reg(bool_ty);
+        try self.emit(.{ .icmp = .{ .dst = end_too_large, .op = .gt, .ty = i128_ty, .lhs = end, .rhs = normalized_len } });
+
+        var condition = start_gt_end;
+        if (start_negative) |negative| {
+            const combined = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
+            condition = combined;
+        }
+        if (end_negative) |negative| {
+            const combined = try self.reg(bool_ty);
+            try self.emit(.{ .binary = .{ .dst = combined, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = negative }, .rhs = .{ .reg = condition } } });
+            condition = combined;
+        }
+        const invalid = try self.reg(bool_ty);
+        try self.emit(.{ .binary = .{ .dst = invalid, .op = .bit_or, .ty = bool_ty, .lhs = .{ .reg = condition }, .rhs = .{ .reg = end_too_large } } });
+        try self.emitTrapBranch(invalid);
+
+        const start64 = try self.reg(usize_ty);
+        try self.emit(.{ .cast = .{ .dst = start64, .kind = .trunc, .from = i128_ty, .to = usize_ty, .value = start } });
+        const end64 = try self.reg(usize_ty);
+        try self.emit(.{ .cast = .{ .dst = end64, .kind = .trunc, .from = i128_ty, .to = usize_ty, .value = end } });
+
+        var data_pointer: ir.Value = undefined;
+        if (base_ty.* == .array) {
+            const dst = try self.reg(try self.makePointer(elem_ty, target.slice.is_const));
+            try self.emit(.{ .elem_ptr = .{
+                .dst = dst,
+                .base = base_data,
+                .container = base_ty,
+                .index = .{ .reg = start64 },
+                .index_ty = usize_ty,
+                .is_array = true,
+            } });
+            data_pointer = .{ .reg = dst };
+        } else if (base_ty.* == .slice) {
+            const dst = try self.reg(try self.makePointer(elem_ty, base_ty.slice.is_const));
+            try self.emit(.{ .elem_ptr = .{
+                .dst = dst,
+                .base = base_data,
+                .container = try self.makePointer(elem_ty, base_ty.slice.is_const),
+                .index = .{ .reg = start64 },
+                .index_ty = usize_ty,
+                .is_array = false,
+            } });
+            data_pointer = .{ .reg = dst };
+        } else {
+            const elem_of_pointer = base_ty.pointer.elem.array.elem;
+            const pointer_container = try self.makePointer(elem_of_pointer, base_ty.pointer.is_const);
+            const dst = try self.reg(pointer_container);
+            try self.emit(.{ .elem_ptr = .{
+                .dst = dst,
+                .base = base_data,
+                .container = pointer_container,
+                .index = .{ .reg = start64 },
+                .index_ty = usize_ty,
+                .is_array = false,
+            } });
+            data_pointer = .{ .reg = dst };
+        }
+
+        const len = try self.reg(usize_ty);
+        try self.emit(.{ .binary = .{ .dst = len, .op = .sub, .ty = usize_ty, .lhs = .{ .reg = end64 }, .rhs = .{ .reg = start64 } } });
+        return self.makeSlice(target, data_pointer, .{ .reg = len });
+    }
+
+    fn makeSlice(self: *Lowering, target: *types.Type, pointer: ir.Value, length: ir.Value) Error!ir.Value {
+        const id = self.module.temp();
+        try self.addLocal(id, "tmp.slice", target);
+
+        const elem_ty = target.slice.elem;
+        const element_slot = try self.makePointer(elem_ty, false);
+        const field0 = try self.reg(element_slot);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = field0, .base = .{ .local = id }, .field = 0 } });
+        try self.emit(.{ .store = .{ .ptr = .{ .reg = field0 }, .value = pointer, .ty = element_slot } });
+
+        const usize_ty = try self.allocator.create(types.Type);
+        usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
+        const slot_ty = try self.makePointer(usize_ty, false);
+        const field1 = try self.reg(slot_ty);
+        try self.emit(.{ .slice_field_ptr = .{ .dst = field1, .base = .{ .local = id }, .field = 1 } });
+        try self.emit(.{ .store = .{ .ptr = .{ .reg = field1 }, .value = length, .ty = usize_ty } });
+
+        const dst = try self.reg(target);
+        try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = id }, .ty = target } });
+        return .{ .reg = dst };
+    }
+
+    fn loadSliceData(self: *Lowering, slice_ptr: ir.Value, elem_ty: *types.Type) Error!ir.Value {
         const element_slot = try self.makePointer(elem_ty, false);
         const data_slot = try self.reg(element_slot);
         try self.emit(.{ .slice_field_ptr = .{ .dst = data_slot, .base = slice_ptr, .field = 0 } });

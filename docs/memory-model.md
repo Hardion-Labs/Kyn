@@ -137,10 +137,11 @@ A slice is represented at runtime as `{ ptr T, usize }`:
 - a raw pointer to the first element;
 - the number of `T` elements the pointer refers to.
 
-Slices are pointer/length pairs and may refer to backing storage owned by
-another object. `[]const T` slices do not permit assignment to their elements.
-They have no ownership and do not copy their backing array. They may refer
-to stack, global or externally allocated storage as long as that storage is
+A subslice constructed with `slice[start..end]` or `array[start..end]` shares
+storage with its source and remains valid only as long as that storage is
+alive. `[]const T` slices do not permit assignment to their elements. Slices
+have no ownership and do not copy their backing array. They may refer to
+stack, global or externally allocated storage as long as that storage is
 alive during the slice's use. Slice copies copy the pointer/length pair, not
 the backing elements.
 

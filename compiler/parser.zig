@@ -734,7 +734,19 @@ pub const Parser = struct {
                 },
                 .l_bracket => {
                     _ = self.advance();
-                    const index = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                    const first = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                    if (self.match(.dotdot)) {
+                        const end = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                        _ = try self.expect(.r_bracket, "after slice range");
+                        const node = try self.allocator.create(ast.Expr);
+                        node.* = .{
+                            .span = Span.join(expr.span, self.peek().span),
+                            .kind = .{ .slice = .{ .base = expr, .start = first, .end = end } },
+                        };
+                        expr = node;
+                        continue;
+                    }
+                    const index = first;
                     _ = try self.expect(.r_bracket, "after index expression");
                     const node = try self.allocator.create(ast.Expr);
                     node.* = .{

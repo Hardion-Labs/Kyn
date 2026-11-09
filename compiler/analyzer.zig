@@ -156,6 +156,11 @@ pub const Analyzer = struct {
                 if (unary.op != .address_of) try self.checkExpr(unary.operand);
                 if (unary.op == .negate) try self.checkUnaryOverflow(expr, unary);
             },
+            .slice => |slice| {
+                try self.checkExpr(slice.base);
+                try self.checkExpr(slice.start);
+                try self.checkExpr(slice.end);
+            },
             .binary => |binary| {
                 try self.checkExpr(binary.lhs);
                 try self.checkExpr(binary.rhs);

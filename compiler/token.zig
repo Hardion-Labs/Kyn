@@ -64,6 +64,7 @@ pub const Kind = enum {
     semicolon,
     colon,
     dot,
+    dotdot,
     arrow,
     at,
 
@@ -219,6 +220,7 @@ pub fn describe(kind: Kind) []const u8 {
         .semicolon => "';'",
         .colon => "':'",
         .dot => "'.'",
+        .dotdot => "'..'",
         .arrow => "'->'",
         .at => "'@'",
         .plus => "'+'",

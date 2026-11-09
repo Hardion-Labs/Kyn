@@ -218,6 +218,7 @@ pub const Expr = struct {
         cast: Cast,
         field: Field,
         index: Index,
+        slice: SliceAccess,
         struct_init: StructInit,
         array_lit: []*Expr,
 
@@ -278,6 +279,12 @@ pub const Expr = struct {
         pub const Index = struct {
             base: *Expr,
             index: *Expr,
+        };
+
+        pub const SliceAccess = struct {
+            base: *Expr,
+            start: *Expr,
+            end: *Expr,
         };
 
         pub const StructInit = struct {

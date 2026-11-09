@@ -1,0 +1,8 @@
+fn main() i32 {
+    var values: [5]i32 = [1, 2, 3, 4, 5];
+    let whole: []i32 = &values as []i32;
+    var start: usize = 3;
+    var end: usize = 2;
+    let part: []i32 = whole[start..end];
+    return part[0];
+}

@@ -112,8 +112,10 @@ NamedType   = Identifier
   constant integer known at compile time.
 - `[]T` is a slice: a fat pointer holding a data pointer and a `usize` length.
   A mutable slice is constructed with an explicit cast from a pointer to a
-  fixed-size array, such as `&values as []i32`. `[]const T` is constructed in
-  the same way from an immutable array pointer, or cast from a mutable slice.
+  fixed-size array, such as `&values as []i32`, or with the subslice syntax
+  `slice[start..end]` / `array[start..end]`. `[]const T` is constructed in the
+  same way from an immutable array pointer, from an immutable array, or cast
+  from a mutable slice.
 - Struct, enum and primitive names resolve to their declarations.
 - `void` is valid only as a function return type; parameters and variables
   cannot have type `void`.
@@ -431,10 +433,15 @@ array[2] = 9;
 let value: i32 = pointer[3];
 let total: i32 = slice.len as i32;
 let element: i32 = slice[index];
+let handle: []i32 = slice[start..end];
 ```
 
 - The base may be an lvalue array, an array literal, a pointer, or a slice.
 - The index must be an integer type; it is not automatically converted.
+- `slice[start..end]` and `array[start..end]` construct a non-owning subslice.
+  `start` and `end` are inclusive-exclusive bounds (`[start, end)`), and both
+  are runtime-checked. A start greater than the end, a negative bound, or an
+  end beyond the base length traps.
 - Constant indexes outside the array bounds are `E0502`.
 - Dynamic indexes into fixed arrays and slices are bounds-checked at runtime
   and trap on out-of-range access.
@@ -477,7 +484,7 @@ The following are rejected or simply not part of v0.1:
 - modules, imports, namespaces and packages;
 - `for`, `switch`, `match`, `do`, `goto`, labels;
 - `defer`, `errdefer`, exceptions, closures, lambdas;
-- slice construction beyond `&array as []T`, subslice syntax, and const-polymorphic slice operations;
+- const-polymorphic slice constructors and additional slice ergonomics;
 - generics, traits, interfaces, operator overloading;
 - variadic functions and variadic `extern` declarations;
 - aggregate parameters/returns across `extern`/`export` C ABI boundaries;

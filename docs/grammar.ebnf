@@ -169,7 +169,7 @@ postfix_expression
                = primary_expression , { postfix_suffix } ;
 
 postfix_suffix = "(" , [ argument_list ] , ")"
-               | "[" , expression , "]"
+               | "[" , expression , [ ".." , expression ] , "]"
                | "." , identifier
                | "->" , identifier
                ;

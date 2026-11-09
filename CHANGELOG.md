@@ -38,11 +38,11 @@ principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha
 - Runtime integer arithmetic checks in every profile: addition, subtraction,
   multiplication and unary negation trap on signed and unsigned overflow.
   Dynamic shift amounts trap when negative or at/above the integer width.
-- Initial slice support (`[]T`): fat-pointer representation, fixed-array
-  construction with `as`, `.len`, internal parameter/return passing and
-  runtime bounds checks. Const/read-only slices (`[]const T`) support
-  immutable construction, weakening from mutable slices and indexed-read
-  semantics. Slice signatures at C ABI boundaries remain rejected.
+- Initial slice support (`[]T`, `[]const T`): fat-pointer representation,
+  fixed-array construction with `as` and the `slice[start..end]` /
+  `array[start..end]` subslice syntax, `.len`, internal parameter/return
+  passing and runtime slice bounds checks. Slice signatures at C ABI
+  boundaries remain rejected.
 - Unit and regression tests for every compiler stage, including parser
   precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
@@ -79,10 +79,10 @@ principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha
 
 ### Known limitations
 
-- No modules, imports, packages, slices, generics or traits.
-- No variadic functions, aggregate parameters/returns, aggregate copies or
-  indirect calls.
-- No runtime bounds, overflow, null or initialization checks.
+- No modules, imports, packages, generics or traits.
+- No variadic extern functions, aggregate parameters/returns across the C ABI,
+  or indirect calls.
+- No runtime null dereference checks or full definite-assignment checking.
 - No standard library or runtime.
 - `usize`/`isize` are currently fixed at 64 bits.
 - C headers and Zig transitive imports are not part of the incremental cache.
