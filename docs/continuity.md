@@ -386,19 +386,28 @@ branch history; this increment does not redo them.
   diagnostics, docs, 900 robustness inputs, codegen and Kyn+C+Zig linking.
   `git diff --check` passes. Sanitizers were not run; no sanitizer gate exists.
 
-## 19. Current repository/Git state and next step
+## 19. Repository snapshot before merging the reverse mixed-class increment
 
-- PR #1 is merged into `main` at `da20545`, and main CI passed. Its old remote
-  Arena branch was deleted. This session is on `arena/6aa18c81-kyn`, based on
-  that merge commit. The checkout is shallow; the worktree was clean before
-  this increment and now contains only this ABI increment's changes. Preserve
-  the session branch; do not switch branches or push anywhere else.
-- No release/version metadata was changed. Main integration should occur only
-  through the session branch after its commit and PR CI pass. No sanitizer gate
-  is configured.
-- Next ABI candidate must be selected only after fresh ABI evidence and an
-  exact-shape regression plan; do not infer support for other mixed-class
-  layouts. Explicit module re-export remains a language-design decision.
+- PR #1 was merged into `main` at `da20545`, and its main CI passed. Its old
+  remote Arena branch was deleted. This session works on
+  `arena/6aa18c81-kyn`, based on that merge commit. The checkout is shallow.
+- The implementation was committed as `a1cc73c` and pushed only to the session
+  branch as PR #2. PR CI passed before merge. No release/version metadata was
+  changed. Sanitizers have no configured project gate.
+
+## 20. Current repository state after the reverse mixed-class merge
+
+- PR #2, `feat(abi): support reverse mixed SSE aggregate order`, is merged into
+  `main` at `da2e5f6`. Main CI passed for that exact merge commit. Post-merge
+  local Debug/ReleaseSafe formatting, builds, unit tests and full integrations
+  passed; each integration run reported `137 passed, 0 failed`.
+- The current session remains on `arena/6aa18c81-kyn` at `a1cc73c`; its tree
+  matches `origin/main`. The working tree was clean at this state update. The
+  checkout is shallow and the local `main` ref is not advanced; do not switch
+  branches or push to any branch other than this session branch.
+- No tag or release was created; metadata remains at `0.1.0-alpha.2`. The next
+  ABI increment still requires its own Clang evidence and exact-shape tests.
+  Explicit module re-export remains a language-design decision.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
