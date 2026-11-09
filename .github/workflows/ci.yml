@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Install native toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Show tool versions
+        run: |
+          zig version
+          clang --version | head -n 1
+          ar --version | head -n 1
+
+      - name: Check formatting
+        run: zig fmt --check build.zig compiler build-system
+
+      - name: Build toolchain
+        run: zig build
+
+      - name: Run unit and regression tests
+        run: zig build test
+
+      - name: Run integration tests
+        run: zig build integration
+
+      - name: Build optimized toolchain
+        run: zig build -Doptimize=ReleaseSafe
