@@ -1,0 +1,26 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+build/
+kyn-cache/
+
+# Compiler output
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.ll
+*.bc
+*.s
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local environment
+.env
