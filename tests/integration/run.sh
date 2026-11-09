@@ -155,6 +155,14 @@ for case_file in "$ROOT"/tests/integration/errors/*.kyn; do
     ok "$name ($code)"
 done
 
+echo "diagnostic documentation"
+
+if "${PYTHON:-python3}" "$ROOT/tests/integration/check_diagnostic_docs.py" >"$TMP/diagnostic-docs.log" 2>&1; then
+    ok "diagnostic codes documented"
+else
+    bad "diagnostic codes documented" "$(cat "$TMP/diagnostic-docs.log")"
+fi
+
 echo "code generation"
 
 ll_file="$TMP/hello.ll"

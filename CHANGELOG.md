@@ -26,12 +26,22 @@ First vertically functional compiler milestone.
   `exe`/`staticlib`/`sharedlib` kinds and content-hash incremental rebuilds.
 - C ABI interoperability through `extern fn` / `export fn`, including a
   verified Kyn + C + Zig example.
-- Unit and regression tests for every compiler stage.
+- Unit and regression tests for every compiler stage, including parser
+  precedence, associativity and malformed-input recovery.
 - End-to-end integration suite covering execution, stdout, exit status,
-  profiles, negative diagnostics, code generation and hybrid builds.
+  profiles, negative diagnostics, code generation, hybrid builds and diagnostic
+  documentation coverage.
 - Language, type-system, memory, safety, ABI, build-system and compiler
   architecture documentation.
 - GitHub Actions CI for formatting, build, unit tests and integration tests.
+
+### Fixed
+
+- Parser recovery no longer loops without consuming input when a declaration
+  keyword appears inside a struct, enum or struct initializer after a previous
+  syntax error. Regression tests cover the failure mode.
+- Documentation now states that block comments nest, matching the lexer and
+  its tests.
 
 ### Known limitations
 

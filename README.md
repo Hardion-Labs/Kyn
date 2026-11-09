@@ -163,6 +163,7 @@ The integration suite covers:
 - positive programs whose exit status and stdout are verified;
 - the four safety profiles;
 - negative programs that must fail with a specific diagnostic code;
+- diagnostic documentation coverage against compiler sources;
 - `emit-llvm` and `emit-obj` smoke tests;
 - a Kyn + C + Zig executable built by `kyn-build`, plus incremental rebuild.
 

@@ -16,6 +16,10 @@ Duration: errors fail compilation; warnings are reported and do not change the
 exit status. Backend `E06xx` diagnostics normally indicate either an explicitly
 unsupported construct or an internal compiler invariant violation.
 
+| Code | Meaning |
+| ---- | ------- |
+| `E0001` | reserved sentinel used by compiler unit-test diagnostics; production stages do not emit it |
+
 ## Lexer (`E01xx`)
 
 | Code | Meaning |
