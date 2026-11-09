@@ -7,11 +7,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 ## 1. Current real stage
 
-- **Published toolchain baseline:** `v0.1.0-alpha.2` (`7f9cb2c`), Zig `0.17.0`
-  + Clang/LLVM opaque-pointer IR (`ptr`).
-- **Active stage:** Post-`v0.1.0-alpha.2` incremental development (version
-  string remains `0.1.0-alpha.2` until a human-authorized release boundary is
-  selected per [release-checklist.md](release-checklist.md)).
+- **Published toolchain baseline:** `v0.1.0-alpha.3` (`84093a2`), Zig `0.17.0`
+  + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
+  2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
+  that SHA before tagging, and main CI run `42717072114` was green.
+- **Active stage:** Post-`v0.1.0-alpha.3` incremental development. Any future
+  pre-release boundary requires the same human-authorized procedure per
+  [release-checklist.md](release-checklist.md).
 - **Completed increment in current cycle:** Const-polymorphic slicing,
   open-ended subslice syntax (`[..]`, `[start..]`, `[..end]`, `[start..end]`),
   slice/array ergonomics (`.ptr`, `.len`, `->ptr`, `->len`), lvalue/mutability
@@ -405,9 +407,29 @@ branch history; this increment does not redo them.
   matches `origin/main`. The working tree was clean at this state update. The
   checkout is shallow and the local `main` ref is not advanced; do not switch
   branches or push to any branch other than this session branch.
-- No tag or release was created; metadata remains at `0.1.0-alpha.2`. The next
-  ABI increment still requires its own Clang evidence and exact-shape tests.
-  Explicit module re-export remains a language-design decision.
+- Superseded by section 21: the `v0.1.0-alpha.3` tag and Release were created
+  for commit `84093a2` after a 17/17 gate pass. The next ABI increment still
+  requires its own Clang evidence and exact-shape tests. Explicit module
+  re-export remains a language-design decision.
+
+## 21. v0.1.0-alpha.3 release record
+
+- Release preparation commit `84093a2` (`release: prepare v0.1.0-alpha.3`)
+  bumped version metadata (`build.zig.zon`, `compiler/main.zig`,
+  `build-system/main.zig`), renamed the changelog `[Unreleased]` section to
+  `[0.1.0-alpha.3] - 2026-11-09` and synchronized README, roadmap,
+  release-checklist, `tools/release-check.sh` and the version badge.
+- Main CI for `84093a2` (run `42717072114`, 1m57s) is green. Clean-room
+  release-readiness gate passed 17/17 (`./tools/release-check.sh
+  0.1.0-alpha.3`), including fresh clone fmt/build/unit/integration checks and
+  version metadata consistency.
+- Tag `v0.1.0-alpha.3` is annotated at `84093a2` and pushed to origin.
+  GitHub Release `Kyn v0.1.0-alpha.3` is published and marked Latest:
+  https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.3
+- `v0.1.0-alpha.1` and `v0.1.0-alpha.2` tags/releases remain untouched.
+  `docs/continuity.md` was updated after publication to remove the stale
+  "no release exists" snapshot. No source/ABI stability is promised between
+  alpha releases.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
