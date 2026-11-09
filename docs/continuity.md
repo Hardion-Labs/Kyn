@@ -226,6 +226,6 @@ imports independent of optimization profiles.
 - Git: branch `arena/2b67c8fb-kyn`; module isolation is committed as
   `2cd25da` (`feat(sema): isolate module namespaces and name linkage`). Earlier
   aliases/visibility, imports and slicing work remains in branch history,
-  including merge reconciliation `f31533e`. This continuity update is a
-  documentation-only follow-up; push both commits only to the session branch.
+  including merge reconciliation `f31533e`. The implementation and continuity
+  commits are pushed to `origin/arena/2b67c8fb-kyn`; the working tree is clean.
   No `main` merge or release/version change was made.
