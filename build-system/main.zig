@@ -59,6 +59,12 @@ const BuildError = error{
     OutOfMemory,
 };
 
+const ParseResult = union(enum) {
+    options: Options,
+    help,
+    version,
+};
+
 const Options = struct {
     file: []const u8 = "kyn.build",
     target: ?[]const u8 = null,
@@ -80,17 +86,28 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_file: std.Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const out = &stdout_file.interface;
 
-    const options = parseArgs(args) catch {
+    const parsed = parseArgs(args) catch {
         try out.writeAll(usage_text);
         try out.flush();
         return 2;
-    };
-    if (options == null) {
+    } orelse {
         try out.writeAll(usage_text);
         try out.flush();
         return 0;
-    }
-    const opts = options.?;
+    };
+    const opts: Options = switch (parsed) {
+        .options => |value| value,
+        .help => {
+            try out.writeAll(usage_text);
+            try out.flush();
+            return 0;
+        },
+        .version => {
+            try out.print("kyn-build {s}\n", .{version});
+            try out.flush();
+            return 0;
+        },
+    };
 
     const cwd = try std.process.currentPathAlloc(io, arena);
     const config_dir = std.fs.path.dirname(opts.file) orelse ".";
@@ -592,16 +609,13 @@ const usage_text =
     \\
 ;
 
-fn parseArgs(args: []const []const u8) !?Options {
+fn parseArgs(args: []const []const u8) !?ParseResult {
     var options = Options{};
     var index: usize = 1;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) return null;
-        if (std.mem.eql(u8, arg, "--version")) {
-            std.debug.print("kyn-build {s}\n", .{version});
-            return null;
-        }
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) return .{ .help = {} };
+        if (std.mem.eql(u8, arg, "--version")) return .{ .version = {} };
         if (std.mem.eql(u8, arg, "--file")) {
             index += 1;
             if (index >= args.len) return error.MissingValue;
@@ -636,5 +650,5 @@ fn parseArgs(args: []const []const u8) !?Options {
             return error.UnknownOption;
         }
     }
-    return options;
+    return .{ .options = options };
 }

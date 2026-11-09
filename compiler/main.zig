@@ -16,6 +16,12 @@ const Command = enum {
     run,
 };
 
+const ParseResult = union(enum) {
+    options: Options,
+    help,
+    version,
+};
+
 const usage_text =
     \\Kyn compiler
     \\
@@ -59,17 +65,28 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout: std.Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const out = &stdout.interface;
 
-    const options = parseArgs(arena, args) catch |err| {
+    const parsed = parseArgs(arena, args) catch |err| {
         try out.print("kyn: {s}\n\n{s}", .{ @errorName(err), usage_text });
         try out.flush();
         return 2;
-    };
-    if (options == null) {
+    } orelse {
         try out.writeAll(usage_text);
         try out.flush();
         return 0;
-    }
-    const opts = options.?;
+    };
+    const opts: Options = switch (parsed) {
+        .options => |value| value,
+        .help => {
+            try out.writeAll(usage_text);
+            try out.flush();
+            return 0;
+        },
+        .version => {
+            try out.print("kync {s}\n", .{version});
+            try out.flush();
+            return 0;
+        },
+    };
     if (opts.file == null) {
         try out.writeAll(usage_text);
         try out.flush();
@@ -149,17 +166,14 @@ pub fn main(init: std.process.Init) !u8 {
     }
 }
 
-fn parseArgs(arena: std.mem.Allocator, args: []const []const u8) !?Options {
+fn parseArgs(arena: std.mem.Allocator, args: []const []const u8) !?ParseResult {
     _ = arena;
     var options: Options = .{};
     var index: usize = 1;
     if (index >= args.len) return null;
 
-    if (std.mem.eql(u8, args[index], "-h") or std.mem.eql(u8, args[index], "--help")) return null;
-    if (std.mem.eql(u8, args[index], "--version")) {
-        std.debug.print("kync {s}\n", .{version});
-        return null;
-    }
+    if (std.mem.eql(u8, args[index], "-h") or std.mem.eql(u8, args[index], "--help")) return .{ .help = {} };
+    if (std.mem.eql(u8, args[index], "--version")) return .{ .version = {} };
 
     if (commandByName(args[index])) |command| {
         options.command = command;
@@ -194,12 +208,13 @@ fn parseArgs(arena: std.mem.Allocator, args: []const []const u8) !?Options {
             options.keep_ir = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) return null;
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) return .{ .help = {} };
+        if (std.mem.eql(u8, arg, "--version")) return .{ .version = {} };
         if (std.mem.startsWith(u8, arg, "-")) return error.UnknownOption;
         if (options.file != null) return error.MultipleInputFiles;
         options.file = arg;
     }
-    return options;
+    return .{ .options = options };
 }
 
 fn commandByName(name: []const u8) ?Command {
