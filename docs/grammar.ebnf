@@ -1,0 +1,230 @@
+(*
+ * Kyn v0.1 grammar
+ *
+ * This grammar describes the syntax accepted by the current parser. It does
+ * not encode name resolution, type checking or static-analysis rules; those
+ * are described in docs/language-reference.md and docs/type-system.md.
+ *
+ * Notation: ISO/IEC 14977 EBNF. `{ x }` means zero or more, `[ x ]` optional,
+ * `( x | y )` alternatives, and `(* ... *)` comments.
+ *
+ * Lexical rules (identifier, literals, comments) are summarized at the end.
+ *)
+
+program        = { declaration } , end_of_file ;
+
+declaration    = function_decl
+               | extern_decl
+               | export_decl
+               | struct_decl
+               | enum_decl
+               | global_var
+               ;
+
+(* Functions *)
+
+function_decl  = "fn" , identifier , "(" , [ parameter_list ] , ")" ,
+                 [ type ] , block ;
+
+extern_decl    = "extern" , "fn" , identifier , "(" , [ parameter_list ] , ")" ,
+                 [ type ] , ";" ;
+
+export_decl    = "export" , "fn" , identifier , "(" , [ parameter_list ] , ")" ,
+                 [ type ] , block ;
+
+parameter_list = parameter , { "," , parameter } ;
+
+parameter      = identifier , ":" , type ;
+
+(* Structs and enums *)
+
+struct_decl    = "struct" , identifier , "{" , [ field_list ] , "}" ;
+
+field_list     = field , { "," , field } , [ "," ] ;
+
+field          = identifier , ":" , type ;
+
+enum_decl      = "enum" , identifier , [ ":" , type ] , "{" ,
+                 [ variant_list ] , "}" ;
+
+variant_list   = variant , { "," , variant } , [ "," ] ;
+
+variant        = identifier , [ "=" , expression ] ;
+
+(* Globals *)
+
+global_var     = ( "const" | "let" | "var" ) , identifier ,
+                 [ ":" , type ] , [ "=" , expression ] , ";" ;
+
+(* Types *)
+
+type           = pointer_type | array_type | named_type | primitive_type ;
+
+pointer_type   = "*" , [ "const" ] , type ;
+
+array_type     = "[" , expression , "]" , type ;
+
+named_type     = identifier ;
+
+primitive_type = "void" | "bool" | "char"
+               | "i8" | "i16" | "i32" | "i64" | "i128"
+               | "u8" | "u16" | "u32" | "u64" | "u128"
+               | "f32" | "f64" | "usize" | "isize" ;
+
+(* Statements *)
+
+block          = "{" , { statement } , "}" ;
+
+statement      = block
+               | if_statement
+               | while_statement
+               | return_statement
+               | break_statement
+               | continue_statement
+               | local_var
+               | expression_statement
+               | empty_statement
+               ;
+
+if_statement   = "if" , "(" , expression , ")" , block ,
+                 [ "else" , ( if_statement | block ) ] ;
+
+while_statement = "while" , "(" , expression , ")" , block ;
+
+return_statement = "return" , [ expression ] , ";" ;
+
+break_statement  = "break" , ";" ;
+
+continue_statement = "continue" , ";" ;
+
+local_var      = ( "let" | "var" | "const" ) , identifier ,
+                 [ ":" , type ] , [ "=" , expression ] , ";" ;
+
+expression_statement = expression , ";" ;
+
+empty_statement = ";" ;
+
+(* Expressions, lowest precedence first.
+ * Each level is left-associative unless noted. Assignment is right-associative.
+ * `as` binds tighter than multiplicative operators; unary operators bind
+ * tighter than `as`; postfix operations bind tightest.
+ *)
+
+expression     = assignment_expression ;
+
+assignment_expression
+               = logical_or_expression ,
+                 [ assignment_operator , assignment_expression ] ;
+
+assignment_operator
+               = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+               | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
+
+logical_or_expression
+               = logical_and_expression , { "||" , logical_and_expression } ;
+
+logical_and_expression
+               = bit_or_expression , { "&&" , bit_or_expression } ;
+
+bit_or_expression
+               = bit_xor_expression , { "|" , bit_xor_expression } ;
+
+bit_xor_expression
+               = bit_and_expression , { "^" , bit_and_expression } ;
+
+bit_and_expression
+               = equality_expression , { "&" , equality_expression } ;
+
+equality_expression
+               = relational_expression ,
+                 { ( "==" | "!=" ) , relational_expression } ;
+
+relational_expression
+               = shift_expression ,
+                 { ( "<" | "<=" | ">" | ">=" ) , shift_expression } ;
+
+shift_expression
+               = additive_expression ,
+                 { ( "<<" | ">>" ) , additive_expression } ;
+
+additive_expression
+               = multiplicative_expression ,
+                 { ( "+" | "-" ) , multiplicative_expression } ;
+
+multiplicative_expression
+               = cast_expression ,
+                 { ( "*" | "/" | "%" ) , cast_expression } ;
+
+cast_expression
+               = unary_expression , { "as" , type } ;
+
+unary_expression
+               = ( "-" | "!" | "~" | "&" | "*" ) , unary_expression
+               | postfix_expression
+               ;
+
+postfix_expression
+               = primary_expression , { postfix_suffix } ;
+
+postfix_suffix = "(" , [ argument_list ] , ")"
+               | "[" , expression , "]"
+               | "." , identifier
+               | "->" , identifier
+               ;
+
+argument_list  = expression , { "," , expression } ;
+
+primary_expression
+               = int_literal
+               | float_literal
+               | string_literal
+               | char_literal
+               | "true"
+               | "false"
+               | "null"
+               | identifier
+               | identifier , "{" , [ struct_init_list ] , "}"
+               | "(" , expression , ")"
+               | "[" , [ array_element_list ] , "]"
+               ;
+
+struct_init_list
+               = struct_init_field , { "," , struct_init_field } , [ "," ] ;
+
+struct_init_field = identifier , ":" , expression ;
+
+array_element_list
+               = expression , { "," , expression } ;
+
+(*
+ * Lexical rules
+ * =============
+ *
+ * letter        = "A".."Z" | "a".."z" ;
+ * digit         = "0".."9" ;
+ * hex_digit     = digit | "a".."f" | "A".."F" ;
+ * identifier    = ( letter | "_" ) , { letter | digit | "_" } ;
+ *
+ * decimal_int   = digit , { digit | "_" } ;
+ * hex_int       = "0" , ( "x" | "X" ) , hex_digit , { hex_digit | "_" } ;
+ * bin_int       = "0" , ( "b" | "B" ) , ( "0" | "1" ) , { ( "0" | "1" ) | "_" } ;
+ * oct_int       = "0" , ( "o" | "O" ) , ( "0".."7" ) , { ( "0".."7" ) | "_" } ;
+ * int_literal   = decimal_int | hex_int | bin_int | oct_int ;
+ *
+ * float_literal = decimal_int , "." , digit , { digit | "_" } ,
+ *                 [ ( "e" | "E" ) , [ "+" | "-" ] , digit , { digit | "_" } ]
+ *               | decimal_int , ( "e" | "E" ) , [ "+" | "-" ] , digit ,
+ *                 { digit | "_" } ;
+ *
+ * string_literal = '"' , { string_char } , '"' ;
+ * char_literal   = "'" , char_body , "'" ;
+ *
+ * line_comment  = "//" , { any byte except newline } , newline ;
+ * block_comment = "/*" , { any byte } , "*/" ;
+ *
+ * Whitespace (space, tab, carriage return, newline) and comments are ignored
+ * between tokens, except that an unterminated block comment is an error.
+ *
+ * Escape sequences inside strings and character literals:
+ *   \n \r \t \0 \\ \" \' \xNN
+ *)
