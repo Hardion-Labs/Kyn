@@ -191,7 +191,8 @@ and cycle diagnostics; update this record against source/Git before continuing.
 - Sanitizers were not run; the repository does not currently expose a sanitizer
   gate. Static/dynamic regression coverage is the existing unit, integration,
   ABI and robustness suites.
-- Git branch: `arena/2b67c8fb-kyn`, based on the previously published
-  incremental branch state. This module-import increment is validated and
-  prepared for its branch-local commit; no `main` merge or release/version
-  change was made.
+- Git branch: `arena/2b67c8fb-kyn`. Implementation/tests/spec changes are in
+  commit `74e17b2` (`feat(modules): add deterministic relative imports and cache
+  tracking`); this continuity update is a documentation-only follow-up on the
+  same branch. No `main` merge or release/version change was made. Confirm the
+  final follow-up commit and remote synchronization with `git log`/`git status`.
