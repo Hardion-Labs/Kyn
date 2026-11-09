@@ -226,9 +226,10 @@ branch history; this increment does not redo them.
   and version metadata (`0.1.0-alpha.2`) passed.
 - Sanitizers were not run; the repository has no sanitizer gate. New ABI paths
   were verified by native Clang C↔Kyn integration and generated LLVM output.
-- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. The mixed-class ABI
-  implementation is currently uncommitted; no merge or release/version change
-  was made.
+- Branch `arena/2b67c8fb-kyn` has PR #1 open against `main`. The mixed-class
+  ABI implementation is committed and pushed as `4274907`
+  (`feat(abi): support INTEGER-class mixed float aggregates`); the working tree
+  is clean. No merge or release/version change was made.
 
 ## 11. C ABI diagnostic correction increment
 
