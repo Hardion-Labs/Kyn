@@ -1,0 +1,20 @@
+struct FloatBox { value: f32 }
+struct DoubleBox { value: f64 }
+
+extern fn c_transform_float(value: FloatBox) FloatBox;
+extern fn c_transform_double(value: DoubleBox) DoubleBox;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform_float(value: FloatBox) FloatBox {
+    return FloatBox { value: value.value + 2.0 };
+}
+
+export fn kyn_transform_double(value: DoubleBox) DoubleBox {
+    return DoubleBox { value: value.value + 3.0 };
+}
+
+fn main() i32 {
+    let single: FloatBox = c_transform_float(FloatBox { value: 1.5 });
+    let double: DoubleBox = c_transform_double(DoubleBox { value: 2.5 });
+    return (single.value as i32) + (double.value as i32) + c_verify_kyn();
+}

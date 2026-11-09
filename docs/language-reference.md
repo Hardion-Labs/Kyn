@@ -202,11 +202,15 @@ fn log_message() {
   16 bytes are supported when each occupied System V eightbyte merges to the
   `INTEGER` class; these use up to two `i64` registers with zero-padded partial
   eightbytes. A float field may participate when an integer field in the same
-  eightbyte makes the merged class `INTEGER`. Larger supported structs use
-  hidden `sret`/`byval` pointers. Slices match a C struct
-  `{ T *ptr; size_t len; }`. Fixed arrays and unsupported target/class layouts
-  (including small aggregates with an `SSE`-only eightbyte) are rejected with
-  `E0473`.
+  eightbyte makes the merged class `INTEGER`. A one-field direct `f32`/`f64`
+  struct uses scalar SSE; exactly two adjacent direct `f32` fields use one
+  `<2 x float>` SSE/SSEUP value; exactly two direct `f64` fields use two SSE
+  registers with LLVM `{ double, double }` return coercion; and a direct
+  `{ f64, i32 }` or `{ f64, u32 }` struct with fields at offsets 0 and 8 uses
+  `double, i32` arguments and `{ double, i32 }` return coercion. Larger supported structs
+  use hidden `sret`/`byval` pointers. Slices match a C struct
+  `{ T *ptr; size_t len; }`. Fixed arrays and other unsupported small
+  target/class layouts are rejected with `E0473`.
 - A function with a non-void return type must return on every path; otherwise
   `E0414`.
 - `return;` is valid only in a `void` function.
@@ -444,9 +448,12 @@ let sum: i32 = add(1, 2);
 - Arguments are evaluated left to right.
 - Aggregate arguments by value are passed by value within Kyn. `extern` and
   `export` functions support integer-class aggregates on `x86_64-linux`,
-  including float/integer members merged within one eightbyte, plus larger
-  aggregates passed via `byval`; fixed arrays and unsupported `SSE`-only
-  layouts are rejected with `E0473`.
+  including float/integer members merged within one eightbyte, one-field
+  `f32`/`f64` structs via scalar SSE, two-adjacent-`f32` structs via
+  `<2 x float>` SSE/SSEUP, two-direct-`f64` structs via two SSE argument
+  registers, direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
+  and larger aggregates passed via `byval`; fixed arrays and other unsupported
+  small layouts are rejected with `E0473`.
 
 ### 5.7 Casts
 

@@ -241,8 +241,14 @@ pointer regardless of how the pointer variable itself was declared.
   bytes are passed in `INTEGER`-class registers; float and integer fields may
   share an eightbyte when the merged class is `INTEGER`. Larger supported
   aggregates use `sret`/`byval` memory passing.
-- Small aggregates with an `SSE`-only eightbyte and fixed arrays by value are
-  rejected with `E0473`; other hosts/unsupported layouts are rejected too.
+- A struct containing one direct `f32`/`f64` field crosses `extern`/`export`
+  boundaries as one scalar SSE value. Exactly two adjacent direct `f32` fields
+  use one `<2 x float>` SSE/SSEUP value; exactly two direct `f64` fields use
+  two SSE registers and an LLVM `{ double, double }` return coercion. A direct
+  `{ f64, i32 }` or `{ f64, u32 }` struct with the integer at offset 8 uses
+  `double, i32` arguments and an LLVM `{ double, i32 }` return. Other unsupported small
+  SSE/INTEGER layouts, fixed arrays by value, and unsupported targets are
+  rejected with `E0473`.
 - Slices may also cross the C ABI boundary when their layout matches a C
   `struct { ptr, usize }`.
 - A pointer to an aggregate remains the preferred way to avoid large copies.

@@ -63,7 +63,10 @@ Milestones below are directions, not release promises.
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
 - Complete System V C ABI coercions for remaining `SSE`/`SSEUP` aggregate
   classes and specify cross-compilation targets before exposing those layouts
-  across `extern`/`export`.
+  across `extern`/`export`. Implemented subsets: one direct `f32`/`f64` field
+  via scalar SSE, exactly two direct `f32` fields via `<2 x float>`, and exactly
+  two direct `f64` fields via two SSE parameter registers and an LLVM pair
+  return, and direct `{ f64, i32 }` at offsets 0/8 via SSE+INTEGER registers.
 - Keep the all-checks-enabled runtime policy stable across profiles unless a
   separate language-level decision explicitly specifies observable profile
   differences and adds profile-specific regressions.

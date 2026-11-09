@@ -100,6 +100,10 @@ pub const Type = union(enum) {
     char,
     int: IntInfo,
     float: u16,
+    /// Backend-only transport types for System V SSE aggregate coercions.
+    abi_vec2_f32,
+    abi_pair_f64,
+    abi_f64_i32,
     pointer: PointerInfo,
     array: ArrayInfo,
     slice: SliceInfo,
@@ -163,6 +167,9 @@ pub const Type = union(enum) {
                 .float => |bbits| abits == bbits,
                 else => false,
             },
+            .abi_vec2_f32 => b.* == .abi_vec2_f32,
+            .abi_pair_f64 => b.* == .abi_pair_f64,
+            .abi_f64_i32 => b.* == .abi_f64_i32,
             .pointer => |ap| switch (b.*) {
                 .pointer => |bp| ap.is_const == bp.is_const and eql(ap.elem, bp.elem),
                 else => false,
@@ -205,6 +212,9 @@ pub const Type = union(enum) {
             .char => "char",
             .int => |info| info.name(),
             .float => |bits| if (bits == 32) "f32" else "f64",
+            .abi_vec2_f32 => "<2 x f32 ABI value>",
+            .abi_pair_f64 => "<f64, f64 ABI value>",
+            .abi_f64_i32 => "<f64, i32 ABI value>",
             .pointer => |p| std.fmt.bufPrint(buffer, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 p.elem.displayName(buffer[@min(buffer.len, 8)..]),

@@ -27,6 +27,11 @@ const BoundaryClass = enum {
     none,
     small_1,
     small_2,
+    sse_float,
+    sse_double,
+    sse_f32x2,
+    sse_f64x2,
+    sse_f64_i32,
     memory,
 };
 
@@ -189,6 +194,24 @@ pub const Lowering = struct {
                     try params_list.append(self.allocator, .{ .local = hidden_id, .ty = i64_ty });
                     hidden_id += 1;
                 },
+                .sse_float => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .float = 32 }) });
+                    hidden_id += 1;
+                },
+                .sse_double => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .float = 64 }) });
+                    hidden_id += 1;
+                },
+                .sse_f32x2 => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.abi_vec2_f32) });
+                    hidden_id += 1;
+                },
+                .sse_f64x2, .sse_f64_i32 => {
+                    for (ty.struct_type.fields) |field| {
+                        try params_list.append(self.allocator, .{ .local = hidden_id, .ty = field.ty });
+                        hidden_id += 1;
+                    }
+                },
                 .none => {
                     try params_list.append(self.allocator, .{ .local = hidden_id, .ty = ty });
                     hidden_id += 1;
@@ -202,6 +225,11 @@ pub const Lowering = struct {
             .none => if (fd.ret_expr == null) void_ty else info.ret,
             .small_1 => i64_ty,
             .small_2 => i128_ty,
+            .sse_float => try self.simpleType(.{ .float = 32 }),
+            .sse_double => try self.simpleType(.{ .float = 64 }),
+            .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
+            .sse_f64x2 => try self.simpleType(.abi_pair_f64),
+            .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
         };
 
         const function = try self.allocator.create(ir.Function);
@@ -233,6 +261,11 @@ pub const Lowering = struct {
         return switch (class) {
             .small_1 => .small_1,
             .small_2 => .small_2,
+            .sse_float => .sse_float,
+            .sse_double => .sse_double,
+            .sse_f32x2 => .sse_f32x2,
+            .sse_f64x2 => .sse_f64x2,
+            .sse_f64_i32 => .sse_f64_i32,
             .memory => .memory,
         };
     }
@@ -503,7 +536,7 @@ pub const Lowering = struct {
             const sym = param.sym orelse continue;
             const class = if (boundary) self.aggregateBoundaryParam(sym.ty) else BoundaryClass.none;
             const padding: ?u16 = switch (class) {
-                .small_1, .small_2 => @intCast(self.aggregateSize(sym.ty) orelse 8),
+                .small_1, .small_2, .sse_float, .sse_double, .sse_f32x2, .sse_f64x2, .sse_f64_i32 => @intCast(self.aggregateSize(sym.ty) orelse 8),
                 .memory => @intCast(self.aggregateSize(sym.ty) orelse 16),
                 .none => null,
             };
@@ -525,6 +558,40 @@ pub const Lowering = struct {
                         try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 8, .{ .param = lo }, 0);
                         try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 16, .{ .param = hi }, 8);
                         visible_index += 2;
+                    },
+                    .sse_float, .sse_double => {
+                        if (function.params.len <= visible_index) break;
+                        const field_ty = sym.ty.struct_type.fields[0].ty;
+                        try self.emit(.{ .store = .{
+                            .ptr = .{ .local = sym.id },
+                            .value = .{ .param = function.params[visible_index].local },
+                            .ty = field_ty,
+                        } });
+                        visible_index += 1;
+                    },
+                    .sse_f32x2 => {
+                        if (function.params.len <= visible_index) break;
+                        const vector_ty = try self.simpleType(.abi_vec2_f32);
+                        try self.emit(.{ .store = .{
+                            .ptr = .{ .local = sym.id },
+                            .value = .{ .param = function.params[visible_index].local },
+                            .ty = vector_ty,
+                        } });
+                        visible_index += 1;
+                    },
+                    .sse_f64x2, .sse_f64_i32 => {
+                        const info = sym.ty.struct_type;
+                        if (function.params.len < visible_index + info.fields.len) break;
+                        for (0..info.fields.len) |field_index| {
+                            const field_ty = info.fields[field_index].ty;
+                            const field_ptr = try self.aggregateFieldPointer(.{ .local = sym.id }, info, @intCast(field_index));
+                            try self.emit(.{ .store = .{
+                                .ptr = field_ptr,
+                                .value = .{ .param = function.params[visible_index + field_index].local },
+                                .ty = field_ty,
+                            } });
+                        }
+                        visible_index += info.fields.len;
                     },
                     .memory => {
                         if (function.params.len <= visible_index) break;
@@ -564,6 +631,24 @@ pub const Lowering = struct {
         _ = self;
         const layout = sema_mod.aggregateLayoutGuess(ty) orelse return null;
         return @intCast(layout.size);
+    }
+
+    fn aggregateFieldPointer(
+        self: *Lowering,
+        base: ir.Value,
+        info: *types.StructInfo,
+        field_index: u32,
+    ) Error!ir.Value {
+        const field_ty = info.fields[field_index].ty;
+        const pointer_ty = try self.makePointer(field_ty, false);
+        const pointer = try self.reg(pointer_ty);
+        try self.emit(.{ .field_ptr = .{
+            .dst = pointer,
+            .base = base,
+            .struct_ty = info,
+            .field = field_index,
+        } });
+        return .{ .reg = pointer };
     }
 
     fn lowerPackedAggregate(
@@ -620,7 +705,6 @@ pub const Lowering = struct {
             .while_stmt => |while_stmt| try self.lowerWhile(while_stmt),
             .return_stmt => |ret_stmt| {
                 if (ret_stmt.value) |expr| {
-                    const value = try self.lowerExpr(expr);
                     const function = self.currentFunction();
                     const boundary = if (self.current_fd) |fd| fd.is_extern or fd.is_export else false;
                     const ret_class = if (self.current_fd) |fd| blk: {
@@ -629,6 +713,8 @@ pub const Lowering = struct {
                         if (!boundary) break :blk BoundaryClass.none;
                         break :blk self.aggregateBoundaryParam(ret_ty);
                     } else BoundaryClass.none;
+                    const sse_abi_return = ret_class == .sse_float or ret_class == .sse_double or ret_class == .sse_f32x2 or ret_class == .sse_f64x2 or ret_class == .sse_f64_i32;
+                    const value: ir.Value = if (sse_abi_return) .none else try self.lowerExpr(expr);
                     const hidden_sret = boundary and ret_class == .memory;
                     if (hidden_sret) {
                         try self.emit(.{ .store = .{
@@ -638,7 +724,22 @@ pub const Lowering = struct {
                         } });
                         try self.emit(.{ .ret = .{ .value = null } });
                     } else {
-                        if (ret_class == .small_1 or ret_class == .small_2) {
+                        if (sse_abi_return) {
+                            const aggregate_ptr = try self.lowerAggregateBase(expr, expr.ty.?);
+                            const abi_ty = switch (ret_class) {
+                                .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
+                                .sse_f64x2 => try self.simpleType(.abi_pair_f64),
+                                .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
+                                else => expr.ty.?.struct_type.fields[0].ty,
+                            };
+                            const field_value = try self.reg(abi_ty);
+                            try self.emit(.{ .load = .{
+                                .dst = field_value,
+                                .ptr = aggregate_ptr,
+                                .ty = abi_ty,
+                            } });
+                            try self.emit(.{ .ret = .{ .value = .{ .reg = field_value } } });
+                        } else if (ret_class == .small_1 or ret_class == .small_2) {
                             const storage_ty = if (ret_class == .small_1)
                                 try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } })
                             else
@@ -1136,6 +1237,49 @@ pub const Lowering = struct {
                     try types_list.append(self.allocator, i64_ty);
                     try byval_list.append(self.allocator, null);
                 },
+                .sse_float, .sse_double => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const field_ty = ty.struct_type.fields[0].ty;
+                    const field_value = try self.reg(field_ty);
+                    try self.emit(.{ .load = .{
+                        .dst = field_value,
+                        .ptr = slot,
+                        .ty = field_ty,
+                    } });
+                    try args_list.append(self.allocator, .{ .reg = field_value });
+                    try types_list.append(self.allocator, field_ty);
+                    try byval_list.append(self.allocator, null);
+                },
+                .sse_f32x2 => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const vector_ty = try self.simpleType(.abi_vec2_f32);
+                    const vector_value = try self.reg(vector_ty);
+                    try self.emit(.{ .load = .{
+                        .dst = vector_value,
+                        .ptr = slot,
+                        .ty = vector_ty,
+                    } });
+                    try args_list.append(self.allocator, .{ .reg = vector_value });
+                    try types_list.append(self.allocator, vector_ty);
+                    try byval_list.append(self.allocator, null);
+                },
+                .sse_f64x2, .sse_f64_i32 => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const info = ty.struct_type;
+                    for (0..info.fields.len) |field_index| {
+                        const field_ty = info.fields[field_index].ty;
+                        const field_ptr = try self.aggregateFieldPointer(slot, info, @intCast(field_index));
+                        const field_value = try self.reg(field_ty);
+                        try self.emit(.{ .load = .{
+                            .dst = field_value,
+                            .ptr = field_ptr,
+                            .ty = field_ty,
+                        } });
+                        try args_list.append(self.allocator, .{ .reg = field_value });
+                        try types_list.append(self.allocator, field_ty);
+                        try byval_list.append(self.allocator, null);
+                    }
+                },
                 .small_2 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
                     const size = self.aggregateSize(ty) orelse 16;
@@ -1183,6 +1327,11 @@ pub const Lowering = struct {
         const value_ty = switch (ret_class) {
             .small_1 => i64_ty,
             .small_2 => i128_ty,
+            .sse_float => try self.simpleType(.{ .float = 32 }),
+            .sse_double => try self.simpleType(.{ .float = 64 }),
+            .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
+            .sse_f64x2 => try self.simpleType(.abi_pair_f64),
+            .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
             .memory, .none => void_ty,
         };
 
@@ -1207,6 +1356,24 @@ pub const Lowering = struct {
 
         switch (ret_class) {
             .none => return if (dst) |id| .{ .reg = id } else .none,
+            .sse_float, .sse_double, .sse_f32x2, .sse_f64x2, .sse_f64_i32 => {
+                const temp = self.module.ephemeral();
+                try self.addLocal(temp, "tmp.aggregate", call_result, null);
+                const abi_ty = switch (ret_class) {
+                    .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
+                    .sse_f64x2 => try self.simpleType(.abi_pair_f64),
+                    .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
+                    else => call_result.struct_type.fields[0].ty,
+                };
+                try self.emit(.{ .store = .{
+                    .ptr = .{ .local = temp },
+                    .value = .{ .reg = dst.? },
+                    .ty = abi_ty,
+                } });
+                const result = try self.reg(call_result);
+                try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = temp }, .ty = call_result } });
+                return .{ .reg = result };
+            },
             .small_1, .small_2 => {
                 const temp = self.module.ephemeral();
                 try self.addLocal(temp, "tmp.aggregate", call_result, null);
@@ -2029,6 +2196,9 @@ pub const Emitter = struct {
             .char => 4,
             .int => |info| @min(@as(u16, @intCast(info.bits / 8)), 16),
             .float => |bits| if (bits <= 32) 4 else 8,
+            .abi_vec2_f32 => 4,
+            .abi_pair_f64 => 8,
+            .abi_f64_i32 => 8,
             .pointer => 8,
             .enum_type => |info| llvmAlignmentOfType(info.backing),
             .array => |array| llvmAlignmentOfType(array.elem),
@@ -2237,6 +2407,7 @@ pub const Emitter = struct {
             .load => |load| {
                 try writer.print("  %t{d} = load {s}, ptr ", .{ load.dst, try self.typeString(load.ty) });
                 try self.emitValue(writer, load.ptr, null);
+                if (load.ty.* == .abi_vec2_f32) try writer.writeAll(", align 4");
                 try writer.writeByte('\n');
             },
             .store => |store| {
@@ -2244,6 +2415,7 @@ pub const Emitter = struct {
                 try self.emitValue(writer, store.value, store.ty);
                 try writer.writeAll(", ptr ");
                 try self.emitValue(writer, store.ptr, null);
+                if (store.ty.* == .abi_vec2_f32) try writer.writeAll(", align 4");
                 try writer.writeByte('\n');
             },
             .br => |branch| {
@@ -2374,6 +2546,9 @@ pub const Emitter = struct {
             .char => "i32",
             .int => |info| try std.fmt.allocPrint(self.allocator, "i{d}", .{info.bits}),
             .float => |bits| if (bits == 32) "float" else "double",
+            .abi_vec2_f32 => "<2 x float>",
+            .abi_pair_f64 => "{ double, double }",
+            .abi_f64_i32 => "{ double, i32 }",
             .pointer => "ptr",
             .array => |array| try std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{
                 array.len,

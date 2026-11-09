@@ -51,10 +51,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     `INTEGER`-class eightbytes. Aggregates `<= 16` bytes use 1–2 `i64` registers
     (with zero-padded packing for partial eightbytes); larger supported layouts
     use `sret`/`byval` on `x86_64` Linux.
-  - *Not yet implemented:* Small aggregate eightbytes classified as `SSE` or
-    `SSEUP` without an `INTEGER` merge (rejected with `E0473`), by-value fixed
-    arrays, variadic `extern fn`, non-`x86_64-linux` calling conventions, and
-    function pointers/callbacks.
+  - *Implemented & validated:* A one-field direct `f32`/`f64` struct crosses
+    the boundary as a scalar SSE value. Exactly two adjacent direct `f32` fields
+    use LLVM `<2 x float>` for SSE/SSEUP; exactly two direct `f64` fields use
+    two SSE argument registers and an LLVM `{ double, double }` return; and a
+    direct `{ f64, i32 }` at offsets 0/8 uses SSE `double` plus INTEGER `i32`.
+    Other unsupported small mixed-class layouts remain rejected with `E0473`.
+  - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
+    by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
+    conventions, and function pointers/callbacks.
 - **Safety profiles (`compiler/driver.zig`, [safety-model.md](safety-model.md)):**
   - *Implemented & validated:* All four profiles (`debug`, `safe`, `release`,
     `fast`) map to Clang optimization flags and emit the full set of runtime
@@ -158,8 +163,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 - `sema.aggregateBoundaryClass(ty)` / `sema.aggregateLayoutGuess(ty)`:
   classifies supported C ABI aggregates into `.small_1` (`<= 8B`), `.small_2`
   (`9..16B`), or `.memory` (`> 16B` `sret`/`byval`). The classifier tracks
-  integer/SSE presence per eightbyte and currently accepts SSE+INTEGER merges
-  into `INTEGER`; small SSE-only eightbytes remain unsupported.
+  integer/SSE presence per eightbyte and accepts SSE+INTEGER merges into
+  `INTEGER`. One direct `f32`/`f64` field maps to scalar SSE; exactly two
+  adjacent direct `f32` fields map to `<2 x float>` SSE/SSEUP; exactly two
+  direct `f64` fields map to the `{ double, double }` return pair and two scalar
+  `double` arguments. A direct `{ f64, i32 }` at offsets 0/8 maps to
+  `double, i32` parameters and `{ double, i32 }` returns. Other unsupported
+  SSE/SSEUP and split-class layouts remain rejected.
 
 ## 7. Files modified / added in the current increment
 
@@ -266,10 +276,91 @@ branch history; this increment does not redo them.
   coercion for small SSE-only aggregates, fixed arrays, function pointers, and
   non-x86_64 Linux targets remain unsupported.
 
-## 13. Next logical task for resumption
+## 13. Scalar SSE aggregate ABI increment (completed)
 
-Continue the ABI increment only after reviewing its current tests and classifier.
-The next ABI task is either a separately specified SSE/SSEUP coercion subset or
-another roadmap item; do not enable unsupported eightbyte classes without exact
-Clang/C interoperability coverage. Explicit module re-export syntax remains a
-language-design decision, not an assumed feature.
+- A struct with exactly one direct `f32` or `f64` field uses an LLVM scalar
+  float/double for C ABI parameters and returns. The backend reconstructs
+  incoming values and materializes results without changing the internal Kyn
+  aggregate ABI.
+- C↔Kyn tests cover argument and return paths for both widths. Multi-field
+  float layouts remained rejected at this increment's boundary.
+- At that stage formatting, Debug/ReleaseSafe unit tests and integration passed;
+  both integration runs reported `133 passed, 0 failed` using Zig's bundled
+  Clang frontend (`zig cc`).
+
+## 14. Two-f32 SSE/SSEUP aggregate ABI increment (completed)
+
+- Scope: only a struct with exactly two adjacent direct `f32` fields, occupying
+  eight bytes, is classified as SSE/SSEUP and lowered as LLVM `<2 x float>`.
+  The backend keeps this transport-only type internal, emits explicit `align 4`
+  for vector loads/stores to honor the struct's natural C alignment, and leaves
+  source-level field access and the internal Kyn ABI unchanged.
+- C↔Kyn argument/return regression coverage was added. Existing two-f32
+  rejection fixtures now exercise three-f32 aggregates; nested pairs and the
+  reverse mixed-class order (`{ i32, f64 }`) remain rejected with `E0473`.
+- Validation complete: `zig fmt --check build.zig compiler build-system`,
+  Debug/ReleaseSafe unit tests, and full Debug/ReleaseSafe integration pass.
+  Each integration run reports `134 passed, 0 failed`, including the new
+  `cabi_sseup_f32_pair` exit-57 fixture, diagnostics, docs checks, 900 robustness
+  cases, runtime-check profile matrix, and Kyn+C+Zig interop. Zig `0.17.0` and
+  its bundled Clang frontend (`zig cc`) were installed under `/tmp` because no
+  system Zig or standalone Clang was present. No sanitizer gate is configured.
+- Git/PR state verified: the working branch is `arena/2b67c8fb-kyn` at
+  `7f9cb2c` (published base); PR #1 is open and its remote head is `b3e8909`.
+  The PR implementation already exists in this checkout as a large set of
+  uncommitted tracked/untracked files, along with this increment. Preserve the
+  divergence; no reset, commit, push, or merge was performed. The GitHub CI
+  success belongs to the prior PR head, not this local working tree.
+
+## 15. Two-f64 SSE aggregate ABI increment (completed)
+
+- Scope: support only a struct with exactly two direct `f64` fields and natural
+  size 16. The classifier identifies the two SSE eightbytes; declarations and
+  definitions flatten parameters to two LLVM `double`s and represent the
+  return as LLVM `{ double, double }`. The backend uses field-pointer loads and
+  stores for arguments and direct aggregate-memory coercion for the return.
+- Nested `{ f64, f64 }` wrappers and other unsupported SSE layouts remain
+  rejected rather than being accepted based only on size or SSE presence.
+- Added C↔Kyn parameter and return coverage in both directions and sema
+  acceptance/rejection regressions. Debug and ReleaseSafe unit and integration
+  gates pass; each integration run reports `135 passed, 0 failed`, including
+  `cabi_sse_f64_pair` (exit 39), docs/diagnostic gates, 900 robustness cases,
+  runtime-check profiles, and Kyn+C+Zig linking. `zig fmt --check` also passes.
+- No sanitizer run was performed; no sanitizer gate is configured. Zig 0.17.0
+  and its bundled Clang (`zig cc`) reside under `/tmp` for this validation.
+- Git divergence recorded for section 14 remains: local HEAD is `7f9cb2c`, PR
+  #1 remote head `b3e8909`, and prior implementation is an uncommitted patchset.
+  Preserve that state; no reset, commit, push or merge was performed.
+
+## 16. Direct f64+i32 SSE/INTEGER aggregate ABI increment (completed)
+
+- Scope: only a two-field struct with direct `f64` at offset 0 followed by
+  `i32`/`u32` at offset 8 and natural size 16. It classifies to SSE then
+  INTEGER. LLVM declarations/definitions flatten arguments as `double, i32`
+  and coerce returns as `{ double, i32 }`; this mapping was checked against
+  Clang 22 IR.
+- The backend uses an internal ABI-only composite type for the return and
+  field-pointer loads/stores for flattened parameters. Internal Kyn aggregate
+  calls are unchanged. Reverse field order, nested wrappers and other split
+  SSE/INTEGER layouts remain rejected with `E0473`.
+- C↔Kyn tests and semantic coverage include both `i32` and `u32` signatures;
+  the C interoperability fixture verifies `i32`. Debug and ReleaseSafe unit
+  and integration gates pass; each integration run reports `136 passed, 0
+  failed`, including `cabi_mixed_sse_integer` (exit 43), docs/diagnostic gates,
+  900 robustness cases, runtime-check profiles and Kyn+C+Zig linking. Formatting
+  checks pass.
+- No sanitizer run was performed; no sanitizer gate is configured. The checkout/
+  PR divergence recorded in section 15 remains unchanged; preserve every
+  existing uncommitted file and do not reset, commit, push or force-push.
+
+## 17. Next logical ABI increment
+
+- Evaluate the reverse direct order `{ i32, f64 }` at offsets 0/8. Clang 22
+  emits `i32, double` arguments and `{ i32, double }` returns; this probe was
+  confirmed locally, but the compiler still rejects the layout with `E0473`.
+- Implement only with exact-shape classification and bidirectional C↔Kyn
+  argument/return coverage. Do not generalize other mixed eightbyte orders or
+  nested forms without equivalent ABI evidence.
+
+Explicit module re-export syntax remains a language-design decision, not an
+assumed feature.

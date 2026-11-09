@@ -22,10 +22,18 @@ extern fn free(ptr: *u8);
   Aggregates up to 16 bytes whose occupied System V eightbytes merge to the
   `INTEGER` class use one or two 64-bit integer registers, with safe zero-padded
   packing for partial eightbytes. This includes a float field when an integer
-  field in the same eightbyte causes the merged class to be `INTEGER`. Larger
-  supported structs use hidden `byval`/`sret` pointers. Fixed arrays and small
-  aggregates with an `SSE`-only eightbyte remain unsupported at C boundaries
-  (`E0473`). Slice boundaries match a C struct `{ T *ptr; size_t len; }`.
+  field in the same eightbyte causes the merged class to be `INTEGER`. A struct
+  containing one direct `f32`/`f64` field uses scalar SSE; exactly two
+  adjacent direct `f32` fields use one `<2 x float>` SSE/SSEUP value; and
+  exactly two direct `f64` fields use two SSE registers (LLVM arguments are
+  two `double`s and return coercion is `{ double, double }`). A direct
+  `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
+  8 uses one `double` and one LLVM `i32` argument and returns as
+  `{ double, i32 }`. Larger supported
+  structs use hidden `byval`/`sret` pointers. Fixed arrays and other
+  unsupported small SSE layouts remain rejected at C boundaries (`E0473`).
+  Slice boundaries match a C struct
+  `{ T *ptr; size_t len; }`.
 - Only the x86_64 System V calling convention is supported in v0.1.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
@@ -82,11 +90,16 @@ Caveats:
   `u8`/`i32` in `extern` signatures when interoperating with code that is
   sensitive to this.
 - `usize`/`isize` are currently fixed at 64 bits; see the type-system document.
-- Plain C-layout structs up to 16 bytes are passed by value when every
-  occupied eightbyte merges to the `INTEGER` class; float+integer fields in the
-  same eightbyte are supported. Larger supported aggregates use the
-  hidden-pointer `byval`/`sret` form. Fixed arrays by value and small structs
-  with an `SSE`-only eightbyte remain unsupported; pass a pointer instead.
+- Plain C-layout structs up to 16 bytes are passed by value when their classes
+  are supported. INTEGER-class eightbytes include float+integer fields in the
+  same eightbyte; a one-field `f32`/`f64` struct uses scalar SSE, a two-field
+  direct `f32` struct uses `<2 x float>` for SSE/SSEUP, and a two-field direct
+  `f64` struct uses two SSE registers, and a direct `{ f64, i32 }` or
+  `{ f64, u32 }` struct with the integer at offset 8 uses an SSE `double` plus
+  INTEGER `i32` register.
+  Larger supported aggregates use the hidden-pointer `byval`/`sret` form. Fixed
+  arrays and other unsupported SSE/INTEGER layouts remain unsupported; pass a
+  pointer instead.
 - Slices are passed by value as pointer+length, matching a C
   `struct { ptr base; size_t len; }` layout.
 - Enums are passed as their backing integer, but a C enum's width is

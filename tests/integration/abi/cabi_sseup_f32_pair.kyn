@@ -1,0 +1,16 @@
+struct FloatPair { low: f32, high: f32 }
+
+extern fn c_transform_pair(value: FloatPair) FloatPair;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_scale_pair(value: FloatPair) FloatPair {
+    return FloatPair {
+        low: value.low * 2.0,
+        high: value.high + 3.0,
+    };
+}
+
+fn main() i32 {
+    let result: FloatPair = c_transform_pair(FloatPair { low: 1.5, high: 2.0 });
+    return (result.low as i32) + (result.high as i32) + c_verify_kyn();
+}

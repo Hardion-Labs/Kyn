@@ -1,0 +1,16 @@
+struct DoublePair { low: f64, high: f64 }
+
+extern fn c_transform_pair(value: DoublePair) DoublePair;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform_pair(value: DoublePair) DoublePair {
+    return DoublePair {
+        low: value.low + 1.0,
+        high: value.high + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: DoublePair = c_transform_pair(DoublePair { low: 1.5, high: 2.5 });
+    return (result.low as i32) + (result.high as i32) + c_verify_kyn();
+}

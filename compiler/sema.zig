@@ -1703,6 +1703,9 @@ pub const Sema = struct {
             .char => "char",
             .int => |info| info.name(),
             .float => |bits| if (bits == 32) "f32" else "f64",
+            .abi_vec2_f32 => "<internal ABI vector>",
+            .abi_pair_f64 => "<internal ABI pair>",
+            .abi_f64_i32 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1745,6 +1748,11 @@ pub fn literalIntValue(expr: *ast.Expr) ?i128 {
 pub const BoundaryClass = enum {
     small_1,
     small_2,
+    sse_float,
+    sse_double,
+    sse_f32x2,
+    sse_f64x2,
+    sse_f64_i32,
     memory,
 };
 
@@ -1754,11 +1762,58 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     if (layout.size <= 16) {
         var eightbytes = [_]AggregateEightbyte{ .{}, .{} };
         if (!classifyAggregateEightbytes(ty, 0, &eightbytes)) return null;
+        if (ty.* == .struct_type and layout.size == 16) {
+            const fields = ty.struct_type.fields;
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 64 and
+                fields[1].ty.* == .float and fields[1].ty.float == 64)
+            {
+                // The System V ABI assigns the two eightbytes to separate XMM
+                // registers; LLVM returns { double, double } and flattens the
+                // two argument registers to scalar double parameters.
+                return .sse_f64x2;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 64 and
+                fields[1].ty.* == .int and fields[1].ty.int.bits == 32 and
+                eightbytes[0].has_sse and !eightbytes[0].has_integer and
+                eightbytes[1].has_integer and !eightbytes[1].has_sse)
+            {
+                // This exact natural layout merges to SSE in eightbyte 0 and
+                // INTEGER in eightbyte 1: LLVM uses double/i32 parameters and
+                // a { double, i32 } return coercion; signedness is irrelevant.
+                return .sse_f64_i32;
+            }
+        }
         const count: usize = @intCast((layout.size + 7) / 8);
-        for (eightbytes[0..count]) |class| {
-            // The current lowering can pass INTEGER-class aggregates in GPRs.
-            // An SSE-only eightbyte needs a different LLVM coercion/register.
-            if (class.has_sse and !class.has_integer) return null;
+        var sse_only_index: ?usize = null;
+        for (eightbytes[0..count], 0..) |class, index| {
+            if (!class.has_sse or class.has_integer) continue;
+            if (sse_only_index != null) return null;
+            sse_only_index = index;
+        }
+        if (sse_only_index) |index| {
+            // SSE-only aggregates are accepted only for a one-field scalar
+            // float or the exact two-f32 SSE/SSEUP pair below. SSE plus INTEGER
+            // in separate eightbytes needs a distinct lowering and is rejected.
+            if (index != 0 or layout.size > 8 or ty.* != .struct_type) return null;
+            const fields = ty.struct_type.fields;
+            if (fields.len == 1 and fields[0].ty.* == .float) {
+                return switch (fields[0].ty.float) {
+                    32 => .sse_float,
+                    64 => .sse_double,
+                    else => null,
+                };
+            }
+            // Two adjacent direct f32 fields occupy exactly one SSE/SSEUP
+            // eightbyte and use LLVM's <2 x float> ABI coercion.
+            if (layout.size == 8 and fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 32 and
+                fields[1].ty.* == .float and fields[1].ty.float == 32)
+            {
+                return .sse_f32x2;
+            }
+            return null;
         }
     }
     if (layout.size <= 8) return .small_1;
@@ -2103,10 +2158,24 @@ test "aggregate parameters and returns are supported within Kyn" {
 
 test "C ABI INTEGER eightbytes accept mixed float and integer fields" {
     try expectSemanticError(
-        \\struct SseInteger { amount: f64, count: i32 }
+        \\struct SseInteger { count: i32, amount: f64 }
         \\extern fn c_take(value: SseInteger);
         \\fn main() i32 { return 0; }
     , "E0473");
+
+    try expectClean(
+        \\struct DoubleInt { amount: f64, count: i32 }
+        \\extern fn c_take(value: DoubleInt) DoubleInt;
+        \\export fn kyn_identity(value: DoubleInt) DoubleInt { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct DoubleUInt { amount: f64, count: u32 }
+        \\extern fn c_take(value: DoubleUInt) DoubleUInt;
+        \\export fn kyn_identity(value: DoubleUInt) DoubleUInt { return value; }
+        \\fn main() i32 { return 0; }
+    );
 
     try expectClean(
         \\struct FloatInt { amount: f32, count: i32 }
@@ -2130,14 +2199,35 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
     , "E0410");
 
     try expectSemanticError(
-        \\struct FloatPair { x: f32, y: f32 }
-        \\extern fn c_take(pair: FloatPair);
+        \\struct FloatTriple { x: f32, y: f32, z: f32 }
+        \\extern fn c_take(pair: FloatTriple);
         \\fn main() i32 { return 0; }
     , "E0473");
 
     try expectSemanticError(
+        \\struct FloatTriple { x: f32, y: f32, z: f32 }
+        \\export fn kyn_make() FloatTriple { return FloatTriple { x: 1.0, y: 2.0, z: 3.0 }; }
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectClean(
         \\struct FloatPair { x: f32, y: f32 }
-        \\export fn kyn_make() FloatPair { return FloatPair { x: 1.0, y: 2.0 }; }
+        \\extern fn c_take(pair: FloatPair) FloatPair;
+        \\export fn kyn_identity(pair: FloatPair) FloatPair { return pair; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct DoublePair { x: f64, y: f64 }
+        \\extern fn c_take(pair: DoublePair) DoublePair;
+        \\export fn kyn_identity(pair: DoublePair) DoublePair { return pair; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectSemanticError(
+        \\struct DoublePair { x: f64, y: f64 }
+        \\struct NestedPair { pair: DoublePair }
+        \\extern fn c_take(pair: NestedPair);
         \\fn main() i32 { return 0; }
     , "E0473");
 
