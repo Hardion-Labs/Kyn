@@ -6,7 +6,7 @@ const diagnostics = @import("diagnostics.zig");
 const driver = @import("driver.zig");
 const ast = @import("ast.zig");
 
-const version = "0.1.0-alpha.1";
+const version = "0.1.0-alpha.2";
 
 const Command = enum {
     check,

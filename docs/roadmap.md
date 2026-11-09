@@ -1,13 +1,13 @@
 # Kyn roadmap
 
-`v0.1.0-alpha.1` is the current principal release:
-https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1
+`v0.1.0-alpha.2` is the current principal release:
+https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2
 
-Subsequent work builds from that published toolchain. There are no published
-`alpha.2`, `alpha.3` or `beta.1` pre-release artifacts and no selected next
-version number yet. Milestones below are directions, not release promises.
+Subsequent work builds from that published toolchain. No `alpha.3` or
+`beta.1` pre-release artifacts exist and no next version number is selected.
+Milestones below are directions, not release promises.
 
-## v0.1.0-alpha.1 — published preview
+## v0.1.0-alpha.2 — published preview
 
 - Source manager, lexer, parser and AST.
 - Name resolution, type checking and lvalues.
@@ -15,6 +15,7 @@ version number yet. Milestones below are directions, not release promises.
 - Typed CFG IR and textual LLVM backend.
 - `check`, `emit-llvm`, `emit-obj`, `build` and `run`.
 - C ABI calls and exports, plus a hybrid Kyn/C/Zig example.
+- C ABI lowering for integer-like aggregates and slices on x86_64-linux.
 - Global scalar/aggregate/enum constants.
 - Aggregates by value inside Kyn and slices (`[]T`, `[]const T`).
 - Runtime fixed-array and slice bounds checks.

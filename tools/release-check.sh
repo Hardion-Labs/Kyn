@@ -13,8 +13,8 @@ usage() {
 Usage: tools/release-check.sh <version> [expected-sha]
 
 Examples:
-  tools/release-check.sh 0.1.0-alpha.1
-  tools/release-check.sh 0.1.0-alpha.1 fc243bb0629ac441b28c0698c219956bbe9a0589
+  tools/release-check.sh 0.1.0-alpha.2
+  tools/release-check.sh 0.1.0-alpha.2 <approved-sha>
 
 The script checks:
   - current checkout is clean and on `main`;

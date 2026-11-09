@@ -15,14 +15,14 @@
 
 [![License](https://img.shields.io/badge/license-MIT-3DA639?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-critical?style=for-the-badge)](#-current-limitations)
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha.2-blue?style=for-the-badge)](#)
 [![Zig](https://img.shields.io/badge/Zig-0.17.0-F7A41D?style=for-the-badge&logo=zig&logoColor=white)](https://ziglang.org)
 [![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge)](https://github.com/Hardion-Labs/Kyn/pulls)
 
 ---
 
-> 🧪 **Status:** `v0.1.0-alpha.1` — *published preview, actively developed.*  
-> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1).  
+> 🧪 **Status:** `v0.1.0-alpha.2` — *published preview, actively developed.*  
+> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2).  
 > Features listed under [Current Limitations](#-current-limitations) are **not implemented**.
 
 </div>
@@ -258,7 +258,7 @@ The integration suite covers:
 Release readiness can be audited without creating a tag or release:
 
 ```sh
-tools/release-check.sh 0.1.0-alpha.1 "$(git rev-parse HEAD)"
+tools/release-check.sh 0.1.0-alpha.2 "$(git rev-parse HEAD)"
 ```
 
 ---
@@ -283,8 +283,8 @@ build.zig            Builds the toolchain and wires test steps
 
 | Milestone | Status |
 |:---|:---|
-| `v0.1.0-alpha.1` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.1) |
-| C ABI lowering for integer-like aggregates and slices | ✅ In `main`, not in `v0.1.0-alpha.1` |
+| `v0.1.0-alpha.2` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2) |
+| C ABI lowering for integer-like aggregates and slices | ✅ Shipped in `v0.1.0-alpha.2` |
 | Const-polymorphic slicing and subslice syntax | 🔜 Planned |
 | Modules and package manifest | 🔜 Planned |
 

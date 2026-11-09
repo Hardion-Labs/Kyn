@@ -4,6 +4,43 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
+## [0.1.0-alpha.2] - 2026-11-09
+
+C ABI boundary support for integer-like aggregates.
+
+### Added
+
+- C ABI lowering for integer-like aggregates (`struct` fields, `enum`,
+  `usize`/`isize`, pointers, bool, char) up to 16 bytes by value on
+  `x86_64-linux`.
+- Support for slices (`[]T`, `[]const T`) and large aggregates across the
+  `extern`/`export` boundary using the System V `byval`/`sret` form.
+- Runtime checks for slices and large aggregate signatures at the C boundary.
+- Integration tests for aggregate C ABI calls in both directions
+  (`tests/integration/abi/cabi_small_pair.*`, `tests/integration/abi/cabi_big.*`).
+
+### Changed
+
+- `extern`/`export` functions may pass integer-like aggregates ≤16 bytes by
+  value on x86_64-linux; arrays and floating-point aggregates remain rejected
+  with `E0410`.
+- Slice signatures at the C boundary are accepted when the layout matches
+  `struct { ptr, usize }`.
+
+### Fixed
+
+- C ABI declarations and calls no longer mismatch `%` vs `byval`/`sret`
+  pointer signatures for aggregate parameters and returns.
+
+### Known limitations
+
+- C ABI aggregate lowering covers x86_64-linux only; other targets and
+  floating-point aggregates are rejected.
+- Kyn internal ABI and C ABI lowering are distinct; Kyn cannot call C
+  functions that take arrays by value, variadics, or floating-point aggregates.
+- Slices at the C boundary require the C side to declare a compatible
+  `struct { ptr, usize }` layout.
+
 ## [0.1.0-alpha.1] - 2026-11-09
 
 First vertically functional compiler milestone. Published as the current
