@@ -1,0 +1,16 @@
+struct IntDouble { count: i32, amount: f64 }
+
+extern fn c_transform(value: IntDouble) IntDouble;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: IntDouble) IntDouble {
+    return IntDouble {
+        count: value.count + 3,
+        amount: value.amount + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: IntDouble = c_transform(IntDouble { count: 4, amount: 1.5 });
+    return result.count + (result.amount as i32) + c_verify_kyn();
+}

@@ -28,9 +28,10 @@ extern fn free(ptr: *u8);
   exactly two direct `f64` fields use two SSE registers (LLVM arguments are
   two `double`s and return coercion is `{ double, double }`). A direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
-  8 uses one `double` and one LLVM `i32` argument and returns as
-  `{ double, i32 }`. Larger supported
-  structs use hidden `byval`/`sret` pointers. Fixed arrays and other
+  8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
+  `{ i32, f64 }` / `{ u32, f64 }` layout uses `i32, double` and
+  `{ i32, double }`. Larger supported structs use hidden `byval`/`sret`
+  pointers. Fixed arrays and other
   unsupported small SSE layouts remain rejected at C boundaries (`E0473`).
   Slice boundaries match a C struct
   `{ T *ptr; size_t len; }`.
@@ -94,12 +95,12 @@ Caveats:
   are supported. INTEGER-class eightbytes include float+integer fields in the
   same eightbyte; a one-field `f32`/`f64` struct uses scalar SSE, a two-field
   direct `f32` struct uses `<2 x float>` for SSE/SSEUP, and a two-field direct
-  `f64` struct uses two SSE registers, and a direct `{ f64, i32 }` or
-  `{ f64, u32 }` struct with the integer at offset 8 uses an SSE `double` plus
-  INTEGER `i32` register.
-  Larger supported aggregates use the hidden-pointer `byval`/`sret` form. Fixed
-  arrays and other unsupported SSE/INTEGER layouts remain unsupported; pass a
-  pointer instead.
+  `f64` struct uses two SSE registers. Exact direct layouts `{ f64, i32 }` /
+  `{ f64, u32 }` use `double, i32` parameters and `{ double, i32 }` returns;
+  `{ i32, f64 }` / `{ u32, f64 }` use `i32, double` and `{ i32, double }`.
+  Larger supported aggregates use the hidden-pointer `byval`/`sret` form.
+  Fixed arrays, nested wrappers, and other unsupported SSE/INTEGER layouts
+  remain unsupported (`E0473`); pass a pointer instead.
 - Slices are passed by value as pointer+length, matching a C
   `struct { ptr base; size_t len; }` layout.
 - Enums are passed as their backing integer, but a C enum's width is

@@ -16,9 +16,11 @@ promised between alpha releases.
   `f32`/`f64` field use scalar SSE arguments/returns; a struct with exactly
   two adjacent direct `f32` fields uses one `<2 x float>` SSE/SSEUP value, and
   exactly two direct `f64` fields use two SSE argument registers with an LLVM
-  `{ double, double }` return coercion, and a direct `{ f64, i32 }` struct at
-  offsets 0/8 uses `double, i32` arguments and `{ double, i32 }` returns.
-  Larger supported float-bearing aggregates continue through the existing
+  `{ double, double }` return coercion. Direct `{ f64, i32 }` / `{ f64, u32 }`
+  structs at offsets 0/8 use `double, i32` arguments and `{ double, i32 }`
+  returns; the reverse `{ i32, f64 }` / `{ u32, f64 }` layouts use
+  `i32, double` arguments and `{ i32, double }` returns. Larger supported
+  float-bearing aggregates continue through the existing
   memory (`sret`/`byval`) form, while other unsupported layouts remain
   diagnosed with `E0473`.
 - Explicit relative-path Kyn imports with deterministic dependency-first loading, once-only module graph traversal, source-aware diagnostics, and cycle/missing-file checks. Each source owns a top-level namespace; aliases qualify declarations and unaliased imports open public names transitively. Ambiguous opens are diagnosed; top-level `private` declarations are enforced across source files.
