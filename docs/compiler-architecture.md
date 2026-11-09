@@ -105,6 +105,8 @@ type expressions. Semantic annotations are stored directly on nodes:
 - `Expr.ty` is filled by sema;
 - `Expr.Kind.Ident.sym` points at the resolved symbol;
 - `Expr.Kind.Field` stores the resolved field index or enum variant value;
+- `Expr.Kind.SliceAccess` stores optional `start` and `end` bounds (`[..]`,
+  `[start..]`, `[..end]`, `[start..end]`);
 - `VarDecl.ty` / `Param.ty` / `FnDecl.ty` hold resolved types;
 - `TypeExpr.resolved` caches resolved named types.
 
@@ -134,10 +136,13 @@ values, array lengths and initializer checks.
 state (`AutoHashMap(symbol id, bool)`). It reports:
 
 - possible reads of uninitialized locals (`E0501`);
-- constant out-of-bounds array indexes (`E0502`);
+- constant out-of-bounds array indexes, negative slice indexes, and invalid
+  constant slice ranges (`E0502`);
 - provable division by zero (`E0503`);
 - constant shifts outside the type width (`E0504`);
 - constant arithmetic overflow (`E0505`);
+- provable null pointer dereferences and null array-pointer slicing/casting
+  (`E0506`);
 - unreachable statements (`W0501`);
 - constant `if`/`while` conditions (`W0502`).
 

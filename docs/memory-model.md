@@ -138,17 +138,20 @@ A slice is represented at runtime as `{ ptr T, usize }`:
 - a raw pointer to the first element;
 - the number of `T` elements the pointer refers to.
 
-A subslice constructed with `slice[start..end]` or `array[start..end]` shares
-storage with its source and remains valid only as long as that storage is
-alive. `[]const T` slices do not permit assignment to their elements. Slices
-have no ownership and do not copy their backing array. They may refer to
-stack, global or externally allocated storage as long as that storage is
-alive during the slice's use. Slice copies copy the pointer/length pair, not
-the backing elements.
+A subslice constructed with `base[..]`, `base[start..]`, `base[..end]` or
+`base[start..end]` shares storage with its source and remains valid only as
+long as that storage is alive. `[]const T` slices do not permit assignment to
+their elements. Slices have no ownership and do not copy their backing array.
+They may refer to stack, global or externally allocated storage as long as
+that storage is alive during the slice's use. Slice copies copy the
+pointer/length pair, not the backing elements.
 
 Indexing a slice bounds-checks against its runtime length and traps on an
-out-of-range access. `slice.len` reads only the length field. Slices are not
-nullable at the type level and are not valid C ABI aggregates in v0.1.
+out-of-range access. `slice.len` reads the length field (`usize`) and
+`slice.ptr` reads the data pointer (`*T` or `*const T`). Slices are not
+nullable at the type level. On `x86_64` Linux, slices cross `extern`/`export`
+boundaries in two 64-bit integer registers matching a C
+`struct { T *ptr; size_t len; }`.
 
 ### 3.4 Enums and characters
 

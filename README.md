@@ -121,7 +121,7 @@ fn main() i32 {
 - Field access through pointers uses `->`; field access on values uses `.`.
 - Conditions must be `bool`.
 - Numeric conversions require `as`.
-- Kyn and C can call each other through the C ABI; v0.1 supports the scalar call surface, integer-like aggregates up to 16 bytes by value, and slices by value when represented as `struct { ptr, usize }`. Variadics and floating-point aggregates in boundary signatures are not supported yet.
+- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, integer-like structs (`<= 16` bytes in registers, larger structs via `sret`/`byval`), and slices (`struct { T *ptr; size_t len; }`) cross `extern`/`export` boundaries directly. Variadics and floating-point aggregates in boundary signatures are not supported yet.
 
 ---
 
@@ -229,6 +229,7 @@ See [Diagnostic codes](docs/diagnostics.md) for the stable codes.
 | [🛠️ Build System](docs/build-system.md) | `kyn-build` and incremental builds |
 | [🔎 Diagnostics](docs/diagnostics.md) | Stable diagnostic codes |
 | [🚦 Release Checklist](docs/release-checklist.md) | Release readiness gate |
+| [🧭 Continuity Record](docs/continuity.md) | Validated technical state, contracts & next step |
 | [🗺️ Roadmap](docs/roadmap.md) | Planned milestones |
 
 ---
@@ -285,8 +286,9 @@ build.zig            Builds the toolchain and wires test steps
 |:---|:---|
 | `v0.1.0-alpha.2` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.2) |
 | C ABI lowering for integer-like aggregates and slices | ✅ Shipped in `v0.1.0-alpha.2` |
-| Const-polymorphic slicing and subslice syntax | 🔜 Planned |
-| Modules and package manifest | 🔜 Planned |
+| Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Implemented |
+| Modules and multi-file Kyn compilation | 🔜 Planned |
+| Floating-point/SSE aggregate C ABI classification & profile-selective runtime checks | 🔜 Planned |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.
 

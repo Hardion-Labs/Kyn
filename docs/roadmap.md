@@ -25,19 +25,36 @@ Milestones below are directions, not release promises.
 - Fuzzing/robustness corpus and clean-room release gate.
 - Documented limitations and no hidden runtime.
 
+## Implemented after `v0.1.0-alpha.2`
+
+- Open-ended and bounded slice syntax (`base[..]`, `base[start..]`,
+  `base[..end]`, `base[start..end]`) with zero-branch lowering for `base[..]`.
+- Const-polymorphic slicing and one-way implicit `[]T -> []const T`
+  assignability (for identical `T`), plus read-only `slice.ptr`, `slice.len`,
+  `array.len`, and `->len` / `->ptr` through pointers.
+- Lvalue and mutability hardening: `.len`/`.ptr` rejected as lvalues (`E0441`),
+  `&` restricted to lvalues (`E0464`), immutable `const`/`let` globals
+  enforced (`E0442`), and default `enum` backing aligned to `i32`.
+- Compile-time constant slice range checks (`E0502`), provable/runtime `null`
+  checks (`E0506` / trap) on array-pointer slicing/casting, pointer arithmetic
+  with integer literals and non-integer pointees, and safe `< 8`-byte /
+  `< 16`-byte C ABI aggregate register packing with executable slice ABI tests.
+
 ## Next direction
 
-- Decide and specify general-purpose C ABI lowering for every aggregate type,
-  including floating-point members and cross-compilation targets, before
-  exposing them across `extern`/`export` unconditionally.
-- Add const-polymorphic slicing and additional slice ergonomics.
-- Add remaining runtime policy for traps: null dereference is checked in every
-  profile, but profile-specific policies remain intentionally unimplemented.
-- Add modules and a deterministic package manifest.
+- Add multi-file Kyn modules, explicit `import` declarations, and deterministic
+  module graph support in `kync` and `kyn-build`.
+- Decide and specify general-purpose C ABI lowering for floating-point/SSE
+  aggregate members and cross-compilation targets before exposing them across
+  `extern`/`export` unconditionally.
+- Add profile-differentiated runtime trap policy (`debug`, `safe`, `release`,
+  `fast`) with explicit, documented and tested behavior.
 - Keep the compiler and docs aligned: grammar, reference, type system, memory,
-  safety, ABI, architecture, build system and release notes.
-- Evaluate explicit allocator abstractions and a minimal runtime only after
-  their ownership and failure model is specified.
+  safety, ABI, architecture, build system, [continuity.md](continuity.md) and
+  release notes.
+- Evaluate explicit allocator abstractions and minimal freestanding `std`
+  primitives only after multi-file modules and ownership/failure rules are
+  settled.
 
 ## Explicitly deferred
 

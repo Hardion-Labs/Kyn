@@ -18,9 +18,12 @@ extern fn free(ptr: *u8);
 - Parameters and return types must have a C-compatible representation.
 - Calls use the default C calling convention.
 - Aggregate parameters and aggregate return types, including slices, are
-  supported when every field is integer-like and the size is ≤16 bytes. Arrays
-  and floating-point aggregates are rejected (`E0410`). Slice boundaries
-  require a matching C struct `{ ptr, usize }`.
+  supported on `x86_64` Linux when every field is integer-like: aggregates up
+  to 16 bytes are passed/returned in one or two 64-bit integer registers (with
+  safe zero-padded packing for `< 8`-byte and `< 16`-byte values), and larger
+  integer-only structs use hidden `byval`/`sret` pointers. Arrays by value
+  (`E0410`, `E0411`) and floating-point aggregates (`E0412`, `E0413`) are
+  rejected. Slice boundaries match a C struct `{ T *ptr; size_t len; }`.
 - Only the x86_64 System V calling convention is supported in v0.1.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
@@ -64,7 +67,8 @@ available. Other `fn` declarations use internal linkage.
 | `usize`/`isize` | `size_t`/`ssize_t` (currently 64-bit) | `i64` |
 | `*T`, `*const T` | `T *`, `const T *` | `ptr` |
 | `[N]T` | `T[N]` (layout only) | `[N x T]` |
-| `struct S` | `struct S` (layout only; by value where supported) | `%struct.S` |
+| `struct S` | `struct S` (by value when integer-only; layout otherwise) | `%struct.S` |
+| `[]T`, `[]const T` | `struct { T *ptr; size_t len; }` | `%kyn.slice` (`{ ptr, i64 }`) |
 | `enum E: U` | integer backing type `U` | backing integer |
 
 Caveats:
@@ -172,9 +176,11 @@ clang hello.o -o hello
 ## 8. Not supported in v0.1
 
 - variadic extern functions;
-- `struct`/array parameters and returns by value;
+- fixed-size array parameters and returns by value (`E0410`, `E0411`) and
+  floating-point or array-containing aggregate parameters/returns by value at
+  C boundaries (`E0412`, `E0413`);
 - unions, bitfields, packed structs and explicit alignment;
-- calling conventions other than the platform default;
+- calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;
 - exported globals with controlled visibility;
 - linking against Kyn-specific runtime support (there is none yet).

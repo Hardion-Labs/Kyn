@@ -111,13 +111,16 @@ NamedType   = Identifier
 - Dereferencing a pointer exactly `null` traps; invalid non-null pointers are
   not checked and remain undefined behavior.
 - `[N]T` is a fixed-size array of exactly `N` elements. `N` must be a positive
-  constant integer known at compile time.
+  constant integer known at compile time (`array.len` yields `N` as `usize`).
 - `[]T` is a slice: a fat pointer holding a data pointer and a `usize` length.
-  A mutable slice is constructed with an explicit cast from a pointer to a
-  fixed-size array, such as `&values as []i32`, or with the subslice syntax
-  `slice[start..end]` / `array[start..end]`. `[]const T` is constructed in the
-  same way from an immutable array pointer, from an immutable array, or cast
-  from a mutable slice.
+  Slices are constructed with open-ended or bounded slice expressions
+  (`base[..]`, `base[start..]`, `base[..end]`, `base[start..end]`) on arrays,
+  array pointers or slices, or with an explicit cast from a pointer to a
+  fixed-size array (`&values as []i32`). Slicing is const-polymorphic: mutable
+  bases produce `[]T` (or `[]const T` when expected by context), while
+  immutable bases produce `[]const T`. `[]T` is implicitly assignable to
+  `[]const T` when the element type `T` matches exactly; `[]const T` never
+  implicitly converts to `[]T`.
 - Struct, enum and primitive names resolve to their declarations.
 - `void` is valid only as a function return type; parameters and variables
   cannot have type `void`.
@@ -126,7 +129,8 @@ NamedType   = Identifier
 
 There are no implicit pointer conversions other than `null` to a pointer type,
 and no pointer mutability conversion (`*T` to `*const T` requires an explicit
-cast in v0.1).
+cast in v0.1). Mutable slices `[]T` convert implicitly to `[]const T` when
+`T` is identical.
 
 ## 3. Top-level declarations
 
@@ -148,11 +152,13 @@ fn log_message() {
 - Parameters are `name: Type`, separated by commas.
 - The return type follows the parameter list. Omitted means `void`.
 - Aggregate parameters and aggregate return types use the internal Kyn ABI by
-  default. In `extern`/`export` signatures, integer-like aggregates ≤16 bytes
-  are passed by value following the System V x86_64 calling convention on
-  Linux. Slice types (`[]T`, `[]const T`) may be used in boundary signatures if
-  the fields match the C struct's layout (`ptr` followed by `usize`). Arrays by
-  value and floating-point aggregates at boundaries are rejected (`E0410`).
+  default. In `extern`/`export` signatures on `x86_64` Linux, integer-like
+  structs and slice types (`[]T`, `[]const T`) are passed and returned
+  following the System V calling convention (`<= 16` bytes in up to two `i64`
+  registers; larger integer-only structs via hidden `sret`/`byval` pointers).
+  Slice boundaries match a C struct `{ T *ptr; size_t len; }`. Arrays by value
+  (`E0410`, `E0411`) and floating-point aggregates at C boundaries (`E0412`,
+  `E0413`) are rejected.
 - A function with a non-void return type must return on every path; otherwise
   `E0414`.
 - `return;` is valid only in a `void` function.
@@ -222,10 +228,10 @@ let version: i32 = 1;
 - `const` and `let` globals are immutable; `var` globals are mutable.
 - Globals require an initializer (`E0413`).
 - Global initializers must be constant expressions: literals, unary/binary
-  operations on constants, casts, enum variants, string literals, and struct
-  or array initializers whose contents are also constant. Function calls,
-  address-of, dereference and identifiers other than enum variants are
-  rejected (`E0412`).
+  operations on constants, casts, enum variants, `array.len` on fixed-size
+  arrays, string literals, and struct or array initializers whose contents are
+  also constant. Function calls, address-of, dereference and non-enum value
+  reads are rejected (`E0419`).
 - Globals are emitted as LLVM globals with explicit storage; no constructor or
   runtime initialization is generated. Aggregate constants are emitted in the
   same constant section.
@@ -363,16 +369,18 @@ array[index] = 6;
 ```
 
 - The target must be an lvalue: a local/global variable, a dereference, a
-  field of an lvalue (or any field through a mutable pointer), or an index of
-  an lvalue/pointer.
+  struct field of an lvalue (or through a pointer via `->`), or an index of an
+  lvalue/pointer/slice. Built-in `.len` and `.ptr` properties on slices and
+  arrays are read-only values, not lvalues (`E0441`).
 - Assigning to an immutable location is `E0442`.
-- Simple assignment permits identical types, an integer literal that fits, and
-  `null` to a pointer. Everything else requires an explicit cast (`E0462`).
+- Simple assignment permits identical types, `[]T` to `[]const T` (with
+  identical `T`), an integer literal that fits, a float literal to `f32`/`f64`,
+  and `null` to a pointer. Everything else requires an explicit cast (`E0462`).
 - Compound assignment is defined for numeric operands and shifts; both sides
   must have the same concrete type. Pointer `+=`/`-=` is not supported in
   v0.1.
 - Aggregate assignment copies the complete value when source and destination
-  have the same type.
+  have the same type (or `[]T` to `[]const T`).
 
 ### 5.6 Calls
 
@@ -387,8 +395,10 @@ let sum: i32 = add(1, 2);
   its parameter type.
 - Arguments are evaluated left to right.
 - Aggregate arguments by value are passed by value within Kyn. `extern` and
-  `export` functions pass integer-like aggregates ≤16 bytes by value on
-  x86_64-linux; they are rejected (`E0410`) otherwise.
+  `export` functions pass integer-like structs and slices on `x86_64-linux`
+  (`<= 16` bytes in registers, larger integer-only structs via `byval`); arrays
+  by value (`E0410`) and float-bearing boundary aggregates (`E0412`) are
+  rejected.
 
 ### 5.7 Casts
 
@@ -408,13 +418,19 @@ Allowed conversions:
 | integer, char, bool, float | integer, char, bool, float (numeric pairs)      |
 | integer, char              | pointer                                         |
 | pointer                    | pointer, integer, bool                          |
+| `*[N]T`                    | `[]T`, `[]const T`                              |
+| `*const [N]T`              | `[]const T`                                     |
+| `[]T`                      | `[]T`, `[]const T`                              |
+| `[]const T`                | `[]const T`                                     |
 | enum                       | integer, enum                                   |
 | float                      | integer, bool, float                            |
 | null                       | pointer                                         |
 
-Casts between aggregates and functions are rejected (`E0447`). Casts do not
-insert runtime checks in v0.1; converting an out-of-range value is the
-programmer's responsibility.
+Other casts between aggregates and functions are rejected (`E0447`). Casting a
+provably `null` array pointer to a slice is rejected (`E0506`), and a dynamic
+`null` array pointer cast to a slice traps at runtime. Numeric casts do not
+insert runtime range checks in v0.1; converting an out-of-range numeric value
+is the programmer's responsibility.
 
 ### 5.8 Field access
 
@@ -423,14 +439,22 @@ let x: i32 = point.x;
 point.y = 3;
 let x: i32 = pointer->x;
 let x: i32 = (*pointer).x;  // equivalent
+let n: usize = slice.len;
+let data: *i32 = slice.ptr;
+let fixed_n: usize = array.len;
 ```
 
-- `.` requires a struct value or enum type name.
-- `->` requires a pointer to a struct.
+- `.` accesses struct fields, enum variants on an enum type name, `slice.len` /
+  `slice.ptr` on slices, and `array.len` on fixed-size arrays.
+- `->` accesses struct fields, `->len` / `->ptr` on pointers to slices, and
+  `->len` on pointers to fixed-size arrays.
+- `slice.ptr` has type `*T` for `[]T` and `*const T` for `[]const T`. Both
+  `slice.len` and `slice.ptr` (and `array.len`) are read-only non-lvalue
+  properties (`E0441` on assignment, `E0464` on `&`).
 - Enum variants use `.` on the enum type name.
 - Accessing a missing field or variant is `E0453` / `E0449`.
 
-### 5.9 Indexing
+### 5.9 Indexing and slicing
 
 ```kyn
 let value: i32 = array[2];
@@ -438,19 +462,29 @@ array[2] = 9;
 let value: i32 = pointer[3];
 let total: i32 = slice.len as i32;
 let element: i32 = slice[index];
-let handle: []i32 = slice[start..end];
+let all: []i32 = array[..];
+let tail: []i32 = slice[start..];
+let head: []const i32 = slice[..end];
+let mid: []i32 = slice[start..end];
 ```
 
-- The base may be an lvalue array, an array literal, a pointer, or a slice.
-- The index must be an integer type; it is not automatically converted.
-- `slice[start..end]` and `array[start..end]` construct a non-owning subslice.
-  `start` and `end` are inclusive-exclusive bounds (`[start, end)`), and both
-  are runtime-checked. A start greater than the end, a negative bound, or an
-  end beyond the base length traps.
-- Constant indexes outside the array bounds are `E0502`.
-- Dynamic indexes into fixed arrays and slices are bounds-checked at runtime
-  and trap on out-of-range access.
-- `slice.len` returns the slice length as `usize`.
+- Indexing `base[index]` accepts an lvalue array, an array literal, a pointer,
+  or a slice.
+- Slicing `base[..]`, `base[start..]`, `base[..end]`, and `base[start..end]`
+  accepts an lvalue array, a pointer to a fixed-size array (`*[N]T` or
+  `*const [N]T`), or a slice (`[]T` or `[]const T`).
+- Index and slice bound expressions must have an integer type (`E0454`).
+- `start` defaults to `0` when omitted; `end` defaults to the base length when
+  omitted. Bounds are inclusive-exclusive (`[start, end)`).
+- Constant out-of-bounds array indices, negative constant slice indices, and
+  constant invalid slice ranges (`start < 0`, `end < 0`, `start > end`, or a
+  bound exceeding a statically known array length) are rejected at compile time
+  (`E0502`).
+- Dynamic array/slice indices and slice ranges are checked at runtime and trap
+  on out-of-range access. Slicing a `null` array pointer is diagnosed at
+  compile time when provable (`E0506`) and traps at runtime otherwise.
+- Slicing is const-polymorphic: mutable bases yield `[]T` (or `[]const T` when
+  contextualized by `[]const T`), and immutable bases yield `[]const T`.
 - Indexed assignment through `[]const T` is rejected (`E0442`).
 
 ### 5.10 Struct and array literals
