@@ -1,0 +1,4 @@
+fn main() i32 {
+    let value: u8 = 1 << 8;
+    return value as i32;
+}

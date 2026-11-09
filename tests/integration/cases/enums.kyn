@@ -1,0 +1,13 @@
+enum Color: u8 {
+    Red,
+    Green = 4,
+    Blue,
+}
+
+const LIMIT: i32 = 3;
+
+fn main() i32 {
+    let c: Color = Color.Blue;
+    let raw: u8 = c as u8;
+    return raw as i32 + LIMIT;
+}

@@ -1,0 +1,6 @@
+fn main() i32 {
+    var values: [5]i32 = [1, 2, 3, 4, 5];
+    values[0] = 9;
+    let total: i32 = values[0] + values[1] + values[2] + values[3] + values[4];
+    return total - 10;
+}

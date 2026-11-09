@@ -1,0 +1,18 @@
+extern fn puts(s: *const u8) i32;
+
+const GREETING: *const u8 = "Kyn systems language";
+var counter: i32 = 41;
+
+fn bump() i32 {
+    counter += 1;
+    return counter;
+}
+
+fn main() i32 {
+    puts(GREETING);
+    puts("Explicit Control. Verifiable Safety. Predictable Performance.");
+    if (bump() == 42) {
+        puts("ok");
+    }
+    return 0;
+}

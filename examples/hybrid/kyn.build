@@ -1,0 +1,9 @@
+project "hybrid"
+
+target "hybrid" {
+    kind: "exe"
+    sources: ["src/main.kyn"]
+    c_sources: ["src/math.c"]
+    zig_sources: ["zig/math.zig"]
+    profile: "safe"
+}

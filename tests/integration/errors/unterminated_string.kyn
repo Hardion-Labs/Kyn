@@ -1,0 +1,4 @@
+fn main() i32 {
+    let text = "unterminated;
+    return 0;
+}

@@ -1,0 +1,16 @@
+// Explicit pointers and mutable parameters.
+fn swap(a: *i32, b: *i32) {
+    let temporary: i32 = *a;
+    *a = *b;
+    *b = temporary;
+}
+
+fn main() i32 {
+    var left: i32 = 10;
+    var right: i32 = 20;
+    swap(&left, &right);
+    if (left == 20 && right == 10) {
+        return 0;
+    }
+    return 1;
+}

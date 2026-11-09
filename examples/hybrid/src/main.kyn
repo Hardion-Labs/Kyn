@@ -1,0 +1,6 @@
+extern fn c_add(a: i32, b: i32) i32;
+extern fn zig_mul(a: i32, b: i32) i32;
+
+fn main() i32 {
+    return c_add(2, 3) + zig_mul(4, 5);
+}

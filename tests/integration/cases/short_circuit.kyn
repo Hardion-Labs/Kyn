@@ -1,0 +1,18 @@
+var calls: i32 = 0;
+
+fn effect(value: bool) bool {
+    calls += 1;
+    return value;
+}
+
+fn main() i32 {
+    let a: bool = false && effect(true);
+    let b: bool = true || effect(false);
+    if (a) {
+        return 1;
+    }
+    if (!b) {
+        return 2;
+    }
+    return calls;
+}

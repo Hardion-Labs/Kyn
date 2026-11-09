@@ -1,0 +1,4 @@
+fn main() i32 {
+    let small: i8 = 127 + 1;
+    return small as i32;
+}
