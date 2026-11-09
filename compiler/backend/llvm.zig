@@ -1,0 +1,1335 @@
+//! LLVM backend: lowers Kyn IR to textual LLVM IR and emits it.
+//!
+//! The compiler does not link against LLVM's C++ libraries. It produces
+//! standard LLVM IR accepted by `clang`/`llc`, which keeps the compiler
+//! binary small and the build reproducible. Kyn semantics remain defined by
+//! this repository, not by LLVM.
+
+const std = @import("std");
+const ast = @import("../ast.zig");
+const ir = @import("../ir.zig");
+const types = @import("../types.zig");
+const diagnostics = @import("../diagnostics.zig");
+const analyzer = @import("../analyzer.zig");
+const symbol = @import("../symbol.zig");
+
+pub const Error = error{OutOfMemory};
+
+const FnCtx = struct {
+    function: *ir.Function,
+    current: u32 = 0,
+    break_stack: std.ArrayList(u32) = .empty,
+    continue_stack: std.ArrayList(u32) = .empty,
+};
+
+pub const Lowering = struct {
+    allocator: std.mem.Allocator,
+    reporter: *diagnostics.Reporter,
+    module: *ir.Module,
+    globals: std.StringHashMap(u32),
+    ctx: ?*FnCtx = null,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        reporter: *diagnostics.Reporter,
+        module: *ir.Module,
+    ) Lowering {
+        return .{
+            .allocator = allocator,
+            .reporter = reporter,
+            .module = module,
+            .globals = std.StringHashMap(u32).init(allocator),
+        };
+    }
+
+    pub fn lower(self: *Lowering, program: *ast.Program) Error!void {
+        try self.collectTypes(program);
+
+        // Globals must exist before function bodies are lowered.
+        for (program.decls) |decl| {
+            switch (decl.kind) {
+                .var_decl => |vd| try self.lowerGlobal(vd, decl.span),
+                .fn_decl => |fd| try self.createFunction(fd),
+                .struct_decl, .enum_decl => {},
+            }
+        }
+
+        for (program.decls) |decl| {
+            switch (decl.kind) {
+                .fn_decl => |fd| {
+                    if (fd.body) |body| try self.lowerFunction(fd, body);
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn collectTypes(self: *Lowering, program: *ast.Program) Error!void {
+        for (program.decls) |decl| {
+            switch (decl.kind) {
+                .struct_decl => |sd| if (sd.ty) |ty| try self.module.addStruct(ty.struct_type),
+                .enum_decl => |ed| if (ed.ty) |ty| try self.module.addEnum(ty.enum_type),
+                else => {},
+            }
+        }
+    }
+
+    fn lowerGlobal(self: *Lowering, vd: *ast.VarDecl, span: @import("../source.zig").Span) Error!void {
+        const ty = vd.ty orelse {
+            try self.reporter.err("E0601", span, "internal: global '{s}' has no resolved type", .{vd.name});
+            return;
+        };
+        const init_value = (try self.lowerConst(vd.init.?, ty)) orelse {
+            try self.reporter.err("E0602", span, "global initializer for '{s}' cannot be emitted as a constant", .{vd.name});
+            return;
+        };
+        const index: u32 = @intCast(self.module.globals.items.len);
+        try self.module.globals.append(self.allocator, .{
+            .name = vd.name,
+            .ty = ty,
+            .init = init_value,
+            .mutable = vd.mutable,
+        });
+        try self.globals.put(vd.name, index);
+    }
+
+    fn createFunction(self: *Lowering, fd: *ast.FnDecl) Error!void {
+        const fn_ty = fd.ty orelse return;
+        const info = fn_ty.fn_type;
+        var params = try self.allocator.alloc(ir.Param, fd.params.len);
+        for (fd.params, 0..) |param, i| {
+            const sym = param.sym orelse continue;
+            params[i] = .{ .local = sym.id, .ty = info.params[i] };
+        }
+
+        const linkage: ir.Linkage = if (fd.is_extern)
+            .declaration
+        else if (fd.is_export or std.mem.eql(u8, fd.name, "main"))
+            .external
+        else
+            .internal;
+
+        const function = try self.allocator.create(ir.Function);
+        function.* = .{
+            .name = fd.name,
+            .params = params,
+            .ret = info.ret,
+            .linkage = linkage,
+        };
+        try self.module.functions.append(self.allocator, function);
+    }
+
+    fn currentFunction(self: *Lowering) *ir.Function {
+        return self.ctx.?.function;
+    }
+
+    fn addLocal(self: *Lowering, id: u32, name: []const u8, ty: *types.Type) Error!void {
+        try self.currentFunction().addLocal(self.allocator, id, name, ty);
+    }
+
+    fn newBlock(self: *Lowering) Error!u32 {
+        const function = self.currentFunction();
+        const index: u32 = @intCast(function.blocks.items.len);
+        const block = try self.allocator.create(ir.Block);
+        block.* = .{ .id = index };
+        try function.blocks.append(self.allocator, block);
+        return index;
+    }
+
+    fn switchBlock(self: *Lowering, index: u32) Error!void {
+        self.ctx.?.current = index;
+    }
+
+    fn isTerminated(self: *Lowering) bool {
+        const function = self.currentFunction();
+        return function.block(self.ctx.?.current).terminated;
+    }
+
+    fn emit(self: *Lowering, inst: ir.Inst) Error!void {
+        const function = self.currentFunction();
+        const block = function.block(self.ctx.?.current);
+        if (block.terminated) return;
+        try block.insts.append(self.allocator, inst);
+        const tag = std.meta.activeTag(inst);
+        if (tag == .br or tag == .cbr or tag == .ret or tag == .unreachable_) {
+            block.terminated = true;
+        }
+    }
+
+    fn reg(self: *Lowering, ty: *types.Type) Error!u32 {
+        const id = self.module.temp();
+        try self.module.setRegType(id, ty);
+        return id;
+    }
+
+    fn lowerFunction(self: *Lowering, fd: *ast.FnDecl, body: *ast.Block) Error!void {
+        const function = findFunction(self.module, fd.name) orelse return;
+        const ctx = try self.allocator.create(FnCtx);
+        ctx.* = .{ .function = function };
+        self.ctx = ctx;
+        defer self.ctx = null;
+
+        _ = try self.newBlock();
+
+        for (fd.params, 0..) |param, i| {
+            const sym = param.sym orelse continue;
+            try self.addLocal(sym.id, sym.name, function.params[i].ty);
+            try self.emit(.{ .store = .{
+                .ptr = .{ .local = sym.id },
+                .value = .{ .param = sym.id },
+                .ty = function.params[i].ty,
+            } });
+        }
+
+        try self.lowerBlock(body);
+
+        if (!self.isTerminated()) {
+            if (function.ret.* == .void) {
+                try self.emit(.{ .ret = .{ .value = null } });
+            } else {
+                try self.emit(.{ .unreachable_ = {} });
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Statements
+    // ------------------------------------------------------------------
+
+    fn lowerBlock(self: *Lowering, block: *ast.Block) Error!void {
+        for (block.stmts) |stmt| {
+            if (self.isTerminated()) return;
+            try self.lowerStmt(stmt);
+        }
+    }
+
+    fn lowerStmt(self: *Lowering, stmt: *ast.Stmt) Error!void {
+        switch (stmt.kind) {
+            .expr => |expr| _ = try self.lowerExpr(expr),
+            .var_decl => |vd| try self.lowerVarDecl(vd),
+            .block => |block| try self.lowerBlock(block),
+            .if_stmt => |if_stmt| try self.lowerIf(if_stmt),
+            .while_stmt => |while_stmt| try self.lowerWhile(while_stmt),
+            .return_stmt => |ret_stmt| {
+                if (ret_stmt.value) |expr| {
+                    const value = try self.lowerExpr(expr);
+                    try self.emit(.{ .ret = .{ .value = value } });
+                } else {
+                    try self.emit(.{ .ret = .{ .value = null } });
+                }
+            },
+            .break_stmt => {
+                const target = self.ctx.?.break_stack.items[self.ctx.?.break_stack.items.len - 1];
+                try self.emit(.{ .br = .{ .target = target } });
+            },
+            .continue_stmt => {
+                const target = self.ctx.?.continue_stack.items[self.ctx.?.continue_stack.items.len - 1];
+                try self.emit(.{ .br = .{ .target = target } });
+            },
+            .empty => {},
+        }
+    }
+
+    fn lowerVarDecl(self: *Lowering, vd: *ast.VarDecl) Error!void {
+        const sym = vd.sym orelse return;
+        const ty = vd.ty orelse return;
+        try self.addLocal(sym.id, sym.name, ty);
+        const init_value = vd.init orelse return;
+
+        if (ty.isAggregate() and isAggregateInitializer(init_value)) {
+            try self.lowerAggregateInto(.{ .local = sym.id }, ty, init_value);
+        } else {
+            const value = try self.lowerExpr(init_value);
+            try self.emit(.{ .store = .{ .ptr = .{ .local = sym.id }, .value = value, .ty = ty } });
+        }
+    }
+
+    fn lowerIf(self: *Lowering, if_stmt: *ast.Stmt.IfStmt) Error!void {
+        const cond = try self.lowerExpr(if_stmt.cond);
+        const then_block = try self.newBlock();
+        const else_block = try self.newBlock();
+        const merge_block = try self.newBlock();
+        try self.emit(.{ .cbr = .{
+            .cond = cond,
+            .then_block = then_block,
+            .else_block = else_block,
+        } });
+
+        try self.switchBlock(then_block);
+        try self.lowerBlock(if_stmt.then_branch);
+        if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
+
+        try self.switchBlock(else_block);
+        if (if_stmt.else_branch) |else_stmt| try self.lowerStmt(else_stmt);
+        if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
+
+        try self.switchBlock(merge_block);
+    }
+
+    fn lowerWhile(self: *Lowering, while_stmt: *ast.Stmt.WhileStmt) Error!void {
+        const cond_block = try self.newBlock();
+        const body_block = try self.newBlock();
+        const end_block = try self.newBlock();
+        try self.emit(.{ .br = .{ .target = cond_block } });
+
+        try self.switchBlock(cond_block);
+        const cond = try self.lowerExpr(while_stmt.cond);
+        try self.emit(.{ .cbr = .{
+            .cond = cond,
+            .then_block = body_block,
+            .else_block = end_block,
+        } });
+
+        try self.switchBlock(body_block);
+        try self.ctx.?.break_stack.append(self.allocator, end_block);
+        try self.ctx.?.continue_stack.append(self.allocator, cond_block);
+        try self.lowerBlock(while_stmt.body);
+        if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = cond_block } });
+        _ = self.ctx.?.break_stack.pop();
+        _ = self.ctx.?.continue_stack.pop();
+
+        try self.switchBlock(end_block);
+    }
+
+    // ------------------------------------------------------------------
+    // Expressions
+    // ------------------------------------------------------------------
+
+    fn lowerExpr(self: *Lowering, expr: *ast.Expr) Error!ir.Value {
+        return switch (expr.kind) {
+            .int_lit => |lit| .{ .int = @intCast(lit.value) },
+            .float_lit => |lit| .{ .float = lit.value },
+            .bool_lit => |value| .{ .boolean = value },
+            .char_lit => |value| .{ .int = @intCast(value) },
+            .string_lit => |lit| .{ .string = try self.module.addString(lit.bytes) },
+            .null_lit => .null_ptr,
+            .ident => |ident| try self.lowerIdent(expr, ident),
+            .unary => |unary| try self.lowerUnary(expr, unary),
+            .binary => |binary| try self.lowerBinary(expr, binary),
+            .assign => |assign| try self.lowerAssign(expr, assign),
+            .call => |call| try self.lowerCall(expr, call),
+            .cast => |cast| try self.lowerCast(expr, cast),
+            .field => |field| blk: {
+                if (field.is_enum_variant) break :blk .{ .int = field.variant_value };
+                const ptr = try self.lowerLvalue(expr);
+                const ty = expr.ty orelse return .none;
+                const dst = try self.reg(ty);
+                try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
+                break :blk .{ .reg = dst };
+            },
+            .index => blk: {
+                const ptr = try self.lowerLvalue(expr);
+                const ty = expr.ty orelse return .none;
+                const dst = try self.reg(ty);
+                try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
+                break :blk .{ .reg = dst };
+            },
+            .struct_init, .array_lit => blk: {
+                const ty = expr.ty orelse return .none;
+                const id = self.module.temp();
+                try self.addLocal(id, "tmp.agg", ty);
+                try self.lowerAggregateInto(.{ .local = id }, ty, expr);
+                break :blk .{ .local = id };
+            },
+        };
+    }
+
+    fn lowerIdent(self: *Lowering, expr: *ast.Expr, ident: ast.Expr.Kind.Ident) Error!ir.Value {
+        const sym = ident.sym orelse return .none;
+        if (sym.kind == .function or sym.kind == .struct_type or sym.kind == .enum_type) return .none;
+        const ty = expr.ty orelse sym.ty;
+        const ptr: ir.Value = if (sym.kind == .global)
+            .{ .global = self.globals.get(sym.name) orelse return .none }
+        else
+            .{ .local = sym.id };
+        const dst = try self.reg(ty);
+        try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerUnary(self: *Lowering, expr: *ast.Expr, unary: ast.Expr.Kind.Unary) Error!ir.Value {
+        switch (unary.op) {
+            .address_of => return self.lowerLvalue(unary.operand),
+            .dereference => {
+                const ptr = try self.lowerExpr(unary.operand);
+                const ty = expr.ty orelse return .none;
+                const dst = try self.reg(ty);
+                try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
+                return .{ .reg = dst };
+            },
+            else => {},
+        }
+        const operand = try self.lowerExpr(unary.operand);
+        const ty = expr.ty orelse return .none;
+        const dst = try self.reg(ty);
+        const op: ir.UnOp = switch (unary.op) {
+            .negate => .negate,
+            .logical_not => .logical_not,
+            .bit_not => .bit_not,
+            else => unreachable,
+        };
+        try self.emit(.{ .unary = .{ .dst = dst, .op = op, .ty = ty, .operand = operand } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerBinary(self: *Lowering, expr: *ast.Expr, binary: ast.Expr.Kind.Binary) Error!ir.Value {
+        if (binary.op == .logical_and or binary.op == .logical_or) {
+            return self.lowerLogical(expr, binary);
+        }
+
+        const lhs_ty = binary.lhs.ty orelse return .none;
+        const rhs_ty = binary.rhs.ty orelse return .none;
+
+        if (lhs_ty.* == .pointer and lhs_ty.pointer.elem.isInteger() and (binary.op == .add or binary.op == .sub)) {
+            var index = try self.lowerExpr(binary.rhs);
+            if (binary.op == .sub) index = try self.negateIndex(index, rhs_ty);
+            const dst = try self.reg(lhs_ty);
+            try self.emit(.{ .elem_ptr = .{
+                .dst = dst,
+                .base = try self.lowerExpr(binary.lhs),
+                .container = lhs_ty,
+                .index = index,
+                .index_ty = rhs_ty,
+                .is_array = false,
+            } });
+            return .{ .reg = dst };
+        }
+        if (lhs_ty.* == .pointer and rhs_ty.* == .pointer and binary.op == .sub) {
+            return self.lowerPointerDifference(expr, binary, lhs_ty, rhs_ty);
+        }
+
+        const lhs = try self.lowerExpr(binary.lhs);
+        const rhs = try self.lowerExpr(binary.rhs);
+        const ty = expr.ty orelse return .none;
+
+        switch (binary.op) {
+            .eq, .ne, .lt, .le, .gt, .ge => return self.lowerComparison(expr, binary, lhs, rhs, lhs_ty),
+            else => {},
+        }
+
+        const op = binaryOp(binary.op) orelse return .none;
+        const dst = try self.reg(ty);
+        try self.emit(.{ .binary = .{ .dst = dst, .op = op, .ty = ty, .lhs = lhs, .rhs = rhs } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerComparison(
+        self: *Lowering,
+        expr: *ast.Expr,
+        binary: ast.Expr.Kind.Binary,
+        lhs: ir.Value,
+        rhs: ir.Value,
+        operand_ty: *types.Type,
+    ) Error!ir.Value {
+        _ = expr;
+        const bool_ty = try self.allocator.create(types.Type);
+        bool_ty.* = .bool;
+        const dst = try self.reg(bool_ty);
+        const op: ir.CmpOp = switch (binary.op) {
+            .eq => .eq,
+            .ne => .ne,
+            .lt => .lt,
+            .le => .le,
+            .gt => .gt,
+            .ge => .ge,
+            else => unreachable,
+        };
+        if (operand_ty.isFloat()) {
+            try self.emit(.{ .fcmp = .{ .dst = dst, .op = op, .ty = operand_ty, .lhs = lhs, .rhs = rhs } });
+        } else {
+            try self.emit(.{ .icmp = .{ .dst = dst, .op = op, .ty = operand_ty, .lhs = lhs, .rhs = rhs } });
+        }
+        return .{ .reg = dst };
+    }
+
+    fn lowerLogical(self: *Lowering, expr: *ast.Expr, binary: ast.Expr.Kind.Binary) Error!ir.Value {
+        _ = expr;
+        const bool_ty = try self.allocator.create(types.Type);
+        bool_ty.* = .bool;
+        const slot = self.module.temp();
+        try self.addLocal(slot, "tmp.cond", bool_ty);
+        const default_value: ir.Value = .{ .boolean = binary.op == .logical_or };
+        try self.emit(.{ .store = .{ .ptr = .{ .local = slot }, .value = default_value, .ty = bool_ty } });
+
+        const lhs = try self.lowerExpr(binary.lhs);
+        const rhs_block = try self.newBlock();
+        const end_block = try self.newBlock();
+        try self.emit(.{ .cbr = .{
+            .cond = lhs,
+            .then_block = if (binary.op == .logical_and) rhs_block else end_block,
+            .else_block = if (binary.op == .logical_and) end_block else rhs_block,
+        } });
+
+        try self.switchBlock(rhs_block);
+        const rhs = try self.lowerExpr(binary.rhs);
+        try self.emit(.{ .store = .{ .ptr = .{ .local = slot }, .value = rhs, .ty = bool_ty } });
+        try self.emit(.{ .br = .{ .target = end_block } });
+
+        try self.switchBlock(end_block);
+        const dst = try self.reg(bool_ty);
+        try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = slot }, .ty = bool_ty } });
+        return .{ .reg = dst };
+    }
+
+    fn negateIndex(self: *Lowering, value: ir.Value, ty: *types.Type) Error!ir.Value {
+        if (value == .int) return .{ .int = -value.int };
+        const dst = try self.reg(ty);
+        try self.emit(.{ .unary = .{ .dst = dst, .op = .negate, .ty = ty, .operand = value } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerPointerDifference(
+        self: *Lowering,
+        expr: *ast.Expr,
+        binary: ast.Expr.Kind.Binary,
+        lhs_ty: *types.Type,
+        rhs_ty: *types.Type,
+    ) Error!ir.Value {
+        _ = rhs_ty;
+        const isize_ty = try self.allocator.create(types.Type);
+        isize_ty.* = .{ .int = .{ .bits = 64, .signed = true } };
+
+        const lhs_i = try self.reg(isize_ty);
+        try self.emit(.{ .cast = .{ .dst = lhs_i, .kind = .ptrtoint, .from = lhs_ty, .to = isize_ty, .value = try self.lowerExpr(binary.lhs) } });
+        const rhs_i = try self.reg(isize_ty);
+        try self.emit(.{ .cast = .{ .dst = rhs_i, .kind = .ptrtoint, .from = lhs_ty, .to = isize_ty, .value = try self.lowerExpr(binary.rhs) } });
+
+        const diff = try self.reg(isize_ty);
+        try self.emit(.{ .binary = .{ .dst = diff, .op = .sub, .ty = isize_ty, .lhs = .{ .reg = lhs_i }, .rhs = .{ .reg = rhs_i } } });
+
+        const size = sizeInBytes(lhs_ty.pointer.elem) orelse {
+            try self.reporter.err("E0603", expr.span, "pointer difference requires an element type with a known scalar size", .{});
+            return .none;
+        };
+        const result = try self.reg(isize_ty);
+        try self.emit(.{ .binary = .{ .dst = result, .op = .div, .ty = isize_ty, .lhs = .{ .reg = diff }, .rhs = .{ .int = @intCast(size) } } });
+        return .{ .reg = result };
+    }
+
+    fn lowerAssign(self: *Lowering, expr: *ast.Expr, assign: ast.Expr.Kind.Assign) Error!ir.Value {
+        _ = expr;
+        const target_ty = assign.target.ty orelse return .none;
+        const ptr = try self.lowerLvalue(assign.target);
+
+        if (assign.op == .assign) {
+            if (target_ty.isAggregate() and isAggregateInitializer(assign.value)) {
+                try self.lowerAggregateInto(ptr, target_ty, assign.value);
+                return .none;
+            }
+            const value = try self.lowerExpr(assign.value);
+            try self.emit(.{ .store = .{ .ptr = ptr, .value = value, .ty = target_ty } });
+            const dst = try self.reg(target_ty);
+            try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = target_ty } });
+            return .{ .reg = dst };
+        }
+
+        const current = try self.reg(target_ty);
+        try self.emit(.{ .load = .{ .dst = current, .ptr = ptr, .ty = target_ty } });
+        const rhs = try self.lowerExpr(assign.value);
+        const op: ir.BinaryOp = switch (assign.op) {
+            .add => .add,
+            .sub => .sub,
+            .mul => .mul,
+            .div => .div,
+            .mod => .mod,
+            .bit_and => .bit_and,
+            .bit_or => .bit_or,
+            .bit_xor => .bit_xor,
+            .shl => .shl,
+            .shr => .shr,
+            .assign => unreachable,
+        };
+        const result = try self.reg(target_ty);
+        try self.emit(.{ .binary = .{ .dst = result, .op = op, .ty = target_ty, .lhs = .{ .reg = current }, .rhs = rhs } });
+        try self.emit(.{ .store = .{ .ptr = ptr, .value = .{ .reg = result }, .ty = target_ty } });
+        return .{ .reg = result };
+    }
+
+    fn lowerCall(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!ir.Value {
+        const callee_sym = switch (call.callee.kind) {
+            .ident => |ident| ident.sym,
+            else => null,
+        };
+        if (callee_sym == null or callee_sym.?.kind != .function) {
+            try self.reporter.err("E0604", call.callee.span, "indirect calls are not supported yet", .{});
+            return .none;
+        }
+        const name = callee_sym.?.name;
+        const ret = expr.ty orelse return .none;
+        var args = try self.allocator.alloc(ir.Value, call.args.len);
+        var arg_types = try self.allocator.alloc(*types.Type, call.args.len);
+        for (call.args, 0..) |arg, i| {
+            args[i] = try self.lowerExpr(arg);
+            arg_types[i] = arg.ty orelse return .none;
+        }
+        var dst: ?u32 = null;
+        if (ret.* != .void) dst = try self.reg(ret);
+        try self.emit(.{ .call = .{
+            .dst = dst,
+            .name = name,
+            .args = args,
+            .arg_types = arg_types,
+            .ret = ret,
+        } });
+        return if (dst) |id| .{ .reg = id } else .none;
+    }
+
+    fn lowerCast(self: *Lowering, expr: *ast.Expr, cast: ast.Expr.Kind.Cast) Error!ir.Value {
+        const target = cast.target.resolved orelse return .none;
+        const source = cast.operand.ty orelse return .none;
+        const value = try self.lowerExpr(cast.operand);
+        if (source.* == .null_type or target.* == .invalid) return value;
+        if (isSameRepresentation(source, target)) return value;
+        const kind = castKind(source, target) orelse {
+            try self.reporter.err("E0605", expr.span, "internal: unsupported cast from the semantic layer", .{});
+            return .none;
+        };
+        const dst = try self.reg(target);
+        try self.emit(.{ .cast = .{ .dst = dst, .kind = kind, .from = source, .to = target, .value = value } });
+        return .{ .reg = dst };
+    }
+
+    fn lowerLvalue(self: *Lowering, expr: *ast.Expr) Error!ir.Value {
+        return switch (expr.kind) {
+            .ident => |ident| blk: {
+                const sym = ident.sym orelse return .none;
+                if (sym.kind == .global) break :blk .{ .global = self.globals.get(sym.name) orelse return .none };
+                break :blk .{ .local = sym.id };
+            },
+            .unary => |unary| if (unary.op == .dereference)
+                self.lowerExpr(unary.operand)
+            else
+                .none,
+            .field => |field| blk: {
+                const base_ty = field.base.ty orelse return .none;
+                var struct_ty = base_ty;
+                var base_ptr: ir.Value = undefined;
+                if (base_ty.* == .pointer) {
+                    struct_ty = base_ty.pointer.elem;
+                    base_ptr = try self.lowerExpr(field.base);
+                } else {
+                    base_ptr = try self.lowerLvalue(field.base);
+                }
+                const dst = try self.reg(try self.makePointer(struct_ty, base_ty.* == .pointer and base_ty.pointer.is_const));
+                try self.emit(.{ .field_ptr = .{
+                    .dst = dst,
+                    .base = base_ptr,
+                    .struct_ty = struct_ty.struct_type,
+                    .field = field.field_index,
+                } });
+                break :blk .{ .reg = dst };
+            },
+            .index => |index| blk: {
+                const base_ty = index.base.ty orelse return .none;
+                var base_ptr: ir.Value = undefined;
+                var is_array = false;
+                if (base_ty.* == .pointer) {
+                    base_ptr = try self.lowerExpr(index.base);
+                } else {
+                    base_ptr = try self.lowerLvalue(index.base);
+                    is_array = true;
+                }
+                const index_ty = index.index.ty orelse return .none;
+                const index_value = try self.lowerExpr(index.index);
+                const elem_ty = try self.makePointer(if (is_array) base_ty.array.elem else base_ty.pointer.elem, if (base_ty.* == .pointer) base_ty.pointer.is_const else false);
+                const dst = try self.reg(elem_ty);
+                try self.emit(.{ .elem_ptr = .{
+                    .dst = dst,
+                    .base = base_ptr,
+                    .container = base_ty,
+                    .index = index_value,
+                    .index_ty = index_ty,
+                    .is_array = is_array,
+                } });
+                break :blk .{ .reg = dst };
+            },
+            .struct_init, .array_lit => blk: {
+                const ty = expr.ty orelse return .none;
+                const id = self.module.temp();
+                try self.addLocal(id, "tmp.agg", ty);
+                try self.lowerAggregateInto(.{ .local = id }, ty, expr);
+                break :blk .{ .local = id };
+            },
+            else => .none,
+        };
+    }
+
+    fn lowerAggregateInto(self: *Lowering, dest: ir.Value, ty: *types.Type, expr: *ast.Expr) Error!void {
+        switch (expr.kind) {
+            .struct_init => |initializer| {
+                const info = ty.struct_type;
+                for (initializer.fields) |field| {
+                    const field_ty = info.fields[field.index].ty;
+                    const field_ptr_ty = try self.makePointer(field_ty, false);
+                    const dst = try self.reg(field_ptr_ty);
+                    try self.emit(.{ .field_ptr = .{
+                        .dst = dst,
+                        .base = dest,
+                        .struct_ty = info,
+                        .field = field.index,
+                    } });
+                    if (field_ty.isAggregate()) {
+                        try self.lowerAggregateInto(.{ .reg = dst }, field_ty, field.value);
+                    } else {
+                        const value = try self.lowerExpr(field.value);
+                        try self.emit(.{ .store = .{ .ptr = .{ .reg = dst }, .value = value, .ty = field_ty } });
+                    }
+                }
+            },
+            .array_lit => |elements| {
+                const array_ty = ty.array;
+                for (elements, 0..) |element, i| {
+                    const index_ty = try self.allocator.create(types.Type);
+                    index_ty.* = .{ .int = .{ .bits = 64, .signed = true } };
+                    const dst = try self.reg(try self.makePointer(array_ty.elem, false));
+                    try self.emit(.{ .elem_ptr = .{
+                        .dst = dst,
+                        .base = dest,
+                        .container = ty,
+                        .index = .{ .int = @intCast(i) },
+                        .index_ty = index_ty,
+                        .is_array = true,
+                    } });
+                    if (array_ty.elem.isAggregate()) {
+                        try self.lowerAggregateInto(.{ .reg = dst }, array_ty.elem, element);
+                    } else {
+                        const value = try self.lowerExpr(element);
+                        try self.emit(.{ .store = .{ .ptr = .{ .reg = dst }, .value = value, .ty = array_ty.elem } });
+                    }
+                }
+            },
+            else => {
+                try self.reporter.err("E0606", expr.span, "internal: expected an aggregate initializer", .{});
+            },
+        }
+    }
+
+    fn makePointer(self: *Lowering, elem: *types.Type, is_const: bool) Error!*types.Type {
+        return types.makePointer(self.allocator, elem, is_const);
+    }
+
+    // ------------------------------------------------------------------
+    // Constants
+    // ------------------------------------------------------------------
+
+    fn lowerConst(self: *Lowering, expr: *ast.Expr, ty: *types.Type) Error!?ir.Value {
+        switch (expr.kind) {
+            .int_lit => |lit| return .{ .int = @intCast(lit.value) },
+            .char_lit => |value| return .{ .int = @intCast(value) },
+            .bool_lit => |value| return .{ .boolean = value },
+            .float_lit => |lit| return .{ .float = lit.value },
+            .string_lit => |lit| return .{ .string = try self.module.addString(lit.bytes) },
+            .null_lit => return .null_ptr,
+            .field => |field| if (field.is_enum_variant) return .{ .int = field.variant_value },
+            .unary => |unary| {
+                if (unary.op == .negate) {
+                    if (try self.lowerConst(unary.operand, ty)) |value| {
+                        return switch (value) {
+                            .int => |number| .{ .int = -number },
+                            .float => |number| .{ .float = -number },
+                            else => null,
+                        };
+                    }
+                }
+                if (unary.op == .bit_not) {
+                    if (try self.lowerConst(unary.operand, ty)) |value| {
+                        if (value == .int) return .{ .int = ~value.int };
+                    }
+                }
+                if (unary.op == .logical_not) {
+                    if (try self.lowerConst(unary.operand, ty)) |value| {
+                        if (value == .boolean) return .{ .boolean = !value.boolean };
+                        if (value == .int) return .{ .boolean = value.int == 0 };
+                    }
+                }
+                return null;
+            },
+            .binary => {
+                if (analyzer.constInt(expr)) |value| {
+                    return .{ .int = truncateInt(value, ty) };
+                }
+                if (constFloat(expr)) |value| return .{ .float = value };
+                return null;
+            },
+            .cast => |cast| {
+                if (try self.lowerConst(cast.operand, ty)) |value| {
+                    switch (value) {
+                        .int => |number| return .{ .int = truncateInt(number, ty) },
+                        .float => |number| {
+                            if (ty.isInteger()) return .{ .int = @intFromFloat(number) };
+                            return .{ .float = number };
+                        },
+                        else => return value,
+                    }
+                }
+                return null;
+            },
+            else => return null,
+        }
+        return null;
+    }
+};
+
+fn findFunction(module: *ir.Module, name: []const u8) ?*ir.Function {
+    for (module.functions.items) |function| {
+        if (std.mem.eql(u8, function.name, name)) return function;
+    }
+    return null;
+}
+
+fn isAggregateInitializer(expr: *ast.Expr) bool {
+    return switch (expr.kind) {
+        .struct_init, .array_lit => true,
+        else => false,
+    };
+}
+
+fn binaryOp(op: ast.BinaryOp) ?ir.BinaryOp {
+    return switch (op) {
+        .add => .add,
+        .sub => .sub,
+        .mul => .mul,
+        .div => .div,
+        .mod => .mod,
+        .bit_and => .bit_and,
+        .bit_or => .bit_or,
+        .bit_xor => .bit_xor,
+        .shl => .shl,
+        .shr => .shr,
+        else => null,
+    };
+}
+
+fn isSameRepresentation(from: *types.Type, to: *types.Type) bool {
+    if (types.Type.eql(from, to)) return true;
+    if (from.isPointer() and to.isPointer()) return true;
+    const from_bits = intBits(from);
+    const to_bits = intBits(to);
+    if (from_bits != null and to_bits != null and from_bits.? == to_bits.?) return true;
+    if (from.isFloat() and to.isFloat() and floatBits(from) == floatBits(to)) return true;
+    return false;
+}
+
+fn intBits(ty: *types.Type) ?u16 {
+    return switch (ty.*) {
+        .int => |info| info.bits,
+        .char => 32,
+        .bool => 1,
+        .enum_type => |info| intBits(info.backing),
+        else => null,
+    };
+}
+
+fn floatBits(ty: *types.Type) u16 {
+    return switch (ty.*) {
+        .float => |bits| bits,
+        else => 64,
+    };
+}
+
+fn signedInt(ty: *types.Type) bool {
+    return switch (ty.*) {
+        .int => |info| info.signed,
+        .enum_type => |info| signedInt(info.backing),
+        else => false,
+    };
+}
+
+fn castKind(from: *types.Type, to: *types.Type) ?ir.CastKind {
+    if (to.* == .bool) {
+        if (from.isInteger() or from.isPointer()) return .int_to_bool;
+        return null;
+    }
+    if (from.* == .bool) return .bool_to_int;
+    if (from.isPointer()) {
+        if (to.isPointer()) return .bitcast;
+        if (to.isInteger()) return .ptrtoint;
+        return null;
+    }
+    const from_int = intBits(from);
+    const to_int = intBits(to);
+    if (from_int != null and to_int != null) {
+        if (from_int.? == to_int.?) return null;
+        if (from_int.? > to_int.?) return .trunc;
+        if (signedInt(from)) return .sext;
+        return .zext;
+    }
+    if (from.isFloat() and to.isFloat()) {
+        if (floatBits(from) == floatBits(to)) return null;
+        return if (floatBits(from) < floatBits(to)) .fpext else .fptrunc;
+    }
+    if (from.isInteger() and to.isFloat()) {
+        return if (signedInt(from)) .sitofp else .uitofp;
+    }
+    if (from.isFloat() and to.isInteger()) {
+        return if (signedInt(to)) .fptosi else .fptoui;
+    }
+    return null;
+}
+
+fn truncateInt(value: i128, ty: *types.Type) i128 {
+    const bits = intBits(ty) orelse return value;
+    if (bits >= 128) return value;
+    if (signedInt(ty)) {
+        const mask = (@as(i128, 1) << @intCast(bits)) - 1;
+        var truncated = value & mask;
+        if ((truncated & (@as(i128, 1) << @intCast(bits - 1))) != 0) {
+            truncated -= (@as(i128, 1) << @intCast(bits));
+        }
+        return truncated;
+    }
+    return value & ((@as(i128, 1) << @intCast(bits)) - 1);
+}
+
+fn constFloat(expr: *ast.Expr) ?f64 {
+    return switch (expr.kind) {
+        .float_lit => |lit| lit.value,
+        .int_lit => |lit| @floatFromInt(lit.value),
+        .unary => |unary| if (unary.op == .negate) if (constFloat(unary.operand)) |value| -value else null else null,
+        .binary => |binary| blk: {
+            const lhs = constFloat(binary.lhs) orelse break :blk null;
+            const rhs = constFloat(binary.rhs) orelse break :blk null;
+            break :blk switch (binary.op) {
+                .add => lhs + rhs,
+                .sub => lhs - rhs,
+                .mul => lhs * rhs,
+                .div => if (rhs == 0) null else lhs / rhs,
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn sizeInBytes(ty: *types.Type) ?usize {
+    return switch (ty.*) {
+        .bool => 1,
+        .char => 4,
+        .int => |info| @intCast(info.bits / 8),
+        .float => |bits| @intCast(bits / 8),
+        .pointer => 8,
+        .enum_type => |info| sizeInBytes(info.backing),
+        .array => |array| (sizeInBytes(array.elem) orelse return null) * array.len,
+        else => null,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// LLVM IR emitter
+// ---------------------------------------------------------------------------
+
+pub const Emitter = struct {
+    allocator: std.mem.Allocator,
+    module: *ir.Module,
+    current_ret_ty: *types.Type = undefined,
+
+    pub fn init(allocator: std.mem.Allocator, module: *ir.Module) Emitter {
+        return .{ .allocator = allocator, .module = module };
+    }
+
+    pub fn emit(self: *Emitter, writer: *std.Io.Writer) !void {
+        try writer.writeAll("; ModuleID = 'kyn'\n");
+        try writer.writeAll("; Generated by the Kyn compiler. Do not edit.\n\n");
+
+        for (self.module.structs.items) |info| {
+            try writer.print("%struct.{s} = type {{ ", .{info.name});
+            for (info.fields, 0..) |field, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try self.emitType(writer, field.ty);
+            }
+            if (info.fields.len == 0) try writer.writeAll("i8");
+            try writer.writeAll(" }\n");
+        }
+        if (self.module.structs.items.len > 0) try writer.writeByte('\n');
+
+        for (self.module.strings.items) |string| {
+            try writer.print("@.str{d} = private unnamed_addr constant [{d} x i8] c\"", .{
+                string.index,
+                string.bytes.len + 1,
+            });
+            for (string.bytes) |byte| try emitEscapedByte(writer, byte);
+            try writer.writeAll("\\00\"\n");
+        }
+        if (self.module.strings.items.len > 0) try writer.writeByte('\n');
+
+        for (self.module.globals.items) |global| {
+            try writer.print("@{s} = {s} ", .{ global.name, if (global.mutable) "global" else "constant" });
+            try self.emitType(writer, global.ty);
+            try writer.writeByte(' ');
+            try self.emitValue(writer, global.init, global.ty);
+            try writer.writeByte('\n');
+        }
+        if (self.module.globals.items.len > 0) try writer.writeByte('\n');
+
+        for (self.module.functions.items) |function| {
+            if (function.linkage == .declaration) {
+                try writer.print("declare {s} @{s}(", .{ try self.typeString(function.ret), function.name });
+                for (function.params, 0..) |param, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try self.emitType(writer, param.ty);
+                }
+                try writer.writeAll(")\n");
+            } else {
+                try self.emitFunction(writer, function);
+            }
+        }
+    }
+
+    fn emitFunction(self: *Emitter, writer: *std.Io.Writer, function: *ir.Function) !void {
+        self.current_ret_ty = function.ret;
+        const linkage = if (function.linkage == .internal) "internal " else "dso_local ";
+        try writer.print("define {s}{s} @{s}(", .{ linkage, try self.typeString(function.ret), function.name });
+        for (function.params, 0..) |param, i| {
+            if (i > 0) try writer.writeAll(", ");
+            try writer.print("{s} %arg{d}", .{ try self.typeString(param.ty), param.local });
+        }
+        try writer.writeAll(") {\n");
+
+        for (function.blocks.items, 0..) |block, index| {
+            if (index == 0) {
+                try writer.writeAll("entry:\n");
+            } else {
+                try writer.print(".b{d}:\n", .{block.id});
+            }
+            if (index == 0) {
+                for (function.locals.items) |local| {
+                    try writer.print("  %v{d} = alloca {s}\n", .{ local.id, try self.typeString(local.ty) });
+                }
+            }
+            for (block.insts.items) |inst| try self.emitInst(writer, inst);
+            if (!block.terminated) try writer.writeAll("  unreachable\n");
+        }
+        try writer.writeAll("}\n\n");
+    }
+
+    fn emitInst(self: *Emitter, writer: *std.Io.Writer, inst: ir.Inst) !void {
+        switch (inst) {
+            .binary => |binary| {
+                const op = binaryName(binary.op, binary.ty);
+                try writer.print("  %t{d} = {s} {s} ", .{ binary.dst, op, try self.typeString(binary.ty) });
+                try self.emitValue(writer, binary.lhs, binary.ty);
+                try writer.writeAll(", ");
+                try self.emitValue(writer, binary.rhs, binary.ty);
+                try writer.writeByte('\n');
+            },
+            .unary => |unary| {
+                switch (unary.op) {
+                    .negate => {
+                        if (unary.ty.isFloat()) {
+                            try writer.print("  %t{d} = fneg {s} ", .{ unary.dst, try self.typeString(unary.ty) });
+                        } else {
+                            try writer.print("  %t{d} = sub {s} 0, ", .{ unary.dst, try self.typeString(unary.ty) });
+                        }
+                        try self.emitValue(writer, unary.operand, unary.ty);
+                        try writer.writeByte('\n');
+                    },
+                    .logical_not => {
+                        try writer.print("  %t{d} = xor i1 ", .{unary.dst});
+                        try self.emitValue(writer, unary.operand, unary.ty);
+                        try writer.writeAll(", true\n");
+                    },
+                    .bit_not => {
+                        try writer.print("  %t{d} = xor {s} ", .{ unary.dst, try self.typeString(unary.ty) });
+                        try self.emitValue(writer, unary.operand, unary.ty);
+                        try writer.writeAll(", -1\n");
+                    },
+                }
+            },
+            .icmp => |cmp| {
+                const pred = icmpPredicate(cmp.op, cmp.ty);
+                try writer.print("  %t{d} = icmp {s} {s} ", .{ cmp.dst, pred, try self.typeString(cmp.ty) });
+                try self.emitValue(writer, cmp.lhs, cmp.ty);
+                try writer.writeAll(", ");
+                try self.emitValue(writer, cmp.rhs, cmp.ty);
+                try writer.writeByte('\n');
+            },
+            .fcmp => |cmp| {
+                const pred = fcmpPredicate(cmp.op);
+                try writer.print("  %t{d} = fcmp {s} {s} ", .{ cmp.dst, pred, try self.typeString(cmp.ty) });
+                try self.emitValue(writer, cmp.lhs, cmp.ty);
+                try writer.writeAll(", ");
+                try self.emitValue(writer, cmp.rhs, cmp.ty);
+                try writer.writeByte('\n');
+            },
+            .cast => |cast| {
+                const from = try self.typeString(cast.from);
+                const to = try self.typeString(cast.to);
+                const opname: []const u8 = switch (cast.kind) {
+                    .trunc => "trunc",
+                    .zext => "zext",
+                    .sext => "sext",
+                    .fptrunc => "fptrunc",
+                    .fpext => "fpext",
+                    .sitofp => "sitofp",
+                    .uitofp => "uitofp",
+                    .fptosi => "fptosi",
+                    .fptoui => "fptoui",
+                    .ptrtoint => "ptrtoint",
+                    .inttoptr => "inttoptr",
+                    .bitcast => "bitcast",
+                    .int_to_bool => "icmp ne",
+                    .bool_to_int => "zext",
+                };
+                if (cast.kind == .int_to_bool) {
+                    try writer.print("  %t{d} = icmp ne {s} ", .{ cast.dst, from });
+                    try self.emitValue(writer, cast.value, cast.from);
+                    try writer.writeAll(if (cast.from.isPointer()) ", null\n" else ", 0\n");
+                    return;
+                }
+                try writer.print("  %t{d} = {s} {s} ", .{ cast.dst, opname, from });
+                try self.emitValue(writer, cast.value, cast.from);
+                try writer.print(" to {s}\n", .{to});
+            },
+            .call => |call| {
+                if (call.dst) |dst| try writer.print("  %t{d} = ", .{dst}) else try writer.writeAll("  ");
+                try writer.print("call {s} @{s}(", .{ try self.typeString(call.ret), call.name });
+                for (call.args, 0..) |arg, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.print("{s} ", .{try self.typeString(call.arg_types[i])});
+                    try self.emitValue(writer, arg, call.arg_types[i]);
+                }
+                try writer.writeAll(")\n");
+            },
+            .field_ptr => |field| {
+                try writer.print("  %t{d} = getelementptr inbounds %struct.{s}, ptr ", .{ field.dst, field.struct_ty.name });
+                try self.emitValue(writer, field.base, null);
+                try writer.print(", i32 0, i32 {d}\n", .{field.field});
+            },
+            .elem_ptr => |element| {
+                if (element.is_array) {
+                    try writer.print("  %t{d} = getelementptr inbounds {s}, ptr ", .{ element.dst, try self.typeString(element.container) });
+                    try self.emitValue(writer, element.base, null);
+                    try writer.writeAll(", i64 0, ");
+                } else {
+                    try writer.print("  %t{d} = getelementptr inbounds {s}, ptr ", .{ element.dst, try self.typeString(element.container.pointer.elem) });
+                    try self.emitValue(writer, element.base, null);
+                    try writer.writeByte(',');
+                    try writer.writeByte(' ');
+                }
+                try writer.print("{s} ", .{try self.typeString(element.index_ty)});
+                try self.emitValue(writer, element.index, element.index_ty);
+                try writer.writeByte('\n');
+            },
+            .load => |load| {
+                try writer.print("  %t{d} = load {s}, ptr ", .{ load.dst, try self.typeString(load.ty) });
+                try self.emitValue(writer, load.ptr, null);
+                try writer.writeByte('\n');
+            },
+            .store => |store| {
+                try writer.print("  store {s} ", .{try self.typeString(store.ty)});
+                try self.emitValue(writer, store.value, store.ty);
+                try writer.writeAll(", ptr ");
+                try self.emitValue(writer, store.ptr, null);
+                try writer.writeByte('\n');
+            },
+            .br => |branch| {
+                try writer.writeAll("  br label %");
+                try self.emitLabel(writer, branch.target);
+                try writer.writeByte('\n');
+            },
+            .cbr => |branch| {
+                try writer.writeAll("  br i1 ");
+                try self.emitValue(writer, branch.cond, null);
+                try writer.writeAll(", label %");
+                try self.emitLabel(writer, branch.then_block);
+                try writer.writeAll(", label %");
+                try self.emitLabel(writer, branch.else_block);
+                try writer.writeByte('\n');
+            },
+            .ret => |ret| {
+                if (ret.value) |value| {
+                    const ret_ty = self.current_ret_ty;
+                    try writer.print("  ret {s} ", .{try self.typeString(ret_ty)});
+                    try self.emitValue(writer, value, ret_ty);
+                    try writer.writeByte('\n');
+                } else {
+                    try writer.writeAll("  ret void\n");
+                }
+            },
+            .unreachable_ => try writer.writeAll("  unreachable\n"),
+        }
+    }
+
+    fn emitLabel(self: *Emitter, writer: *std.Io.Writer, index: u32) !void {
+        _ = self;
+        if (index == 0) {
+            try writer.writeAll("entry");
+        } else {
+            try writer.print(".b{d}", .{index});
+        }
+    }
+
+    // The label needs a formatted index; handled by a small buffer.
+    fn emitValue(self: *Emitter, writer: *std.Io.Writer, value: ir.Value, expected: ?*types.Type) !void {
+        switch (value) {
+            .none => try writer.writeAll("undef"),
+            .int => |number| {
+                if (expected) |ty| {
+                    if (ty.* == .bool) {
+                        try writer.print("{d}", .{@intFromBool(number != 0)});
+                        return;
+                    }
+                }
+                try writer.print("{d}", .{number});
+            },
+            .float => |number| try writer.print("{d}", .{number}),
+            .boolean => |flag| try writer.writeAll(if (flag) "true" else "false"),
+            .null_ptr => try writer.writeAll("null"),
+            .local => |id| try writer.print("%v{d}", .{id}),
+            .global => |index| try writer.print("@{s}", .{self.module.globals.items[index].name}),
+            .string => |index| try writer.print("@.str{d}", .{index}),
+            .reg => |id| try writer.print("%t{d}", .{id}),
+            .param => |id| try writer.print("%arg{d}", .{id}),
+        }
+    }
+
+    fn emitType(self: *Emitter, writer: *std.Io.Writer, ty: *types.Type) !void {
+        try writer.writeAll(try self.typeString(ty));
+    }
+
+    fn typeString(self: *Emitter, ty: *types.Type) ![]const u8 {
+        return switch (ty.*) {
+            .void => "void",
+            .bool => "i1",
+            .char => "i32",
+            .int => |info| try std.fmt.allocPrint(self.allocator, "i{d}", .{info.bits}),
+            .float => |bits| if (bits == 32) "float" else "double",
+            .pointer => "ptr",
+            .array => |array| try std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{
+                array.len,
+                try self.typeString(array.elem),
+            }),
+            .struct_type => |info| try std.fmt.allocPrint(self.allocator, "%struct.{s}", .{info.name}),
+            .enum_type => |info| try self.typeString(info.backing),
+            .fn_type => "ptr",
+            .comptime_int => "i64",
+            .comptime_float => "double",
+            .null_type => "ptr",
+            .invalid => "i8",
+        };
+    }
+};
+
+fn binaryName(op: ir.BinaryOp, ty: *types.Type) []const u8 {
+    if (ty.isFloat()) {
+        return switch (op) {
+            .add => "fadd",
+            .sub => "fsub",
+            .mul => "fmul",
+            .div => "fdiv",
+            .mod => "frem",
+            else => "fadd",
+        };
+    }
+    const signed = ty.* == .int and ty.int.signed;
+    return switch (op) {
+        .add => "add",
+        .sub => "sub",
+        .mul => "mul",
+        .div => if (signed) "sdiv" else "udiv",
+        .mod => if (signed) "srem" else "urem",
+        .bit_and => "and",
+        .bit_or => "or",
+        .bit_xor => "xor",
+        .shl => "shl",
+        .shr => if (signed) "ashr" else "lshr",
+    };
+}
+
+fn icmpPredicate(op: ir.CmpOp, ty: *types.Type) []const u8 {
+    const signed = ty.* == .int and ty.int.signed;
+    return switch (op) {
+        .eq => "eq",
+        .ne => "ne",
+        .lt => if (signed) "slt" else "ult",
+        .le => if (signed) "sle" else "ule",
+        .gt => if (signed) "sgt" else "ugt",
+        .ge => if (signed) "sge" else "uge",
+    };
+}
+
+fn fcmpPredicate(op: ir.CmpOp) []const u8 {
+    return switch (op) {
+        .eq => "oeq",
+        .ne => "one",
+        .lt => "olt",
+        .le => "ole",
+        .gt => "ogt",
+        .ge => "oge",
+    };
+}
+
+fn emitEscapedByte(writer: *std.Io.Writer, byte: u8) !void {
+    if (byte == '"') {
+        try writer.writeAll("\\22");
+    } else if (byte == '\\') {
+        try writer.writeAll("\\5C");
+    } else if (byte >= 0x20 and byte <= 0x7e) {
+        try writer.writeByte(byte);
+    } else {
+        try writer.print("\\{X:0>2}", .{byte});
+    }
+}
+
+const testing = std.testing;
+
+test "emitter prints a deterministic module and function" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prims = try types.Primitives.init(a);
+
+    var module = ir.Module.init(a);
+
+    const function = try a.create(ir.Function);
+    function.* = .{
+        .name = "main",
+        .params = &.{},
+        .ret = prims.i32,
+        .linkage = .external,
+    };
+    const block = try a.create(ir.Block);
+    block.* = .{ .id = 0, .terminated = true };
+    try block.insts.append(a, .{ .ret = .{ .value = .{ .int = 0 } } });
+    try function.blocks.append(a, block);
+    try module.functions.append(a, function);
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    try testing.expect(std.mem.indexOf(u8, ll, "ModuleID = 'kyn'") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "define dso_local i32 @main()") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "ret i32 0") != null);
+}
+
+test "emitter declares extern functions and escapes strings" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prims = try types.Primitives.init(a);
+
+    var module = ir.Module.init(a);
+    const string_index = try module.addString("a\"b\n");
+
+    const put_fn = try a.create(ir.Function);
+    put_fn.* = .{
+        .name = "puts",
+        .params = &.{},
+        .ret = prims.i32,
+        .linkage = .declaration,
+    };
+    try module.functions.append(a, put_fn);
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    try testing.expect(std.mem.indexOf(u8, ll, "declare i32 @puts()") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "@.str0") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "\\22") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "\\0A") != null);
+    try testing.expect(string_index == 0);
+}

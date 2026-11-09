@@ -1,0 +1,21 @@
+.{
+    .name = .kyn,
+    .version = "0.1.0-alpha.1",
+    .fingerprint = 0xef3473331e5eaa63,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "compiler",
+        "build-system",
+        "tests",
+        "std",
+        "runtime",
+        "examples",
+        "docs",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
+    },
+}
