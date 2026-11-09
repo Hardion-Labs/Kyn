@@ -52,6 +52,8 @@ First vertically functional compiler milestone.
   its tests.
 - Documentation and integration tests now cover aggregate by-value support
   within Kyn and its rejection at C ABI boundaries.
+- README factually documents aggregate support, documentation links and the
+  release-readiness gate after the visual refresh.
 - `kync --version` and `kyn-build --version` now print exactly the version
   line on stdout; help output is no longer printed after `--version`.
 

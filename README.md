@@ -33,6 +33,7 @@
 - [Current Limitations](#-current-limitations)
 - [Documentation](#-documentation)
 - [Building & Testing](#-building--testing)
+- [Repository Layout](#-repository-layout)
 - [Roadmap](#-roadmap)
 - [License](#-license)
 
@@ -45,8 +46,8 @@ Kyn favors **explicitness over inference**, **provable correctness over convenie
 | Principle | What it means |
 |:---|:---|
 | 🎛️ **Explicit Control** | Allocation, pointers, mutability and conversions are written in the source. No hidden allocations or control flow. |
-| 🛡️ **Verifiable Safety** | Compile-time checks for what can be proven. Runtime checks (when added) will **never** be silently removed. |
-| ⚙️ **Predictable Performance** | No GC, no ownership inference, no implicit reference counting. Source maps cleanly to machine operations. |
+| 🛡️ **Verifiable Safety** | Compile-time checks for what can be proven. Runtime checks, when added, will **never** be silently removed. |
+| ⚙️ **Predictable Performance** | No GC, no ownership inference, no implicit reference counting. Source carries predictable machine costs. |
 
 ---
 
@@ -57,8 +58,8 @@ Kyn favors **explicitness over inference**, **provable correctness over convenie
 | Tool | Version |
 |:---|:---|
 | **Zig** | `0.17.0` |
-| **Clang** | recent — with opaque pointer support |
-| **ar + POSIX shell** | available on PATH |
+| **Clang** | Recent, with opaque-pointer LLVM IR support |
+| **ar + POSIX shell** | Available on PATH |
 
 ### Install & Build
 
@@ -68,7 +69,7 @@ cd Kyn
 zig build
 ```
 
-Try It
+### Try It
 
 ```bash
 # Run an example
@@ -77,13 +78,14 @@ Try It
 # Type-check only
 ./zig-out/bin/kync check examples/hello.kyn
 
-# Build a native binary
-./zig-out/bin/kync build examples/hello.kyn -o hello --profile safe
+# Build a native binary (keeps generated artifacts outside the repo)
+./zig-out/bin/kync build examples/hello.kyn -o /tmp/kyn-hello --profile safe
+/tmp/kyn-hello
 ```
 
 ---
 
-👀 A First Look
+## 👀 A First Look
 
 ```kyn
 extern fn puts(s: *const u8) i32;
@@ -106,20 +108,20 @@ fn main() i32 {
 }
 ```
 
-Design choices visible here
+### Design choices visible here
 
-· 🔹 let is immutable, var is mutable
-· 🔹 Pointers are always explicit — *T / *const T
-· 🔹 Field access through pointers uses ->
-· 🔹 Conditions must be bool
-· 🔹 Numeric conversions require as
-· 🔹 Full C ABI interoperability
+- `let` is immutable; `var` is mutable.
+- Pointers are always explicit: `*T` and `*const T`.
+- Field access through pointers uses `->`; field access on values uses `.`.
+- Conditions must be `bool`.
+- Numeric conversions require `as`.
+- Kyn and C can call each other through the C ABI; v0.1 supports the scalar call surface, not variadics or aggregate-by-value extern arguments.
 
 ---
 
-🛠️ Toolchain
+## 🛠️ Toolchain
 
-kync — Compiler Driver
+### `kync` — Compiler Driver
 
 ```bash
 kync check <file.kyn>          # Parse + type-check
@@ -128,7 +130,11 @@ kync build <file.kyn> -o out   # Build native executable
 kync run <file.kyn>            # Build and execute
 ```
 
-kyn-build — Project System
+`kync` performs lexing, parsing, name resolution, type checking and static
+analysis before emitting LLVM IR. Clang is used to assemble and link that IR;
+Kyn semantics are implemented in this repository, not by Clang.
+
+### `kyn-build` — Project System
 
 Supports mixed Kyn + C + Zig projects with content-addressed incremental builds.
 
@@ -144,94 +150,145 @@ target "hybrid" {
 }
 ```
 
----
+Example:
 
-🧬 Safety Profiles
-
-Profile Optimization Static Analyzer
-🔵 debug -O0 -g ✅ Always on
-🟢 safe -O2 ✅ Always on
-🟡 release -O3 ✅ Always on
-🟠 fast -O3 ✅ Always on
-
-⚠️ Note: Profiles currently only affect native optimization.
-No check is ever silently removed.
+```bash
+./zig-out/bin/kyn-build --file examples/hybrid/kyn.build
+./examples/hybrid/build/hybrid/hybrid
+```
 
 ---
 
-⚠️ Current Limitations
+## 🧬 Safety Profiles
 
-Kyn v0.1 deliberately implements a small, verified core.
-The following are not available yet:
+| Profile | Native Optimization | Static Analyzer |
+|:---:|:---:|:---:|
+| 🔵 `debug` | `-O0 -g` | ✅ Always on |
+| 🟢 `safe` | `-O2` | ✅ Always on |
+| 🟡 `release` | `-O3` | ✅ Always on |
+| 🟠 `fast` | `-O3` | ✅ Always on |
 
-<table>
-<tr><td>
-
-· ❌ Modules, imports or package system
-· ❌ Slices, generics or traits
-· ❌ defer, for, switch/match, closures
-· ❌ Runtime bounds / overflow / null checks
-
-</td><td>
-
-· ❌ Standard library and runtime
-· ❌ Aggregate by-value parameters and copies
-· ❌ Function pointers
-
-</td></tr>
-</table>
-
-🧭 Unsupported constructs are rejected with diagnostics, never compiled as undefined behavior.
+> ⚠️ Profiles currently affect native optimization only.  
+> No check is removed silently: the static analyzer always runs.
 
 ---
 
-📚 Documentation
+## ⚠️ Current Limitations
 
-Document Description
-🧠 Language Design Philosophy and design decisions
-📖 Language Reference Syntax and semantics
-🧩 Type System Types and rules
-🧱 Memory Model Memory and pointers
-🛡️ Safety Model Checks and undefined behavior
-🗺️ Roadmap Planned milestones
+Kyn v0.1 deliberately implements a small, verified core. The following are **available with limits**:
+
+| Limitation | Status |
+|:---|:---|
+| ❌ Modules, imports or package system | Planned |
+| ❌ Slices, generics or traits | Planned |
+| ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
+| ❌ Variadic extern functions | Planned / C wrapper required |
+| ❌ Indirect calls and first-class function values | Planned |
+| ❌ Runtime bounds / overflow / null checks | Planned; not implemented |
+| ❌ Standard library and runtime | Planned |
+
+Aggregate by-value support exists **inside Kyn only**:
+
+- Struct and array parameters/returns inside Kyn: ✅
+- Aggregate assignment and copies inside Kyn: ✅
+- Aggregate parameters/returns across `extern`/`export` C ABI boundaries: ❌ (`E0410`); pass a pointer
+
+Unsupported constructs are rejected with diagnostics, rather than silently compiled as undefined behavior.
+See [Diagnostic codes](docs/diagnostics.md) for the stable codes.
 
 ---
 
-🧪 Building & Testing
+## 📚 Documentation
+
+| Document | Description |
+|:---|:---|
+| [🧠 Language Design](docs/language-design.md) | Philosophy and design decisions |
+| [📖 Language Reference](docs/language-reference.md) | Syntax and semantics |
+| [🧩 Grammar](docs/grammar.md) · [EBNF](docs/grammar.ebnf) | Grammar and precedence |
+| [🔎 Type System](docs/type-system.md) | Types and assignment rules |
+| [🧱 Memory Model](docs/memory-model.md) | Memory, pointers and layout |
+| [🛡️ Safety Model](docs/safety-model.md) | Checks and undefined behavior |
+| [🤝 C ABI](docs/abi.md) | Interop and calling conventions |
+| [🏗️ Compiler Architecture](docs/compiler-architecture.md) | Frontend, IR and backend |
+| [🛠️ Build System](docs/build-system.md) | `kyn-build` and incremental builds |
+| [🔎 Diagnostics](docs/diagnostics.md) | Stable diagnostic codes |
+| [🚦 Release Checklist](docs/release-checklist.md) | Release readiness gate |
+| [🗺️ Roadmap](docs/roadmap.md) | Planned milestones |
+
+---
+
+## 🧪 Building & Testing
 
 ```bash
 zig build                 # Build kync + kyn-build
 zig build test            # Unit + regression tests
 zig build integration     # End-to-end tests
+zig fmt --check build.zig compiler build-system
+```
+
+The integration suite covers:
+
+- Positive programs whose exit status and stdout are verified
+- The four safety profiles
+- Negative programs with required diagnostic codes
+- Diagnostic documentation coverage against compiler sources
+- Deterministic lexer/parser robustness corpus
+- Version metadata consistency across build files and installed tools
+- `emit-llvm` and `emit-obj` smoke tests
+- A Kyn + C + Zig executable built by `kyn-build`
+- Aggregate by-value behavior inside Kyn
+
+Release readiness can be audited without creating a tag or release:
+
+```sh
+tools/release-check.sh 0.1.0-alpha.1 "$(git rev-parse HEAD)"
 ```
 
 ---
 
-🗺️ Roadmap (High Level)
+## 📁 Repository Layout
 
-# Milestone Status
-1 Runtime check layer (profile-controlled) 🔜
-2 Modules + package system 🔜
-3 Slices and aggregate ABI 🔜
-4 Function pointers 🔜
-5 defer + richer control flow 🔜
-6 Initial standard library 🔜
+```text
+compiler/            Lexer, parser, AST, sema, analyzer, IR, LLVM backend
+build-system/        kyn-build implementation
+tests/integration/   End-to-end positive, negative, robustness and interop tests
+tools/               Release-readiness tooling
+examples/            hello.kyn, pointers.kyn and a hybrid Kyn + C + Zig project
+docs/                Language, safety, ABI, architecture and release docs
+runtime/             Planned optional runtime support
+std/                 Planned standard library
+build.zig            Builds the toolchain and wires test steps
+```
 
 ---
 
-📄 License
+## 🗺️ Roadmap
 
-MIT — see LICENSE.
+| Milestone | Status |
+|:---|:---|
+| `v0.1.0-alpha.1` — Vertically functional compiler | ✅ In `main`, not released |
+| `v0.1.0-alpha.2` — Frontend hardening | ✅ In `main`, not released |
+| `v0.1.0-alpha.3` — Aggregates and ABI | 🚧 In progress |
+| `v0.1.0-beta.1` — Runtime safety checks | 🔜 Planned |
+| `v0.1.0-rc.1` — Interop and toolchain | 🔜 Planned |
+| `v0.1.0` — First stabilized alpha-quality release | 🔜 Planned |
+
+See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 
 <div align="center">
 
-Hardion Labs
-
+**Hardion Labs**  
 Engineered to the core.
 
-https://img.shields.io/badge/GitHub-Hardion--Labs-181717?style=flat-square&logo=github&logoColor=white
-https://img.shields.io/badge/Repo-Kyn-181717?style=flat-square&logo=github&logoColor=white
+[![GitHub](https://img.shields.io/badge/GitHub-Hardion--Labs-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/Hardion-Labs)
+[![Repo](https://img.shields.io/badge/Repo-Kyn-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/Hardion-Labs/Kyn)
 
 </div>
