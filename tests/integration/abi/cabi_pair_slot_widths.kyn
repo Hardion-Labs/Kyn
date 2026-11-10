@@ -1,0 +1,77 @@
+// Two-eightbyte aggregates whose second slot is narrower than a full
+// eightbyte register, in both directions.
+//
+// `{ f32, f32, i16 }` is 12 bytes wide but Clang passes it as
+// `<2 x float>, i16`, so the callee must write the 2-byte slot and never the
+// four bytes starting at offset 8 (which belong to the padding). The same
+// applies to `{ i16, f32, f32 }` in the reverse order and to the pointer
+// slots, which are never narrowed.
+struct FloatPairShort { low: f32, high: f32, extra: i16 }
+struct FloatPairByte { low: f32, high: f32, extra: i8 }
+struct FloatPairFlag { low: f32, high: f32, extra: bool }
+struct ShortFloatPair { extra: i16, low: f32, high: f32 }
+struct PointerFloatPair { pointer: *const u8, low: f32, high: f32 }
+struct FloatPairPointer { low: f32, high: f32, pointer: *const u8 }
+struct IntFloatPair { count: i32, low: f32, high: f32 }
+
+extern fn c_take_float_pair_short(value: FloatPairShort) FloatPairShort;
+extern fn c_take_float_pair_byte(value: FloatPairByte) FloatPairByte;
+extern fn c_take_float_pair_flag(value: FloatPairFlag) FloatPairFlag;
+extern fn c_take_short_float_pair(value: ShortFloatPair) ShortFloatPair;
+extern fn c_take_pointer_float_pair(value: PointerFloatPair) PointerFloatPair;
+extern fn c_take_float_pair_pointer(value: FloatPairPointer) FloatPairPointer;
+extern fn c_take_int_float_pair(value: IntFloatPair) IntFloatPair;
+extern fn c_check_kyn() i32;
+
+export fn kyn_take_float_pair_short(value: FloatPairShort) FloatPairShort {
+    return FloatPairShort {
+        low: value.low + 1.0,
+        high: value.high + 2.0,
+        extra: value.extra + 3,
+    };
+}
+
+export fn kyn_take_float_pair_byte(value: FloatPairByte) FloatPairByte {
+    return FloatPairByte {
+        low: value.low + 1.0,
+        high: value.high + 1.0,
+        extra: value.extra + 1,
+    };
+}
+
+export fn kyn_take_float_pair_flag(value: FloatPairFlag) FloatPairFlag {
+    return FloatPairFlag {
+        low: value.low + 1.0,
+        high: value.high + 1.0,
+        extra: !value.extra,
+    };
+}
+
+export fn kyn_take_int_float_pair(value: IntFloatPair) IntFloatPair {
+    return IntFloatPair {
+        count: value.count * 2,
+        low: value.low + 1.0,
+        high: value.high + 1.0,
+    };
+}
+
+fn main() i32 {
+    let short = c_take_float_pair_short(FloatPairShort { low: 1.5, high: 2.5, extra: 7 });
+    let byte = c_take_float_pair_byte(FloatPairByte { low: 3.5, high: 4.5, extra: 9 });
+    let flag = c_take_float_pair_flag(FloatPairFlag { low: 5.5, high: 6.5, extra: false });
+    let reversed = c_take_short_float_pair(ShortFloatPair { extra: 11, low: 7.5, high: 8.5 });
+    let pointer_first = c_take_pointer_float_pair(PointerFloatPair { pointer: null, low: 9.5, high: 10.5 });
+    let pointer_last = c_take_float_pair_pointer(FloatPairPointer { low: 11.5, high: 12.5, pointer: null });
+    let int_pair = c_take_int_float_pair(IntFloatPair { count: 21, low: 13.5, high: 14.5 });
+    if (flag.extra != true) {
+        return 90;
+    }
+    let total: i32 = (short.low as i32) + (short.high as i32) + (short.extra as i32) +
+        (byte.low as i32) + (byte.high as i32) + (byte.extra as i32) +
+        (flag.low as i32) + (flag.high as i32) +
+        (reversed.extra as i32) + (reversed.low as i32) + (reversed.high as i32) +
+        (pointer_first.low as i32) + (pointer_first.high as i32) +
+        (pointer_last.low as i32) + (pointer_last.high as i32) +
+        int_pair.count + (int_pair.low as i32) + (int_pair.high as i32);
+    return total + c_check_kyn();
+}

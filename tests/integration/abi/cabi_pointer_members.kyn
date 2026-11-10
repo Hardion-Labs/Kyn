@@ -1,0 +1,118 @@
+// Pointer-bearing aggregates at the C ABI boundary, in both directions.
+//
+// Clang passes a pointer eightbyte in a full INTEGER register whatever the
+// neighbouring eightbyte holds, so these layouts must match `(ptr, double)`,
+// `(double, ptr)`, `(float, ptr)`, `(ptr, <2 x float>)`, `(<2 x float>, ptr)`
+// and `(i8, ptr)`. A pointer `struct` member is an Integer-class eightbyte,
+// not a narrowable integer leaf, which is why it neither widens nor narrows.
+//
+// The pointer identity checks run on the C side: a struct passed by value is
+// copied into the callee, so the returned pointer must be compared against the
+// value the *caller* stored rather than a freshly taken address.
+struct PointerDouble { pointer: *const u8, amount: f64 }
+struct DoublePointer { amount: f64, pointer: *const u8 }
+struct FloatPointer { amount: f32, pointer: *const u8 }
+struct PointerFloatPair { pointer: *const u8, low: f32, high: f32 }
+struct FloatPairPointer { low: f32, high: f32, pointer: *const u8 }
+struct PointerOnly { pointer: *const u8 }
+struct NestedPointer { inner: PointerOnly, amount: f64 }
+struct NarrowPointer { tag: i8, pointer: *const u8 }
+// Single-member aggregates: the whole struct is one eightbyte, so the leaf
+// alone decides the register. A lone pointer must keep `ptr`, and an odd-width
+// integer aggregate rides the covering INTEGER register.
+struct ShortOnly { value: i16 }
+struct FloatOnly { value: f32 }
+struct DoubleOnly { value: f64 }
+struct ThreeShorts { a: i16, b: i16, c: i16 }
+struct ThreeBytes { a: i8, b: i8, c: i8 }
+
+extern fn c_take_pointer_double(value: PointerDouble) PointerDouble;
+extern fn c_take_double_pointer(value: DoublePointer) DoublePointer;
+extern fn c_take_float_pointer(value: FloatPointer) FloatPointer;
+extern fn c_take_pointer_float_pair(value: PointerFloatPair) PointerFloatPair;
+extern fn c_take_float_pair_pointer(value: FloatPairPointer) FloatPairPointer;
+extern fn c_take_nested_pointer(value: NestedPointer) NestedPointer;
+extern fn c_take_narrow_pointer(value: NarrowPointer) NarrowPointer;
+extern fn c_take_pointer_only(value: PointerOnly) PointerOnly;
+extern fn c_take_short_only(value: ShortOnly) ShortOnly;
+extern fn c_take_float_only(value: FloatOnly) FloatOnly;
+extern fn c_take_double_only(value: DoubleOnly) DoubleOnly;
+extern fn c_take_three_shorts(value: ThreeShorts) ThreeShorts;
+extern fn c_take_three_bytes(value: ThreeBytes) ThreeBytes;
+extern fn c_check_kyn() i32;
+
+export fn kyn_take_pointer_double(value: PointerDouble) PointerDouble {
+    return PointerDouble { pointer: value.pointer, amount: value.amount + 1.0 };
+}
+
+export fn kyn_take_double_pointer(value: DoublePointer) DoublePointer {
+    return DoublePointer { amount: value.amount + 2.0, pointer: value.pointer };
+}
+
+export fn kyn_take_nested_pointer(value: NestedPointer) NestedPointer {
+    return NestedPointer {
+        inner: PointerOnly { pointer: value.inner.pointer },
+        amount: value.amount + 3.0,
+    };
+}
+
+export fn kyn_take_narrow_pointer(value: NarrowPointer) NarrowPointer {
+    return NarrowPointer { tag: value.tag + 1, pointer: value.pointer };
+}
+
+export fn kyn_take_pointer_only(value: PointerOnly) PointerOnly {
+    return PointerOnly { pointer: value.pointer };
+}
+
+export fn kyn_take_three_shorts(value: ThreeShorts) ThreeShorts {
+    return ThreeShorts { a: value.a + 1, b: value.b + 2, c: value.c + 3 };
+}
+
+export fn kyn_take_three_bytes(value: ThreeBytes) ThreeBytes {
+    return ThreeBytes { a: value.a + 1, b: value.b + 2, c: value.c + 3 };
+}
+
+const BYTES: [4]u8 = [1, 2, 3, 4];
+
+fn main() i32 {
+    let anchor: *const u8 = &BYTES[0];
+    let pointer_double = c_take_pointer_double(PointerDouble { pointer: anchor, amount: 10.0 });
+    let double_pointer = c_take_double_pointer(DoublePointer { amount: 20.0, pointer: anchor });
+    let float_pointer = c_take_float_pointer(FloatPointer { amount: 3.5, pointer: anchor });
+    let pointer_pair = c_take_pointer_float_pair(PointerFloatPair { pointer: anchor, low: 1.5, high: 2.5 });
+    let pair_pointer = c_take_float_pair_pointer(FloatPairPointer { low: 4.5, high: 5.5, pointer: anchor });
+    let nested = c_take_nested_pointer(NestedPointer { inner: PointerOnly { pointer: anchor }, amount: 30.0 });
+    let narrow = c_take_narrow_pointer(NarrowPointer { tag: 6, pointer: anchor });
+    let pointer_only = c_take_pointer_only(PointerOnly { pointer: anchor });
+    let short_only = c_take_short_only(ShortOnly { value: 11 });
+    let float_only = c_take_float_only(FloatOnly { value: 1.5 });
+    let double_only = c_take_double_only(DoubleOnly { value: 2.5 });
+    let three_shorts = c_take_three_shorts(ThreeShorts { a: 10, b: 20, c: 30 });
+    let three_bytes = c_take_three_bytes(ThreeBytes { a: 10, b: 5, c: 2 });
+    if (pointer_double.pointer != anchor) {
+        return 90;
+    }
+    if (double_pointer.pointer != anchor) {
+        return 91;
+    }
+    if (float_pointer.pointer != anchor) {
+        return 91;
+    }
+    if (narrow.pointer != anchor) {
+        return 92;
+    }
+    // The C side checks identity for the shapes whose Kyn call above would
+    // otherwise let the optimizer fold the comparison.
+    if (pointer_only.pointer != anchor) {
+        return 94;
+    }
+    let total: i32 = (pointer_double.amount as i32) + (double_pointer.amount as i32) +
+        (float_pointer.amount as i32) + (pointer_pair.low as i32) +
+        (pointer_pair.high as i32) + (pair_pointer.low as i32) +
+        (pair_pointer.high as i32) + (nested.amount as i32) + (narrow.tag as i32) +
+        (short_only.value as i32) + (float_only.value as i32) +
+        (double_only.value as i32) + (three_shorts.a as i32) +
+        (three_shorts.b as i32) + (three_shorts.c as i32) +
+        (three_bytes.a as i32) + (three_bytes.b as i32) + (three_bytes.c as i32);
+    return total + c_check_kyn();
+}

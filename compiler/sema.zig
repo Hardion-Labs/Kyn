@@ -1707,29 +1707,12 @@ pub const Sema = struct {
             .abi_v2f32_f32 => "<internal ABI pair>",
             .abi_v2f32_v2f32 => "<internal ABI pair>",
             .abi_pair_f64 => "<internal ABI pair>",
-            .abi_f64_i32 => "<internal ABI pair>",
-            .abi_i32_f64 => "<internal ABI pair>",
-            .abi_f32_f64 => "<internal ABI pair>",
-            .abi_f64_f32 => "<internal ABI pair>",
-            .abi_f32_i64 => "<internal ABI pair>",
-            .abi_i64_f32 => "<internal ABI pair>",
-            .abi_f64_i64 => "<internal ABI pair>",
-            .abi_i64_f64 => "<internal ABI pair>",
             .abi_v2f32_i32 => "<internal ABI pair>",
             .abi_v2f32_i64 => "<internal ABI pair>",
             .abi_i64_v2f32 => "<internal ABI pair>",
             .abi_f64_v2f32 => "<internal ABI pair>",
             .abi_v2f32_f64 => "<internal ABI pair>",
-            .abi_i8_f64 => "<internal ABI pair>",
-            .abi_i16_f64 => "<internal ABI pair>",
-            .abi_f64_i8 => "<internal ABI pair>",
-            .abi_f64_i16 => "<internal ABI pair>",
-            .abi_pair_i8_i64 => "<internal ABI pair>",
-            .abi_pair_i16_i64 => "<internal ABI pair>",
-            .abi_pair_i32_i64 => "<internal ABI pair>",
-            .abi_pair_i64_i8 => "<internal ABI pair>",
-            .abi_pair_i64_i16 => "<internal ABI pair>",
-            .abi_pair_i64_i32 => "<internal ABI pair>",
+            .abi_pair => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1769,7 +1752,18 @@ pub fn literalIntValue(expr: *ast.Expr) ?i128 {
     return analyzer_mod.constInt(expr);
 }
 
-pub const BoundaryClass = enum {
+/// How an aggregate travels across the C ABI boundary on `x86_64` Linux.
+///
+/// `small_1` and `small_2` pack the whole aggregate into one or two INTEGER
+/// registers; the `sse_*` classes name the single-register SSE transports and
+/// the three packed `f32` shapes whose second slot is an SSEUP continuation
+/// of the first; `pair` carries the two registers of every other
+/// two-eightbyte aggregate explicitly, so pointer-bearing eightbytes, narrow
+/// integer leaves and the mixed SSE/INTEGER combinations share one
+/// representation; `memory` uses `sret`/`byval`.
+pub const BoundaryClass = union(enum) {
+    /// The value does not cross a C ABI boundary.
+    none,
     small_1,
     small_2,
     sse_float,
@@ -1778,25 +1772,30 @@ pub const BoundaryClass = enum {
     sse_f32x3,
     sse_f32x4,
     sse_f64x2,
-    sse_f64_i32,
-    sse_i32_f64,
-    sse_f32_f64,
-    sse_f64_f32,
-    sse_f32_i64,
-    sse_i64_f32,
-    sse_f64_i64,
-    sse_i64_f64,
-    sse_f32x2_i32,
-    sse_f32x2_i64,
-    sse_i64_v2f32,
-    sse_f64_v2f32,
-    sse_v2f32_f64,
-    sse_i8_f64,
-    sse_i16_f64,
-    sse_f64_i8,
-    sse_f64_i16,
-    small_2s,
+    /// Two registers, in order, as classified from the aggregate's leaves.
+    pair: types.AbiPair,
     memory,
+
+    pub fn eql(a: BoundaryClass, b: BoundaryClass) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+        return switch (a) {
+            .pair => |ap| ap.first == b.pair.first and ap.second == b.pair.second,
+            else => true,
+        };
+    }
+
+    /// True when the class names a value that crosses the C ABI boundary.
+    pub fn crosses(self: BoundaryClass) bool {
+        return self != .none;
+    }
+
+    /// True when the class travels in two registers.
+    pub fn isPair(self: BoundaryClass) bool {
+        return switch (self) {
+            .sse_f32x3, .sse_f32x4, .sse_f64x2, .pair => true,
+            else => false,
+        };
+    }
 };
 
 pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
@@ -1812,24 +1811,31 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
 
     var leaves = [_]EightbyteLeaf{ .{}, .{} };
     if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
-    const first_sse_only = isFloatOnly(leaves[0]);
-    const second_sse_only = isFloatOnly(leaves[1]);
 
     if (layout.size > 8) {
-        // The aggregate spans both eightbytes and travels in two registers.
-        if (first_sse_only or second_sse_only) {
-            const first = eightbyteRegister(leaves[0]) orelse return null;
-            const second = eightbyteRegister(leaves[1]) orelse return null;
-            return classifyRegisterPair(first, second) orelse null;
+        // The aggregate spans both eightbytes and travels in two registers,
+        // one per eightbyte. A lone leaf of each eightbyte decides its own
+        // register width, so `struct { short x; long b; }` becomes `i16, i64`
+        // exactly as Clang passes it.
+        const first = eightbyteRegister(leaves[0]) orelse return null;
+        const second = eightbyteRegister(leaves[1]) orelse return null;
+        const a = eightbyteSlot(first) orelse return null;
+        const b = eightbyteSlot(second) orelse return null;
+        // Two full INTEGER registers keep the packed transport; anything
+        // narrower or mixed travels in its own register at its own width.
+        if (a == .i64 and b == .i64) return .small_2;
+        if (a == .f64 and b == .f64) return .sse_f64x2;
+        // A `<2 x float>` slot occupies an SSE register and its SSEUP
+        // continuation, which only the packed three/four-`f32` shapes reuse.
+        if (first == .f32x2 or second == .f32x2) {
+            if (first == .f32x2 and second == .f32) return .sse_f32x3;
+            if (first == .f32x2 and second == .f32x2) return .sse_f32x4;
         }
-        // Both eightbytes are INTEGER-only: a lone integer leaf per eightbyte
-        // travels at its own width, everything else is packed.
-        if (smallPairLeaves(ty) != null) return .small_2s;
-        return .small_2;
+        return .{ .pair = .{ .first = a, .second = b } };
     }
 
     // The aggregate travels in a single register.
-    if (first_sse_only) {
+    if (isFloatOnly(leaves[0])) {
         if (leaves[0].count == 1) {
             const single = leaves[0].singleton orelse return null;
             return switch (single.bits) {
@@ -1844,41 +1850,17 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     return .small_1;
 }
 
-/// Classifies the pair of registers a two-eightbyte aggregate travels in.
-/// Every accepted pair was verified against Clang IR probes.
-fn classifyRegisterPair(first: EightbyteRegister, second: EightbyteRegister) ?BoundaryClass {
-    return switch (first) {
-        .f32 => switch (second) {
-            .i64 => .sse_f32_i64,
-            .f64 => .sse_f32_f64,
-            else => null,
-        },
-        .f64 => switch (second) {
-            .i64 => .sse_f64_i64,
-            .i8 => .sse_f64_i8,
-            .i16 => .sse_f64_i16,
-            .i32 => .sse_f64_i32,
-            .f32 => .sse_f64_f32,
-            .f64 => .sse_f64x2,
-            .f32x2 => .sse_f64_v2f32,
-        },
-        .i64 => switch (second) {
-            .f32 => .sse_i64_f32,
-            .f64 => .sse_i64_f64,
-            .f32x2 => .sse_i64_v2f32,
-            else => null,
-        },
-        .i8 => if (second == .f64) .sse_i8_f64 else null,
-        .i16 => if (second == .f64) .sse_i16_f64 else null,
-        .i32 => if (second == .f64) .sse_i32_f64 else null,
-        .f32x2 => switch (second) {
-            .f32 => .sse_f32x3,
-            .f32x2 => .sse_f32x4,
-            .i32 => .sse_f32x2_i32,
-            .i64 => .sse_f32x2_i64,
-            .f64 => .sse_v2f32_f64,
-            .i8, .i16 => null,
-        },
+/// The slot class an eightbyte register transports as.
+fn eightbyteSlot(register: EightbyteRegister) ?types.AbiSlot {
+    return switch (register) {
+        .i8 => .i8,
+        .i16 => .i16,
+        .i32 => .i32,
+        .i64 => .i64,
+        .pointer => .pointer,
+        .f32 => .f32,
+        .f64 => .f64,
+        .f32x2 => .f32x2,
     };
 }
 
@@ -1910,7 +1892,6 @@ pub fn memberBoundaryBits(ty: *Type) ?u16 {
     };
 }
 
-/// The scalar leaves carried by one eightbyte of an aggregate.
 /// How a scalar leaf travels at the C ABI boundary.
 pub const LeafKind = enum {
     /// An integer scalar, which travels in an INTEGER register.
@@ -1950,8 +1931,11 @@ pub const EightbyteRegister = enum {
     i16,
     /// An INTEGER register holding a 32-bit integer.
     i32,
-    /// An INTEGER register holding a 64-bit integer.
+    /// An INTEGER register holding a 64-bit integer, or a pointer.
     i64,
+    /// A pointer. It travels in an INTEGER register of the full width and is
+    /// never narrowed, because a pointer is not an integer member.
+    pointer,
     /// An SSE register holding one `float` value.
     f32,
     /// An SSE register holding one `double` value.
@@ -2041,6 +2025,7 @@ fn eightbyteRegister(leaf: EightbyteLeaf) ?EightbyteRegister {
     // The INTEGER class, possibly merged with a floating-point leaf.
     if (leaf.count == 1) {
         const single = leaf.singleton orelse return null;
+        if (single.kind == .pointer) return .pointer;
         if (single.kind != .integer) return null;
         return switch (single.bits) {
             8 => .i8,
@@ -2052,33 +2037,6 @@ fn eightbyteRegister(leaf: EightbyteLeaf) ?EightbyteRegister {
     }
     // A merged eightbyte always travels in a full 64-bit register.
     return .i64;
-}
-
-/// Returns the two integer leaves of `ty` when each eightbyte carries exactly
-/// one integer scalar leaf and one of them is narrower than 64 bits. This is
-/// the `.small_2s` boundary class: Clang passes such aggregates in two
-/// registers at the leaf widths, for example
-/// `struct { struct { short x; } a; long b; }` becomes `(i16, i64)`.
-pub fn smallPairLeaves(ty: *Type) ?[2]EightbyteLeaf {
-    if (ty.* != .struct_type) return null;
-    var leaves = [_]EightbyteLeaf{ .{}, .{} };
-    if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
-    if (leaves[0].count != 1 or leaves[1].count != 1) return null;
-    const first = leaves[0].singleton orelse return null;
-    const second = leaves[1].singleton orelse return null;
-    if (first.kind != .integer or second.kind != .integer) return null;
-    // Exactly one leaf is narrower than a full register: two narrow leaves
-    // have no transport type and two wide leaves keep the `.small_2` packing.
-    if ((first.bits < 64) == (second.bits < 64)) return null;
-    return leaves;
-}
-
-/// Returns true when `ty` carries an integer register of exactly `bits`
-/// bits, treating `char` as 32-bit, `enum` members by their backing integer,
-/// and plain `.int`s by their own width. Signedness never affects the class.
-fn isIntLikeWithWidth(ty: *Type, bits: u16) bool {
-    const member_bits = memberBoundaryBits(ty) orelse return false;
-    return member_bits == bits;
 }
 
 pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
@@ -2219,6 +2177,82 @@ fn expectClean(text: []const u8) !void {
     if (ctx.reporter.hasErrors()) {
         for (ctx.reporter.list.items) |diag| std.debug.print("  {s}: {s}\n", .{ diag.code, diag.message });
         return error.UnexpectedDiagnostic;
+    }
+}
+
+test "C ABI boundary classification follows Clang's leaf registers" {
+    const shapes = [_]struct {
+        decl: []const u8,
+        expected: ?BoundaryClass,
+    }{
+        // The leaf width decides the register, even when a leaf is nested.
+        .{ .decl = "struct S { a: i16, b: i64 }", .expected = .{ .pair = .{ .first = .i16, .second = .i64 } } },
+        .{ .decl = "struct S { a: i64, b: i16 }", .expected = .{ .pair = .{ .first = .i64, .second = .i16 } } },
+        .{ .decl = "struct S { a: i64, b: i64 }", .expected = .small_2 },
+        .{ .decl = "struct S { a: i64, b: u64 }", .expected = .small_2 },
+        // A pointer is an INTEGER eightbyte of the full width, never narrowed.
+        .{ .decl = "struct S { a: *u8, b: i64 }", .expected = .{ .pair = .{ .first = .pointer, .second = .i64 } } },
+        .{ .decl = "struct S { a: i8, b: *u8 }", .expected = .{ .pair = .{ .first = .i8, .second = .pointer } } },
+        .{ .decl = "struct S { a: *u8, b: *u8 }", .expected = .{ .pair = .{ .first = .pointer, .second = .pointer } } },
+        .{ .decl = "struct S { a: *u8, b: f64 }", .expected = .{ .pair = .{ .first = .pointer, .second = .f64 } } },
+        .{ .decl = "struct S { a: f32, b: *u8 }", .expected = .{ .pair = .{ .first = .f32, .second = .pointer } } },
+        // A pointer merged with other INTEGER leaves travels packed.
+        .{ .decl = "struct S { a: i32, b: i32, c: *u8 }", .expected = .{ .pair = .{ .first = .i64, .second = .pointer } } },
+        // SSE slots share the pair representation, including the SSEUP slot.
+        .{ .decl = "struct S { a: f32, b: f32, c: i16 }", .expected = .{ .pair = .{ .first = .f32x2, .second = .i16 } } },
+        .{ .decl = "struct S { a: f32, b: f32, c: *u8 }", .expected = .{ .pair = .{ .first = .f32x2, .second = .pointer } } },
+        .{ .decl = "struct S { a: *u8, b: f32, c: f32 }", .expected = .{ .pair = .{ .first = .pointer, .second = .f32x2 } } },
+        .{ .decl = "struct S { a: f32, b: f32, c: f32 }", .expected = .sse_f32x3 },
+        .{ .decl = "struct S { a: f32, b: f32, c: f32, d: f32 }", .expected = .sse_f32x4 },
+        .{ .decl = "struct S { a: f64, b: f64 }", .expected = .sse_f64x2 },
+        .{ .decl = "struct S { a: f32, b: f64 }", .expected = .{ .pair = .{ .first = .f32, .second = .f64 } } },
+        // A merged eightbyte is an INTEGER register even when a float is in
+        // it, so `{ int; float }` and `{ float; int; bool }` pack to `i64`.
+        .{ .decl = "struct S { a: i32, b: f32 }", .expected = .small_1 },
+        .{ .decl = "struct S { a: f32, b: i32, c: bool }", .expected = .{ .pair = .{ .first = .i64, .second = .i8 } } },
+        // Shapes without a register transport keep their rejection: an array
+        // field and a lone `i128` have no supported boundary register.
+        .{ .decl = "struct S { a: [2]i8, b: f64 }", .expected = null },
+        .{ .decl = "struct S { a: i128 }", .expected = null },
+    };
+
+    for (shapes) |shape| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        const lexer_mod = @import("lexer.zig");
+        const parser_mod = @import("parser.zig");
+        const src = try a.create(source.Source);
+        const text = try std.fmt.allocPrint(a, "{s}\nfn main() i32 {{ return 0; }}\n", .{shape.decl});
+        src.* = try source.Source.init(a, "abi.kyn", text);
+        var reporter = diagnostics.Reporter.init(a, src);
+        var prims = try types.Primitives.init(a);
+        var lx = lexer_mod.Lexer.init(a, src, &reporter);
+        const tokens = try lx.tokenize();
+        var p = parser_mod.Parser.init(a, tokens, &reporter);
+        const program = try p.parse();
+        var sema = Sema.init(a, &reporter, &prims);
+        try sema.analyze(program);
+        try testing.expect(!reporter.hasErrors());
+
+        var struct_ty: ?*Type = null;
+        for (program.decls) |decl| {
+            switch (decl.kind) {
+                .struct_decl => |sd| {
+                    if (sd.ty) |ty| struct_ty = ty;
+                },
+                else => {},
+            }
+        }
+        const ty = struct_ty orelse return error.MissingStructType;
+        const actual = aggregateBoundaryClass(ty);
+        if (shape.expected) |expected| {
+            try testing.expect(actual != null);
+            try testing.expect(expected.eql(actual.?));
+        } else {
+            try testing.expect(actual == null);
+        }
     }
 }
 
