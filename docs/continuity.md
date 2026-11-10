@@ -33,13 +33,17 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   builds and unit tests, and the Debug/Safe/Release/Fast integration matrix
   — all report `166 passed, 0 failed`. See §33 for the full scope,
   implementation map and validation results.
-- **ABI increment in progress (not yet committed):** the C ABI boundary
-  classification now derives every eightbyte register from the *leaf* model,
-  with nested structs flattened into their members exactly as Clang does. A
-  nested integer member travels at its own width (`{ struct { short x; } a;
-  long b; }` → `i16, i64`), a nested `f32` travels as a scalar and a nested
-  `f64` pair as two scalars. The rule set shrank by roughly 400 lines. See
-  §34 for the full scope, implementation map and validation results.
+- **Latest ABI increment completed and merged (`f58dd99`, PR #16):** the C ABI
+  boundary classification now derives every eightbyte register from the
+  *leaf* model, with nested structs flattened into their members exactly as
+  Clang does. A nested integer member travels at its own width
+  (`{ struct { short x; } a; long b; }` → `i16, i64`), a nested `f32` travels
+  as a scalar and a nested `f64` pair as two scalars. The rule set shrank by
+  roughly 400 lines. `cabi_nested_sse_widths` covers the nested layouts in
+  both directions. Post-merge gates on `main` pass: `zig fmt --check`,
+  Debug/ReleaseSafe builds and unit tests, and the Debug/Safe/Release/Fast
+  integration matrix — all report `165 passed, 0 failed`. See §34 for the
+  full scope, implementation map and validation results.
 - **Latest ABI increment completed and merged (`1a76dbb`, PR #14):** two-member
   structs whose members occupy one eightbyte each and are both integer scalars
   now lower as `.small_2s` — each member passes in its own register at its own
@@ -1231,7 +1235,7 @@ branch history; this increment does not redo them.
   the current SSE classes only recognise direct members, and until then the
   nested SSE shapes stay rejected with `E0473`.
 
-## 34. Leaf-based C ABI boundary classification increment (implemented, pending merge)
+## 34. Leaf-based C ABI boundary classification increment (completed and merged)
 
 - Scope: the register of an eightbyte is now decided by the *leaves* it
   carries, with nested structs flattened into their members exactly as Clang
@@ -1281,8 +1285,16 @@ branch history; this increment does not redo them.
   `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
 - No sanitizer run was performed; no sanitizer gate is configured. Interop
   used the installed `clang` (v23.1.2).
-- Pending: this increment is not yet committed, pushed, or merged. The next
-  action is a branch, commit, PR, green CI, merge, and post-merge gates.
+- Merged into `main` as PR #16 (merge commit `f58dd99`); implementation
+  commit `9f20e8b` and documentation commit `1ea9105`. CI run for the PR
+  (`42788650639`, 3m17s) was green. Post-merge gates on `main` pass:
+  `zig fmt --check`, Debug/ReleaseSafe builds and unit tests, and the
+  Debug/Safe/Release/Fast integration matrix — all report
+  `165 passed, 0 failed`. Release artifacts and tags are untouched.
+- Next task: the register pairs Clang supports that Kyn still rejects are the
+  remaining gap — for example `(float, float)` for a 16-byte aggregate with
+  one `f32` per eightbyte, and pointer members, which have no integer
+  transport type.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
