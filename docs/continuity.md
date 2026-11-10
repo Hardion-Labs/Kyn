@@ -26,7 +26,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** singleton
+- **Latest ABI increment completed and merged (`9f0affa`, PR #11):** singleton
   `enum` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
   at their backing integer width. `{ enum:u8, f64 }` lowers as
   `i8, double` parameters and an `{ i8, double }` return; the reverse
@@ -867,7 +867,13 @@ branch history; this increment does not redo them.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
 
-## 29. Singleton enum aggregate ABI increment (completed, not yet committed)
+## 29. Singleton enum aggregate ABI increment (completed and merged)
+
+- Merged into `main` as PR #11 (merge commit `9f0affa`); implementation
+  commit `f5349a9`. CI run for the PR (`42754654970`, 1m43s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `160 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: singleton `enum` members at natural offsets 0 or 8 (16 bytes),
   signedness irrelevant, passing at their backing integer width. The eight
