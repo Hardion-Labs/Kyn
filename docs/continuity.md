@@ -1296,7 +1296,7 @@ branch history; this increment does not redo them.
   one `f32` per eightbyte. Pointer members, also listed here as a gap, were
   closed by §35.
 
-## 35. Pointer-leaf and narrow-slot ABI increment (completed)
+## 35. Pointer-leaf and narrow-slot ABI increment (completed and merged)
 
 - Scope: three gaps left open by §34. (a) A pointer member had no leaf kind of
   its own, so an eightbyte carrying one was classified through the integer
@@ -1389,6 +1389,11 @@ branch history; this increment does not redo them.
   and are rejected with `E0473`; `SSE`-class aggregates beyond the enumerated
   shapes (for example `{ f32, f32, f32, f32, f32 }`) keep using memory/sret.
   No sanitizer gate is configured, so none was run.
+- Merged into `main` as PR #18 (merge commit `9501802`); implementation commit
+  `a460991` and documentation commit `11a3c4b`. CI run (`42904164029`, 1m43s)
+  was green before the merge. Post-merge gates on `main` pass from a cleaned
+  cache: `zig build`, `zig build test` **78/78**, `zig fmt --check`, and the
+  Debug and ReleaseSafe integration suites — both **167/0**.
 - Next task: continue the remaining Clang register pairs still rejected —
   `(float, float)` for a 16-byte aggregate with one `f32` per eightbyte is the
   most visible one — and specify cross-compilation targets before exposing
