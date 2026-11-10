@@ -26,7 +26,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** exactly two
+- **Latest ABI increment completed and merged (`b0a149f`, PR #8):** exactly two
   direct small integer members (`i8`/`u8` or `i16`/`u16`) at natural offsets
   0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }` lowers as
   `i8, double` parameters and a `{ i8, double }` return; `{ i16/u16, f64 }`
@@ -36,6 +36,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   (`i8`, `u8`, `i16`, `u16`) and `bool` are also accepted inside
   `INTEGER`-merged eightbytes (packed `i64` irrespective of member widths),
   verified against Clang IR probes; singleton `bool` remains rejected (`E0473`).
+  Post-merge gates on `main` pass (`154 passed, 0 failed` in all profiles).
 - **Previous ABI increment completed and merged (`edda8b9`, PR #7):** exact multi-member
   12/16-byte layouts whose eightbytes split into an SSE-only slot and an
   INTEGER/merged slot. `{ f32, f32, i32 }` (`<2 x float>, i32` and
@@ -748,7 +749,13 @@ branch history; this increment does not redo them.
 - Git state: merged into `main` (see the merge record at the top of this
   section). Release artifacts and tags are untouched.
 
-## 26. Small integer member ABI increment (completed, not yet committed)
+## 26. Small integer member ABI increment (completed and merged)
+
+- Merged into `main` as PR #8 (merge commit `b0a149f`); implementation
+  commit `6b56ad3`. CI run for the PR (`42746184920`, 2m3s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `154 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: exactly two direct small integer members (`i8`/`u8` or `i16`/`u16`)
   at natural offsets 0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }`
@@ -791,8 +798,6 @@ branch history; this increment does not redo them.
   154 passed, 0 failed.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
