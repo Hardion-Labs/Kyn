@@ -1,4 +1,0 @@
-struct DoublePair { x: f64, y: f64 }
-struct NestedPair { pair: DoublePair }
-extern fn c_take(pair: NestedPair);
-fn main() i32 { return 0; }

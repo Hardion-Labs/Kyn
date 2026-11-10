@@ -1,4 +1,0 @@
-struct Inner { count: i32 }
-struct Nested { inner: Inner, amount: f64 }
-extern fn c_take(value: Nested);
-fn main() i32 { return 0; }
