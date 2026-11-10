@@ -64,7 +64,16 @@ promised between alpha releases.
   Such layouts lower as `( i64, float )` parameters with a
   `{ i64, float }` return or `( i64, double )` parameters with a
   `{ i64, double }` return, matching Clang's packed-`INTEGER` eightbyte
-  then `SSE` scalar slot. Clang IR probes confirm the signatures for three-
+  then `SSE` scalar slot.
+- C ABI support on `x86_64` Linux for singleton INTEGER aggregates
+  (`.small_1` eightbyte classification, size ≤ 8): passed and returned at
+  the exact member-width scalar width (1→`i8`, 2→`i16`, ≤4→`i32`, otherwise
+  `i64`), matching Clang's exact-size INTEGER registers for each of the 1024
+  value combinations (`i8`, `i16`, `i32`, `i64`). No new boundary classes or
+  transport types are introduced — the existing `.small_1` lowering now emits
+  the sized scalar where it previously always emitted `i64`. Integration
+  fixtures `cabi_small_singleton` (exit 38) and `cabi_small_singleton_u8`
+  (exit 42) cover both directions in both widths. Clang IR probes confirm the signatures for three-
   and four-member runs (`{ i32, i32, f64 }`, `{ i16, i16, f64 }`,
   `{ i8, i8, f64 }`, `{ i32, i32, f32 }`, `{ i16, i16, i16, i16, f64 }`,
   `{ i16, i16, i16, i16, f32 }` and the reverse). Integration fixtures

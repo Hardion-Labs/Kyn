@@ -220,7 +220,9 @@ fn log_message() {
   direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` use member-width `i8`/`i16`
   parameters and `{ i8, double }` / `{ i16, double }` returns; the reverse
   `{ f64, i8/u8 }` / `{ f64, i16/u16 }` uses `double, i8` / `double, i16`
-  `{ double, i8 }` / `{ double, i16 }` returns; aggregates with two or
+  `{ double, i8 }` / `{ double, i16 }` returns; singleton
+  `i8`/`i16`/`i32`/`i64` aggregates pass in one single exact-width INTEGER
+  argument register (1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`); aggregates with two or
   more smaller-INTEGER members packed into one eightbyte followed by a
   single `f32` or `f64` (only the scalar in the next eightbyte) pass as
   `( i64, float )` or `( i64, double )`; sub-32-bit integer
@@ -494,7 +496,9 @@ let sum: i32 = add(1, 2);
   direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` structs via exact-width INTEGER
   plus SSE argument registers (the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }`
   order is supported likewise), direct `{ bool, f64 }` / `{ f64, bool }`
-  via an `i8` argument register, aggregates with two or more smaller-INTEGER
+  via an `i8` argument register, singleton `i8`/`i16`/`i32`/`i64` aggregates
+  in one exact-width INTEGER argument register (1→`i8`, 2→`i16`, ≤4→`i32`,
+  otherwise `i64`), aggregates with two or more smaller-INTEGER
   members packed into one eightbyte followed by a single `f32` or `f64`
   (only the scalar in the next eightbyte) via one `i64` and one SSE argument
   register, sub-32-bit integer members and `bool` inside

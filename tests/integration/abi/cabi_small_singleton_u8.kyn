@@ -1,0 +1,13 @@
+struct TinyU8 { x: u8 }
+
+extern fn c_take(value: TinyU8) u8;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_add(value: TinyU8) TinyU8 {
+    return TinyU8 { x: value.x + 1 };
+}
+
+fn main() i32 {
+    let v: TinyU8 = kyn_add(TinyU8 { x: 4 });
+    return (c_take(v) as i32) + c_verify_kyn();
+}

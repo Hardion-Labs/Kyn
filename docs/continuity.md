@@ -21,12 +21,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **Latest ABI increment completed and locally validated:** exact reverse
-  direct mixed-class structs `{ i32, f64 }` / `{ u32, f64 }` at natural offsets
-  0/8, size 16. Clang and Kyn both use `i32, double` parameters and
-  `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
-  remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`027315b`, PR #12):** aggregates with two
+- **Latest ABI increment completed and locally validated:** singleton
+  `i8`/`i16`/`i32`/`i64` aggregates pass in one exact-width INTEGER argument
+  register (size-derived: 1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`),
+  matching Clang's exact-size register widths for the INTEGER class.
+  `cabi_small_singleton` and `cabi_small_singleton_u8` cover both directions.
+- **Previous ABI increment completed and merged (`027315b`, PR #12):** aggregates with two
   or more smaller-INTEGER members packed into one eightbyte (only INTEGER
   members, size ≤ 8) followed by a single `f32` or `f64` in the next eightbyte
   pass (only that scalar) now lower as `( i64, float )` or
@@ -186,6 +186,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     reusing the existing `.sse_i64_f32x` / `.sse_i64_f64x` lowering with the
     multi-member acceptance checks; covered by `cabi_packed_i64_f64` and
     `cabi_packed_i64_xs_i16_f64`.
+    Singleton `i8`/`i16`/`i32`/`i64` aggregates are additionally passed at
+    their exact member-width scalar width at the boundary (1→`i8`, 2→`i16`,
+    ≤4→`i32`, otherwise `i64`), replacing the previous always-`i64` choice;
+    covered by `cabi_small_singleton` and `cabi_small_singleton_u8` in both
+    directions.
     Exactly two direct small integer members (`i8`/`u8` or `i16`/`u16`) at
     natural offsets 0/8 (16 bytes) are accepted, signedness irrelevant:
     `{ i8/u8, f64 }` uses `i8, double` and `{ i8, double }`;
@@ -1009,6 +1014,52 @@ branch history; this increment does not redo them.
   interop tests used the installed `clang` (v23.1.2).
 - Git state: implementation is merged into `main`. Release artifacts and
   tags are untouched.
+
+## 31. Small-1 singleton integer ABI increment (completed, not yet committed)
+
+- Scope: singleton INTEGER-only aggregates (`.small_1` eightbyte classification,
+  size ≤ 8) now pass at the **member's own natural width** (LLVM `i8` for a
+  size-1 struct, `i16` for a size-2 struct, `i32` for size ≤ 4, otherwise
+  `i64`), instead of always passing as one packed `i64`. Clang's INTEGER-class
+  ABI always uses the smallest register covering each eightbyte; Kyn now
+  matches exactly (probed):
+  - `{ i8 }` → `i8` (`@f1(i8) -> i8`)
+  - `{ i16 }` → `i16` (`@f2(i16) -> i16`)
+  - `{ i32 }` → `i32` (`@f3(i32) -> i32`)
+  - `{ i64 }` → `i64` (`@f4(i64) -> i64`)
+  - `{ i8, i8 }` → `i16`, `{ i16, i16 }` → `i32`
+  - multi-member singles that fit one eightbyte keep the old `i64` lowering
+    exactly as before (merged INTEGER eightbyte, matches Clang)
+- Implementation: new `pub fn smallRegisterBits(size)` in `compiler/sema.zig`
+  returns 8/16/32/64 bits for size ≤ 1/2/4; `8 byte+ returns 64`. The backend
+  uses it everywhere `i64_ty` was hard-coded for `.small_1`:
+  - `createFunction`: parameter now allocated at the exact width
+  - `.ret_ty` switch (return of §3-member): same switch at the new width
+  - `.ret_ty` switch (return of §4-member / call site): same switch at the new width
+  - `lowerPackedAggregate` now takes `source_ty` explicitly (before always `i64`);
+    the two-field `lowerCall` arm now compares register load width based on
+    `aggregateSize` instead of always `i64`
+  - the `.small_1` arm of `lowerCall` now packs the partial eightbyte at
+    `bits / 8` as its size, and loads at the same width
+  - return path storage type matches the size for `.small_1`
+  - `lowerPackedAggregate` is no longer called with i64-only assumptions
+- The previously preserved but wrong signature (`call i32 @take_small(i64 `)
+  moves to `(i32 )` — one test updated to match the new correct signature.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass (77 tests total, one previously-flagging test updated because its
+  assertion hard-coded the old i64 signature);
+  `zig fmt --check` clean; integration suite passes in all four profiles with
+  the new `cabi_small_singleton` (exit 38) and `cabi_small_singleton_u8`
+  (exit 42) C↔Kyn fixtures.
+- No new `BoundaryClass` variants or transport types; existing tests extended
+  with acceptance blocks for the seven new singles (`i8`/`i16`/`i32`/`u8`/`u16`
+  sizes 1..8) and for the previously-failing IR signature case.
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
+- No sanitizer run was performed; no sanitizer gate is configured. Interop
+  used the installed `clang` (v23.1.2).
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
