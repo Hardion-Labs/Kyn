@@ -1,8 +1,10 @@
-# Zig build artifacts
+# Toolchain output
 .zig-cache/
 zig-out/
+zig-out-*/
 build/
 kyn-cache/
+dist/
 
 # Compiler output
 *.o

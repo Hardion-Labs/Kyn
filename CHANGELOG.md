@@ -21,6 +21,20 @@ promised between alpha releases.
   Clang supports. The negative fixtures `abi_sse_integer_param` and
   `abi_sseup_pair` became the positive fixture `cabi_nested_sse_widths`
   (exit 57), which covers the nested layouts in both directions.
+- `packaging/`: release-archive tooling and installers for the prebuilt
+  toolchain. `packaging/make-dist.sh` builds `dist/kyn-<version>-linux-x86_64.tar.gz`
+  and `dist/kyn-<version>-windows-x86_64.zip` (ReleaseSafe, version read from
+  `build.zig.zon`), stages `bin/kync` + `bin/kyn-build` with `LICENSE`,
+  `INSTALL.md` and the installers, verifies the Linux archive end-to-end
+  (extract, `install.sh --prefix`, installed `--version` runs and an optional
+  `hello.kyn` smoke test) and validates the Windows zip structure and PE
+  headers, printing SHA-256 sums. Ships `install.sh` (POSIX; Linux, macOS and
+  Git Bash), `install.ps1` (Windows; per-user install under
+  `%LOCALAPPDATA%\Programs\Kyn`, adds `bin` to the user `PATH` unless
+  `-NoPath`, supports `-Uninstall`) and `install.bat` (cmd.exe wrapper).
+  Both installers verify the installed binaries with `--version` and fail
+  loudly otherwise. The Windows native build path remains untested; the
+  supported native target is `x86_64-linux`.
 - C ABI support on `x86_64` Linux for structs whose two eightbytes each carry
   exactly one integer leaf (`.small_2s` eightbyte classification, 16 bytes):
   each leaf is passed in its own register at its own width and the aggregate
