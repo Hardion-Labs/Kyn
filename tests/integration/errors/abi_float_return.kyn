@@ -1,4 +1,3 @@
-enum Color: u8 { Red = 2 }
-struct SmallEnumDouble { count: Color, amount: f64 }
-export fn kyn_make() SmallEnumDouble { return SmallEnumDouble { count: Color.Red, amount: 3.0 }; }
+struct SmallArrayDouble { count: [2]i8, amount: f64 }
+export fn kyn_make() SmallArrayDouble { return SmallArrayDouble { count: [1, 2], amount: 3.0 }; }
 fn main() i32 { return 0; }

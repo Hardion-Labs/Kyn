@@ -52,11 +52,13 @@ promised between alpha releases.
   singleton `bool` member: `{ bool, f64 }` lowers to `i8, double` parameters
   and a `{ i8, double }` return; the reverse `{ f64, bool }` uses
   `double, i8` and `{ double, i8 }`. Clang IR probes confirm both signatures.
-  Only singleton `bool` members on the INTEGER slot are admitted; singleton
-  `enum` members with sub-32-bit backings remain rejected with `E0473`.
-  Integration fixtures `cabi_small_bool_f64` and `cabi_small_f64_bool` cover
-  argument and return paths in both directions. Negative fixtures updated
-  from singleton-`bool` to singleton-`enum` layouts.
+  Singleton `enum` members also pass at their backing integer width (`i8`,
+  `i16`, `i32`, `i64`; signedness irrelevant, `enum : uint8_t`/`uint16_t`
+  and unannotated defaults), like their backing integral; verified with
+  Clang IR probes for all eight signatures. Coverage fixtures
+  `cabi_enum_e8_f64`, `cabi_enum_e64_f64` and `cabi_enum_e8_f32f32` cover
+  argument and return paths in both directions. Negative `E0473` fixtures
+  moved to singleton-arrays to preserve rejection coverage.
 - C ABI support on `x86_64` Linux for exactly two direct small integer members
   at natural offsets 0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }`
   passes as `i8, double` with a `{ i8, double }` return; `{ i16/u16, f64 }`

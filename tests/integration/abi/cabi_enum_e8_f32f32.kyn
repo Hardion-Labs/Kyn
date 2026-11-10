@@ -1,0 +1,25 @@
+enum Color8: u8 { Red = 2, Blue = 3 }
+
+struct EnumFloatPair { color: Color8, low: f32, mid: f32 }
+
+extern fn c_transform(value: EnumFloatPair) EnumFloatPair;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: EnumFloatPair) EnumFloatPair {
+    return EnumFloatPair {
+        color: value.color,
+        low: value.low + 2.0,
+        mid: value.mid + 3.0,
+    };
+}
+
+fn main() i32 {
+    let result: EnumFloatPair = c_transform(EnumFloatPair { color: Color8.Red, low: 1.5, mid: 2.5 });
+    var accumulator: i32 = 0;
+    if (result.color == Color8.Red) {
+        accumulator = 1;
+    } else {
+        accumulator = 0;
+    }
+    return accumulator + (result.low as i32) + (result.mid as i32) + c_verify_kyn();
+}

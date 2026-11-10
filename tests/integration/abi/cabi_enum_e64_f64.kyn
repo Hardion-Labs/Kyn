@@ -1,0 +1,24 @@
+enum WideType: u64 { Big = 7, Huge = 9 }
+
+struct EnumWide { id: WideType, ratio: f64 }
+
+extern fn c_transform(value: EnumWide) EnumWide;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: EnumWide) EnumWide {
+    return EnumWide {
+        id: value.id,
+        ratio: value.ratio + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: EnumWide = c_transform(EnumWide { id: WideType.Big, ratio: 1.5 });
+    var accumulator: i32 = 0;
+    if (result.id == WideType.Big) {
+        accumulator = 1;
+    } else {
+        accumulator = 0;
+    }
+    return accumulator + (result.ratio as i32) + c_verify_kyn();
+}

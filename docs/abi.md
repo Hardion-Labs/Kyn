@@ -46,9 +46,7 @@ extern fn free(ptr: *u8);
   `{ double, i8 }` / `{ double, i16 }`. Members smaller than 32 bits (`i8`,
   `u8`, `i16`, `u16`) and `bool` are also accepted inside `INTEGER`-merged
   eightbytes, where Clang passes the packed `i64` irrespective of member
-  widths; singleton small members are passed at their own width, singleton
-  `bool` members now pass as a full `i8`, and singleton `enum` members with
-  sub-32-bit backings remain rejected (`E0473`). Exact multi-member layouts
+  widths; singleton small members are passed at their own width, singleton `bool` members pass as a full `i8`, and singleton `enum` members pass at their backing integer width (`i8`/`i16`/`i32`/`i64`), like their backing integral type. Exact multi-member layouts
   whose eightbytes split into an SSE-only slot and an INTEGER/merged slot
   are also supported with their probed Clang coercions: `{ f32, f32, i32 }`
   (`<2 x float>, i32` arguments and `{ <2 x float>, i32 }` returns),
@@ -255,7 +253,7 @@ clang hello.o -o hello
 - fixed-size array parameters and returns by value, and aggregate layouts not
   supported by the selected target/classifier (including `SSE`-only forms
   outside the supported scalar/pair/triple/quad and multi-member run shapes,
-  and singleton `enum` members with sub-32-bit backings)
+  and singleton `enum` members with 1-bit backings)
   (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;

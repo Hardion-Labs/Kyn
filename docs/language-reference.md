@@ -225,7 +225,7 @@ fn log_message() {
   (packed `i64` passed irrespective of member widths), direct
   `{ bool, f64 }` / `{ f64, bool }` use a full `i8` parameter and
   `{ i8, double }` / `{ double, i8 }` returns, while a singleton
-  `enum` member with sub-32-bit backings remains rejected (`E0473`);
+  `enum` member with a sub-32-bit backing passes as an `i8`/`i16`/`i32`/`i64` at its backing width;
   the exact multi-member layouts `{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,
   `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`, `{ f64, i32/u32, i32/u32 }`,
