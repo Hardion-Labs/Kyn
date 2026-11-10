@@ -1464,7 +1464,8 @@ branch history; this increment does not redo them.
   dropping the C-side `tail += 1.0f` trips guard 99; changing the Kyn-side
   `head + 1` trips the C reverse check. The guards are not vacuous.
 - Validation: `zig build` OK; `zig build test --summary all` **78/78**;
-  integration **168 passed / 0 failed** (Debug); `zig fmt --check` clean.
+  integration **168 passed / 0 failed** in Debug *and* ReleaseSafe;
+  `zig fmt --check build.zig compiler build-system` clean.
   Differential probe over **552 shapes**: 358 exact, 68 covering-width,
   112 rejected (bare arrays and `i128`, both intentional), and 14 remaining
   diffs, all classified: 9 are width/padding noise (`i40` vs `i64`,
