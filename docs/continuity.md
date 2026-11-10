@@ -26,13 +26,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** singleton `bool`
-  members at natural offsets 0 or 8 (16 bytes) are supported. `{ bool, f64 }`
-  lowers as `i8, double` parameters and a `{ i8, double }` return; the
-  reverse `{ f64, bool }` lowers as `double, i8` and a `{ double, i8 }`
-  return. Clang IR probes confirm both signatures. Negative `E0473` fixtures
-  moved from singleton-`bool` to singleton-8-bit-`enum` layouts. Integration
-  matrix reports `157 passed, 0 failed` in all four profiles.
+- **Latest ABI increment completed and merged (`2ba5000`, PR #10):** singleton
+  `bool` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
+  as a full `i8` parameter. `{ bool, f64 }` lowers as `i8, double` parameters
+  and a `{ i8, double }` return; the reverse `{ f64, bool }` lowers as
+  `double, i8` and a `{ double, i8 }` return. Clang IR probes confirm both
+  signatures. Negative `E0473` fixtures moved from singleton-`bool` to
+  singleton-8-bit-`enum` layouts. Integration matrix reports
+  `157 passed, 0 failed` in all four profiles.
 - **Previous increment completed and merged (`f869fb1`, PR #9): bool zero-extension fix.** Previously
   `bool` fields/locals were stored into memory as raw `i1`, leaving the upper
   seven bits of their byte undefined. Passed across an `extern`/`export`
@@ -860,7 +861,13 @@ branch history; this increment does not redo them.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
 
-## 28. Singleton bool aggregate ABI increment (completed, not yet committed)
+## 28. Singleton bool aggregate ABI increment (completed and merged)
+
+- Merged into `main` as PR #10 (merge commit `2ba5000`); implementation
+  commit `6c58e84`. CI run for the PR (`42752155719`, 2m35s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `157 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: singleton `bool`-member layouts at natural offsets 0 or 8 (16 bytes),
   signedness irrelevant: `{ bool, f64 }` lowers as `i8, double` parameters
@@ -891,8 +898,6 @@ branch history; this increment does not redo them.
   docs.
 - No sanitizer run was performed; no sanitizer gate is configured. The interop
   tests used the installed `clang` (v23.1.2).
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
