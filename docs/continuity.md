@@ -21,13 +21,17 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **ABI increment in progress (not yet committed):** two-member structs whose
-  members occupy one eightbyte each and are both integer scalars now lower as
-  `.small_2s` — each member passes in its own register at its own width and
-  the aggregate returns as the matching pair (`{ i8, i64 }`, `{ i16, i64 }`,
-  `{ i32, i64 }` and the reversed layouts), matching Clang's System V
-  lowering for all six probed signatures. See §32 for the full scope,
-  implementation map and validation results.
+- **Latest ABI increment completed and merged (`1a76dbb`, PR #14):** two-member
+  structs whose members occupy one eightbyte each and are both integer scalars
+  now lower as `.small_2s` — each member passes in its own register at its own
+  width and the aggregate returns as the matching pair (`{ i8, i64 }`,
+  `{ i16, i64 }`, `{ i32, i64 }` and the reversed layouts), matching Clang's
+  System V lowering for all six probed signatures. `cabi_small_pair_widths`
+  covers both directions for all six layouts. Post-merge gates on `main` pass:
+  `zig fmt --check`, Debug/ReleaseSafe builds and unit tests, and the
+  Debug/Safe/Release/Fast integration matrix — all report
+  `165 passed, 0 failed`. See §32 for the full scope, implementation map and
+  validation results.
 - **Latest ABI increment completed and merged (`9bb08c4`, PR #13):** singleton
   `i8`/`i16`/`i32`/`i64` aggregates pass in one exact-width INTEGER argument
   register (size-derived: 1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`),
@@ -1079,7 +1083,7 @@ branch history; this increment does not redo them.
 - No sanitizer run was performed; no sanitizer gate is configured. Interop
   used the installed `clang` (v23.1.2).
 
-## 32. Two-member integer-pair aggregate ABI increment (implemented, pending merge)
+## 32. Two-member integer-pair aggregate ABI increment (completed and merged)
 
 - Scope: two-member structs whose members occupy one eightbyte each and are
   both integer scalars now lower as `.small_2s`: each member passes in its own
@@ -1135,8 +1139,17 @@ branch history; this increment does not redo them.
   `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
 - No sanitizer run was performed; no sanitizer gate is configured. Interop
   used the installed `clang` (v23.1.2).
-- Pending: this increment is not yet committed, pushed, or merged. The next
-  action is a branch, commit, PR, green CI, merge, and post-merge gates.
+- Merged into `main` as PR #14 (merge commit `1a76dbb`); implementation
+  commit `39b01f9` and documentation commit `fcdc4bf`. CI run for the PR
+  (`42775672895`, 2m4s) was green. Post-merge gates on `main` pass:
+  `zig fmt --check`, Debug/ReleaseSafe builds and unit tests, and the
+  Debug/Safe/Release/Fast integration matrix — all report
+  `165 passed, 0 failed`. Release artifacts and tags are untouched.
+- Next task: the remaining INTEGER-class gap is Clang's leaf-flattening of
+  nested-struct members (e.g. `{ struct { short x; } a; long b; }` →
+  `(i16, i64)`), which today stays on the ABI-compatible `.small_2`
+  lowering; matching Clang's flattened form exactly requires leaf
+  extraction across nested aggregates at the boundary.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
