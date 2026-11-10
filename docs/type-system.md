@@ -260,10 +260,13 @@ pointer regardless of how the pointer variable itself was declared.
   uses the member-width integer and `double` and returns `{ i8, double }` /
   `{ i16, double }`; the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }`
   uses `double, i8` / `double, i16` and `{ double, i8 }` / `{ double, i16 }`
+  returns. A direct `{ bool, f64 }` or `{ double, bool }` passes the singleton
+  `bool` as a full `i8` parameter, with `{ i8, double }` / `{ double, i8 }`
   returns. Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass
-  at their own width, and singleton `bool` remains rejected.
+  at their own width; singleton `bool` members now pass as `i8`; and
+  singleton `enum` members with sub-32-bit backings remain rejected (`E0473`).
   Exact multi-member layouts whose eightbytes split
   into an SSE-only slot and an INTEGER/merged slot use their probed Clang
   coercions: `{ f32, f32, i32 }` (`<2 x float>, i32` and `{ <2 x float>, i32 }`),

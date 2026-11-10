@@ -1,3 +1,4 @@
-struct SmallBoolDouble { count: bool, amount: f64 }
-extern fn c_take(value: SmallBoolDouble);
+enum Color: u8 { Red = 2 }
+struct SmallEnumDouble { count: Color, amount: f64 }
+extern fn c_take(value: SmallEnumDouble);
 fn main() i32 { return 0; }

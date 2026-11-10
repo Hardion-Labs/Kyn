@@ -1,0 +1,22 @@
+struct DoubleBool { ratio: f64, count: bool }
+
+extern fn c_transform(value: DoubleBool) DoubleBool;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: DoubleBool) DoubleBool {
+    return DoubleBool {
+        ratio: value.ratio + 2.0,
+        count: !value.count,
+    };
+}
+
+fn main() i32 {
+    let result: DoubleBool = c_transform(DoubleBool { ratio: 1.5, count: false });
+    var accumulator: i32 = 0;
+    if (result.count) {
+        accumulator = 1;
+    } else {
+        accumulator = 0;
+    }
+    return accumulator + (result.ratio as i32) + c_verify_kyn();
+}

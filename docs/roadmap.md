@@ -78,7 +78,8 @@ Milestones below are directions, not release promises.
   `{ f64, i64 }` / `{ f64, u64 }` layouts at offsets 0/8 via SSE+INTEGER
   registers, direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` and the reverse
   `{ f64, i8/u8 }` / `{ f64, i16/u16 }` layouts at offsets 0/8 via exact-width
-  INTEGER+SSE registers, sub-32-bit integer members and `bool` inside merged
+  INTEGER+SSE registers, singleton `bool` members (`{ bool, f64 }` /
+  `{ f64, bool }` via `i8`), sub-32-bit integer members and `bool` inside merged
   `INTEGER` eightbytes (packed `i64`), exact multi-member layouts with an
   SSE-only slot and an INTEGER/merged slot (`{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,

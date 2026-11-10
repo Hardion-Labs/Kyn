@@ -46,8 +46,9 @@ extern fn free(ptr: *u8);
   `{ double, i8 }` / `{ double, i16 }`. Members smaller than 32 bits (`i8`,
   `u8`, `i16`, `u16`) and `bool` are also accepted inside `INTEGER`-merged
   eightbytes, where Clang passes the packed `i64` irrespective of member
-  widths; singleton small members are passed at their own width, and a
-  singleton `bool` member remains rejected (`E0473`). Exact multi-member layouts
+  widths; singleton small members are passed at their own width, singleton
+  `bool` members now pass as a full `i8`, and singleton `enum` members with
+  sub-32-bit backings remain rejected (`E0473`). Exact multi-member layouts
   whose eightbytes split into an SSE-only slot and an INTEGER/merged slot
   are also supported with their probed Clang coercions: `{ f32, f32, i32 }`
   (`<2 x float>, i32` arguments and `{ <2 x float>, i32 }` returns),
@@ -148,7 +149,9 @@ Caveats:
   pass the member at its width with `double`, returning `{ i8, double }`;
   `{ i16/u16, f64 }` the same with `i16`; the reverse `{ f64, i8/u8 }` /
   `{ f64, i16/u16 }` use `double, i8` / `double, i16` and `{ double, i8 }` /
-  `{ double, i16 }` returns. Exact multi-member layouts whose
+  `{ double, i16 }` returns. A direct `{ bool, f64 }` or `{ double, bool }`
+  passes the singleton `bool` as a full `i8`, with `{ i8, double }` /
+  `{ double, i8 }` returns. Exact multi-member layouts whose
   eightbytes split into an SSE-only slot and an INTEGER/merged slot use their
   probed Clang coercions (`{ f32, f32, i32 }`, `{ f32, f32, i64/u64 }`,
   `{ i32/u32/i64/u64, f32, f32 }`, `{ f32, i32/u32, f32 }`, `{ i32/u32, f32, f64 }`,
@@ -251,8 +254,9 @@ clang hello.o -o hello
 - variadic extern functions;
 - fixed-size array parameters and returns by value, and aggregate layouts not
   supported by the selected target/classifier (including `SSE`-only forms
-  outside the supported scalar/pair/triple/quad and multi-member run
-  shapes, and singleton-`bool`-member layouts) (`E0473`);
+  outside the supported scalar/pair/triple/quad and multi-member run shapes,
+  and singleton `enum` members with sub-32-bit backings)
+  (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

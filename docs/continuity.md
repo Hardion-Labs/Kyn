@@ -26,7 +26,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest increment (this cycle): bool zero-extension fix.** Previously
+- **Latest ABI increment completed and locally validated:** singleton `bool`
+  members at natural offsets 0 or 8 (16 bytes) are supported. `{ bool, f64 }`
+  lowers as `i8, double` parameters and a `{ i8, double }` return; the
+  reverse `{ f64, bool }` lowers as `double, i8` and a `{ double, i8 }`
+  return. Clang IR probes confirm both signatures. Negative `E0473` fixtures
+  moved from singleton-`bool` to singleton-8-bit-`enum` layouts. Integration
+  matrix reports `157 passed, 0 failed` in all four profiles.
+- **Previous increment completed and merged (`f869fb1`, PR #9): bool zero-extension fix.** Previously
   `bool` fields/locals were stored into memory as raw `i1`, leaving the upper
   seven bits of their byte undefined. Passed across an `extern`/`export`
   C ABI boundary as part of a packed `i64` (current lowering for
@@ -165,7 +172,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     `double, i16` and `{ double, i8 }` / `{ double, i16 }`. Sub-32-bit
     integer members (`i8`, `u8`, `i16`, `u16`) and `bool` are also accepted
     inside `INTEGER`-merged eightbytes (packed `i64` irrespective of member
-    widths); a singleton `bool` member remains rejected (`E0473`). Clang IR
+    widths); a singleton `bool` member at offsets 0 or 8 now passes as a full
+    `i8` parameter, matching Clang IR's `(i8, double)` / `(double, i8)`
+    parameter signatures exactly; covered by `cabi_small_bool_f64` and
+    `cabi_small_f64_bool`. A singleton `enum` member with a sub-32-bit
+    backing remains rejected (`E0473`). Clang IR
     probes confirm all signatures; covered by `cabi_small_i8_f64`,
     `cabi_small_f64_i16` and `cabi_small_i8_merged`.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
@@ -300,9 +311,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   and the four-member runs); sub-32-bit integer members (`i8`, `u8`, `i16`,
   `u16`) and `bool` are admitted inside `INTEGER`-merged eightbytes (packed
   `i64` irrespective of member widths). A direct singleton small integer
-  member in an INTEGER-only eightbyte passes at its member width; a
-  singleton `bool` member remains rejected (`E0473`). Any other member or
-  layout falls through to the existing paths or is rejected with `E0473`.
+  member (`i8`/`u8`/`i16`/`u16`) in an INTEGER-only eightbyte passes at its
+  member width; a singleton `bool` member passes as a full `i8` parameter.
+  A singleton `enum` member with a sub-32-bit backing remains rejected
+  (`E0473`). Any other member or layout falls through to the existing paths
+  or is rejected with `E0473`.
   Other unsupported
   SSE/SSEUP and split-class layouts remain rejected.
 
@@ -829,7 +842,9 @@ branch history; this increment does not redo them.
   transport types with `align 8` loads/stores, matching Clang. In
   `classifyMixedRunAggregate`, members with 8/16 bits are now counted with
   the 32-bit `i32` bucket (and `bool` counted alike), which admits them into
-  the merged-INTEGER accepted layouts; any other unsupported member shape
+  the merged-INTEGER accepted layouts; a singleton `bool` member passes as
+  an `i8` at the boundary (parameter, argument, unpack and return layout),
+  matching Clang's IR. Any other unsupported member shape
   still falls through to the existing paths or `E0473`.
 - Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
   pass (74 tests; new `C ABI small integer members accept exact layouts`
@@ -844,6 +859,40 @@ branch history; this increment does not redo them.
   154 passed, 0 failed.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
+
+## 28. Singleton bool aggregate ABI increment (completed, not yet committed)
+
+- Scope: singleton `bool`-member layouts at natural offsets 0 or 8 (16 bytes),
+  signedness irrelevant: `{ bool, f64 }` lowers as `i8, double` parameters
+  and a `{ i8, double }` return; the reverse `{ f64, bool }` lowers as
+  `double, i8` and a `{ double, i8 }` return. Clang 23 IR probes confirm both
+  signatures at the LLVM boundary. A singleton `enum` member with a sub-32-bit
+  backing remains rejected (`E0473`).
+- Implementation: singleton `bool` members at indices 0/1 in a two-field
+  16-byte layout are now accepted by `aggregateBoundaryClass` via two new
+  two-field checks fourth in the size-16 block (after the existing
+  `{ f64, i32/u32 }` checks and the small-integer checks). Parameters,
+  definition-side unpacking and call-side argument lowering reuse the shared
+  per-field arms; `Lowering.boundaryMemberType` substitutes an unsigned `i8`
+  for any `.bool` member at the boundary (no zeroext attribute is emitted,
+  matching Clang's IR; the full byte is always defined because every bool
+  store emits `zext i1 -> i8`). Internal Kyn by-value calls are unchanged.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass (75 tests; new unit acceptance blocks; negative `E0473` fixtures moved
+  to singleton-`enum:u8` layouts in `abi_float_param.kyn`,
+  `abi_float_return.kyn` and the unit tests to preserve coverage);
+  `zig fmt --check` clean; integration suite passes in all four profiles with
+  the new `cabi_small_bool_f64` (exit 50) and `cabi_small_f64_bool` (exit 56)
+  C<->Kyn fixtures covering both directions. Emitted Kyn IR signatures match
+  the Clang probes exactly. Total integration count: 157 passed, 0 failed.
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, `CHANGELOG.md` (`[Unreleased]`) updated; singleton `bool`
+  acceptance removed from the rejected list across specification and reference
+  docs.
+- No sanitizer run was performed; no sanitizer gate is configured. The interop
+  tests used the installed `clang` (v23.1.2).
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
