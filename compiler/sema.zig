@@ -1724,6 +1724,12 @@ pub const Sema = struct {
             .abi_i16_f64 => "<internal ABI pair>",
             .abi_f64_i8 => "<internal ABI pair>",
             .abi_f64_i16 => "<internal ABI pair>",
+            .abi_pair_i8_i64 => "<internal ABI pair>",
+            .abi_pair_i16_i64 => "<internal ABI pair>",
+            .abi_pair_i32_i64 => "<internal ABI pair>",
+            .abi_pair_i64_i8 => "<internal ABI pair>",
+            .abi_pair_i64_i16 => "<internal ABI pair>",
+            .abi_pair_i64_i32 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1792,6 +1798,7 @@ pub const BoundaryClass = enum {
     sse_i16_f64,
     sse_f64_i8,
     sse_f64_i16,
+    small_2s,
     memory,
 };
 
@@ -1970,6 +1977,18 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
         }
     }
     if (layout.size <= 8) return .small_1;
+    if (layout.size <= 16 and ty.* == .struct_type) {
+        // Two eightbytes that each carry exactly one integer member are
+        // lowered as (iM, iN) at the member widths, matching Clang: the
+        // narrow member travels in an 8/16/32-bit register and the wide one in
+        // an i64 register. Two i64-width members keep the .small_2 signature.
+        if (smallPairWidths(ty)) |widths| {
+            const narrow = widths[0] == 8 or widths[0] == 16 or widths[0] == 32;
+            const narrow_second = widths[1] == 8 or widths[1] == 16 or widths[1] == 32;
+            if (narrow and widths[1] == 64) return .small_2s;
+            if (widths[0] == 64 and narrow_second) return .small_2s;
+        }
+    }
     if (layout.size <= 16) return .small_2;
     return .memory;
 }
@@ -2157,17 +2176,46 @@ pub fn smallRegisterBits(size: u64) u16 {
     return 64;
 }
 
+/// Width in bits of an integer member at the C ABI boundary. `bool` travels
+/// as a full `i8` because C's `_Bool` is one byte, `char` is a 32-bit type in
+/// Kyn, and an enum travels as its backing integer.
+pub fn memberBoundaryBits(ty: *Type) ?u16 {
+    return switch (ty.*) {
+        .int => |info| info.bits,
+        .bool => 8,
+        .char => 32,
+        .enum_type => |info| info.backing.intInfo().bits,
+        else => null,
+    };
+}
+
+/// Classifies a two-member struct for the `.small_2s` boundary class and
+/// returns the two register widths. The struct is eligible when each member
+/// is an integer scalar living alone in its own eightbyte: Clang then passes
+/// the aggregate in two registers at the member widths, for example
+/// `struct { char a; long b; }` becomes `(i8, i64)`.
+fn smallPairWidths(ty: *Type) ?[2]u16 {
+    const info = ty.struct_type;
+    if (info.fields.len != 2) return null;
+    const first = memberBoundaryBits(info.fields[0].ty) orelse return null;
+    const second = memberBoundaryBits(info.fields[1].ty) orelse return null;
+    const first_layout = aggregateLayoutGuess(info.fields[0].ty) orelse return null;
+    const second_layout = aggregateLayoutGuess(info.fields[1].ty) orelse return null;
+    // Each member must fit in a single eightbyte and the second one must
+    // start in the second eightbyte, so every eightbyte carries exactly one
+    // member.
+    if (first_layout.size > 8 or second_layout.size > 8) return null;
+    const second_offset = std.mem.alignForward(u64, first_layout.size, second_layout.align_);
+    if (second_offset < 8 or second_offset + second_layout.size > 16) return null;
+    return .{ first, second };
+}
+
 /// Returns true when `ty` carries an integer register of exactly `bits`
 /// bits, treating `char` as 32-bit, `enum` members by their backing integer,
 /// and plain `.int`s by their own width. Signedness never affects the class.
 fn isIntLikeWithWidth(ty: *Type, bits: u16) bool {
-    return switch (ty.*) {
-        .int => |info| info.bits == bits,
-        .char => bits == 32,
-        .bool => bits == 8,
-        .enum_type => |info| info.backing.intInfo().bits == bits,
-        else => false,
-    };
+    const member_bits = memberBoundaryBits(ty) orelse return false;
+    return member_bits == bits;
 }
 
 pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
@@ -2615,6 +2663,28 @@ test "C ABI small integer members accept exact layouts" {
         \\export fn kyn_id_bfp(value: BoolFloatPair) BoolFloatPair { return value; }
         \\export fn kyn_id_sfp(value: SmallFloatPair) SmallFloatPair { return value; }
         \\export fn kyn_id_tfp(value: TinyFloatPair64) TinyFloatPair64 { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct TinyLong { count: i8, amount: i64 }
+        \\struct LongTiny { amount: i64, count: i8 }
+        \\struct SmallLong { count: i16, amount: i64 }
+        \\struct LongSmall { amount: i64, count: i16 }
+        \\struct IntLong { count: i32, amount: i64 }
+        \\struct LongInt { amount: i64, count: i32 }
+        \\extern fn c_take_tl(value: TinyLong) TinyLong;
+        \\extern fn c_take_lt(value: LongTiny) LongTiny;
+        \\extern fn c_take_sl(value: SmallLong) SmallLong;
+        \\extern fn c_take_ls(value: LongSmall) LongSmall;
+        \\extern fn c_take_il(value: IntLong) IntLong;
+        \\extern fn c_take_li(value: LongInt) LongInt;
+        \\export fn kyn_id_tl(value: TinyLong) TinyLong { return value; }
+        \\export fn kyn_id_lt(value: LongTiny) LongTiny { return value; }
+        \\export fn kyn_id_sl(value: SmallLong) SmallLong { return value; }
+        \\export fn kyn_id_ls(value: LongSmall) LongSmall { return value; }
+        \\export fn kyn_id_il(value: IntLong) IntLong { return value; }
+        \\export fn kyn_id_li(value: LongInt) LongInt { return value; }
         \\fn main() i32 { return 0; }
     );
 

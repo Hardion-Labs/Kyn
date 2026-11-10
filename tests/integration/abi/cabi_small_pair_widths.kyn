@@ -1,0 +1,54 @@
+struct TinyLong { count: i8, amount: i64 }
+struct LongTiny { amount: i64, count: i8 }
+struct SmallLong { count: i16, amount: i64 }
+struct LongSmall { amount: i64, count: i16 }
+struct IntLong { count: i32, amount: i64 }
+struct LongInt { amount: i64, count: i32 }
+
+extern fn c_take_tiny_long(value: TinyLong) TinyLong;
+extern fn c_take_long_tiny(value: LongTiny) LongTiny;
+extern fn c_take_small_long(value: SmallLong) SmallLong;
+extern fn c_take_long_small(value: LongSmall) LongSmall;
+extern fn c_take_int_long(value: IntLong) IntLong;
+extern fn c_take_long_int(value: LongInt) LongInt;
+extern fn c_check_kyn() i32;
+
+export fn kyn_take_tiny_long(value: TinyLong) TinyLong {
+    return TinyLong { count: value.count + 1, amount: value.amount + 2 };
+}
+
+export fn kyn_take_long_tiny(value: LongTiny) LongTiny {
+    return LongTiny { amount: value.amount + 2, count: value.count + 1 };
+}
+
+export fn kyn_take_small_long(value: SmallLong) SmallLong {
+    return SmallLong { count: value.count + 1, amount: value.amount + 2 };
+}
+
+export fn kyn_take_long_small(value: LongSmall) LongSmall {
+    return LongSmall { amount: value.amount + 2, count: value.count + 1 };
+}
+
+export fn kyn_take_int_long(value: IntLong) IntLong {
+    return IntLong { count: value.count + 1, amount: value.amount + 2 };
+}
+
+export fn kyn_take_long_int(value: LongInt) LongInt {
+    return LongInt { amount: value.amount + 2, count: value.count + 1 };
+}
+
+fn main() i32 {
+    let tiny_long = c_take_tiny_long(TinyLong { count: 3, amount: 10 });
+    let long_tiny = c_take_long_tiny(LongTiny { amount: 20, count: 4 });
+    let small_long = c_take_small_long(SmallLong { count: 5, amount: 30 });
+    let long_small = c_take_long_small(LongSmall { amount: 40, count: 6 });
+    let int_long = c_take_int_long(IntLong { count: 7, amount: 50 });
+    let long_int = c_take_long_int(LongInt { amount: 60, count: 8 });
+    return (tiny_long.count as i32) + (tiny_long.amount as i32) +
+        (long_tiny.amount as i32) + (long_tiny.count as i32) +
+        (small_long.count as i32) + (small_long.amount as i32) +
+        (long_small.amount as i32) + (long_small.count as i32) +
+        (int_long.count as i32) + (int_long.amount as i32) +
+        (long_int.amount as i32) + (long_int.count as i32) +
+        c_check_kyn();
+}

@@ -53,6 +53,7 @@ const BoundaryClass = enum {
     sse_i64_v2f32,
     sse_f64_v2f32,
     sse_v2f32_f64,
+    small_2s,
     memory,
 };
 
@@ -201,6 +202,14 @@ pub const Lowering = struct {
             const ty = param.ty orelse (try self.simpleType(.invalid));
             const class = self.aggregateBoundaryParam(ty);
             switch (class) {
+                .small_2s => {
+                    const members = ty.struct_type;
+                    const first_bits = self.boundaryMemberBits(members.fields[0].ty);
+                    const second_bits = self.boundaryMemberBits(members.fields[1].ty);
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .int = .{ .bits = first_bits, .signed = true } }) });
+                    try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = try self.simpleType(.{ .int = .{ .bits = second_bits, .signed = true } }) });
+                    hidden_id += 2;
+                },
                 .small_2 => {
                     try params_list.append(self.allocator, .{ .local = hidden_id, .ty = i64_ty });
                     try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = i64_ty });
@@ -289,6 +298,13 @@ pub const Lowering = struct {
             .none => if (fd.ret_expr == null) void_ty else info.ret,
             .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(fd.ret_expr.?.resolved.?) orelse 8), .signed = true } }),
             .small_2 => i128_ty,
+            .small_2s => blk: {
+                const members = fd.ret_expr.?.resolved.?.struct_type;
+                break :blk try self.pairTransportType(
+                    self.boundaryMemberBits(members.fields[0].ty),
+                    self.boundaryMemberBits(members.fields[1].ty),
+                );
+            },
             .sse_float => try self.simpleType(.{ .float = 32 }),
             .sse_double => try self.simpleType(.{ .float = 64 }),
             .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
@@ -356,6 +372,7 @@ pub const Lowering = struct {
         return switch (class) {
             .small_1 => .small_1,
             .small_2 => .small_2,
+            .small_2s => .small_2s,
             .sse_float => .sse_float,
             .sse_double => .sse_double,
             .sse_f32x2 => .sse_f32x2,
@@ -390,6 +407,43 @@ pub const Lowering = struct {
         const expr = ret_expr orelse return .none;
         const ty = expr.resolved orelse return .none;
         return self.aggregateBoundaryParam(ty);
+    }
+
+    /// Width in bits of an integer member at the C ABI boundary. The
+    /// classification lives in the semantic analyzer so the boundary
+    /// lowering and the class decision always agree.
+    fn boundaryMemberBits(self: *Lowering, member_ty: *types.Type) u16 {
+        _ = self;
+        return sema_mod.memberBoundaryBits(member_ty) orelse 64;
+    }
+
+    /// Returns the pair transport type for two boundary member widths. Used
+    /// by `.small_2s`: the first eightbyte holds a single member of at most
+    /// four bytes and the second holds the eight byte member, or the first
+    /// holds the eight byte member and the second a single narrower member.
+    fn pairTransportType(self: *Lowering, first_bits: u16, second_bits: u16) Error!*types.Type {
+        const ty = switch (first_bits) {
+            8 => switch (second_bits) {
+                64 => self.simpleType(.abi_pair_i8_i64),
+                else => unreachable,
+            },
+            16 => switch (second_bits) {
+                64 => self.simpleType(.abi_pair_i16_i64),
+                else => unreachable,
+            },
+            32 => switch (second_bits) {
+                64 => self.simpleType(.abi_pair_i32_i64),
+                else => unreachable,
+            },
+            64 => switch (second_bits) {
+                8 => self.simpleType(.abi_pair_i64_i8),
+                16 => self.simpleType(.abi_pair_i64_i16),
+                32 => self.simpleType(.abi_pair_i64_i32),
+                else => unreachable,
+            },
+            else => unreachable,
+        };
+        return ty;
     }
 
     fn addLocal(self: *Lowering, id: u32, name: []const u8, ty: *types.Type, padding: ?u16) Error!void {
@@ -668,7 +722,7 @@ pub const Lowering = struct {
             const sym = param.sym orelse continue;
             const class = if (boundary) self.aggregateBoundaryParam(sym.ty) else BoundaryClass.none;
             const padding: ?u16 = switch (class) {
-                .small_1, .small_2, .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64, .sse_f32x2_i32, .sse_f32x2_i64, .sse_i64_f32x, .sse_i64_f64x, .sse_f64_i64x, .sse_i64_v2f32, .sse_f64_v2f32, .sse_v2f32_f64, .sse_i8_f64, .sse_i16_f64, .sse_f64_i8, .sse_f64_i16 => @intCast(self.aggregateSize(sym.ty) orelse 8),
+                .small_1, .small_2, .small_2s, .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64, .sse_f32x2_i32, .sse_f32x2_i64, .sse_i64_f32x, .sse_i64_f64x, .sse_f64_i64x, .sse_i64_v2f32, .sse_f64_v2f32, .sse_v2f32_f64, .sse_i8_f64, .sse_i16_f64, .sse_f64_i8, .sse_f64_i16 => @intCast(self.aggregateSize(sym.ty) orelse 8),
                 .memory => @intCast(self.aggregateSize(sym.ty) orelse 16),
                 .none => null,
             };
@@ -689,6 +743,21 @@ pub const Lowering = struct {
                         const hi = function.params[visible_index + 1].local;
                         try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 8, .{ .param = lo }, 0, function.params[visible_index].ty);
                         try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 16, .{ .param = hi }, 8, function.params[visible_index + 1].ty);
+                        visible_index += 2;
+                    },
+                    .small_2s => {
+                        // Two singleton-INTEGER eightbytes: each member arrives in
+                        // its own register at the member width.
+                        if (function.params.len <= visible_index + 1) break;
+                        const info = sym.ty.struct_type;
+                        for (0..2) |field_index| {
+                            const field_ptr = try self.aggregateFieldPointer(.{ .local = sym.id }, info, @intCast(field_index));
+                            try self.emitValueStore(.{
+                                .ptr = field_ptr,
+                                .value = .{ .param = function.params[visible_index + field_index].local },
+                                .ty = function.params[visible_index + field_index].ty,
+                            });
+                        }
                         visible_index += 2;
                     },
                     .sse_float, .sse_double => {
@@ -900,7 +969,8 @@ pub const Lowering = struct {
                         break :blk self.aggregateBoundaryParam(ret_ty);
                     } else BoundaryClass.none;
                     const sse_abi_return = ret_class == .sse_float or ret_class == .sse_double or ret_class == .sse_f32x2 or ret_class == .sse_f32x3 or ret_class == .sse_f32x4 or ret_class == .sse_f64x2 or ret_class == .sse_f64_i32 or ret_class == .sse_i32_f64 or ret_class == .sse_f32_f64 or ret_class == .sse_f64_f32 or ret_class == .sse_f32_i64 or ret_class == .sse_i64_f32 or ret_class == .sse_f64_i64 or ret_class == .sse_i64_f64 or ret_class == .sse_f32x2_i32 or ret_class == .sse_f32x2_i64 or ret_class == .sse_i64_f32x or ret_class == .sse_i64_f64x or ret_class == .sse_f64_i64x or ret_class == .sse_i64_v2f32 or ret_class == .sse_f64_v2f32 or ret_class == .sse_v2f32_f64 or ret_class == .sse_i8_f64 or ret_class == .sse_i16_f64 or ret_class == .sse_f64_i8 or ret_class == .sse_f64_i16;
-                    const value: ir.Value = if (sse_abi_return) .none else try self.lowerExpr(expr);
+                    const pair_abi_return = ret_class == .small_2s;
+                    const value: ir.Value = if (sse_abi_return or pair_abi_return) .none else try self.lowerExpr(expr);
                     const hidden_sret = boundary and ret_class == .memory;
                     if (hidden_sret) {
                         try self.emitValueStore(.{
@@ -946,6 +1016,19 @@ pub const Lowering = struct {
                                 .ty = abi_ty,
                             } });
                             try self.emit(.{ .ret = .{ .value = .{ .reg = field_value } } });
+                        } else if (pair_abi_return) {
+                            // The aggregate travels as a literal pair type, so
+                            // the returned value is loaded with that type from
+                            // the aggregate storage.
+                            const aggregate_ptr = try self.lowerAggregateBase(expr, expr.ty.?);
+                            const members = expr.ty.?.struct_type;
+                            const transport_ty = try self.pairTransportType(
+                                self.boundaryMemberBits(members.fields[0].ty),
+                                self.boundaryMemberBits(members.fields[1].ty),
+                            );
+                            const pair_value = try self.reg(transport_ty);
+                            try self.emit(.{ .load = .{ .dst = pair_value, .ptr = aggregate_ptr, .ty = transport_ty } });
+                            try self.emit(.{ .ret = .{ .value = .{ .reg = pair_value } } });
                         } else if (ret_class == .small_1 or ret_class == .small_2) {
                             const storage_ty = if (ret_class == .small_1)
                                 try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(expr.ty orelse try self.simpleType(.invalid)) orelse 8), .signed = true } })
@@ -1569,6 +1652,26 @@ pub const Lowering = struct {
                         try byval_list.append(self.allocator, null);
                     }
                 },
+                .small_2s => {
+                    // Two singleton-INTEGER eightbytes: each member is passed in
+                    // its own register at the member width.
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const info = ty.struct_type;
+                    for (0..2) |field_index| {
+                        const member_ty = info.fields[field_index].ty;
+                        const boundary_ty = try self.boundaryMemberType(member_ty);
+                        const field_ptr = try self.aggregateFieldPointer(slot, info, @intCast(field_index));
+                        const member_value = try self.reg(boundary_ty);
+                        try self.emit(.{ .load = .{
+                            .dst = member_value,
+                            .ptr = field_ptr,
+                            .ty = boundary_ty,
+                        } });
+                        try args_list.append(self.allocator, .{ .reg = member_value });
+                        try types_list.append(self.allocator, boundary_ty);
+                        try byval_list.append(self.allocator, null);
+                    }
+                },
                 .small_2 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
                     const size = self.aggregateSize(ty) orelse 16;
@@ -1616,6 +1719,10 @@ pub const Lowering = struct {
         const value_ty = switch (ret_class) {
             .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(call_result) orelse 8), .signed = true } }),
             .small_2 => i128_ty,
+            .small_2s => try self.pairTransportType(
+                self.boundaryMemberBits(call_result.struct_type.fields[0].ty),
+                self.boundaryMemberBits(call_result.struct_type.fields[1].ty),
+            ),
             .sse_float => try self.simpleType(.{ .float = 32 }),
             .sse_double => try self.simpleType(.{ .float = 64 }),
             .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
@@ -1705,7 +1812,7 @@ pub const Lowering = struct {
                 try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = temp }, .ty = call_result } });
                 return .{ .reg = result };
             },
-            .small_1, .small_2 => {
+            .small_1, .small_2, .small_2s => {
                 const temp = self.module.ephemeral();
                 try self.addLocal(temp, "tmp.aggregate", call_result, null);
                 try self.emitValueStore(.{
@@ -2548,6 +2655,12 @@ pub const Emitter = struct {
             .abi_i16_f64 => 8,
             .abi_f64_i8 => 8,
             .abi_f64_i16 => 8,
+            .abi_pair_i8_i64 => 8,
+            .abi_pair_i16_i64 => 8,
+            .abi_pair_i32_i64 => 8,
+            .abi_pair_i64_i8 => 8,
+            .abi_pair_i64_i16 => 8,
+            .abi_pair_i64_i32 => 8,
             .pointer => 8,
             .enum_type => |info| llvmAlignmentOfType(info.backing),
             .array => |array| llvmAlignmentOfType(array.elem),
@@ -2918,6 +3031,12 @@ pub const Emitter = struct {
             .abi_i16_f64 => "{ i16, double }",
             .abi_f64_i8 => "{ double, i8 }",
             .abi_f64_i16 => "{ double, i16 }",
+            .abi_pair_i8_i64 => "{ i8, i64 }",
+            .abi_pair_i16_i64 => "{ i16, i64 }",
+            .abi_pair_i32_i64 => "{ i32, i64 }",
+            .abi_pair_i64_i8 => "{ i64, i8 }",
+            .abi_pair_i64_i16 => "{ i64, i16 }",
+            .abi_pair_i64_i32 => "{ i64, i32 }",
             .pointer => "ptr",
             .array => |array| try std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{
                 array.len,
