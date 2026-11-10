@@ -41,6 +41,14 @@ const BoundaryClass = enum {
     sse_i64_f32,
     sse_f64_i64,
     sse_i64_f64,
+    sse_f32x2_i32,
+    sse_f32x2_i64,
+    sse_i64_f32x,
+    sse_i64_f64x,
+    sse_f64_i64x,
+    sse_i64_v2f32,
+    sse_f64_v2f32,
+    sse_v2f32_f64,
     memory,
 };
 
@@ -231,6 +239,38 @@ pub const Lowering = struct {
                         hidden_id += 1;
                     }
                 },
+                .sse_f32x2_i32, .sse_f32x2_i64, .sse_v2f32_f64 => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.abi_vec2_f32) });
+                    if (class == .sse_f32x2_i32) {
+                        try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = try self.simpleType(.{ .int = .{ .bits = 32, .signed = true } }) });
+                    } else if (class == .sse_f32x2_i64) {
+                        try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = i64_ty });
+                    } else {
+                        try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = try self.simpleType(.{ .float = 64 }) });
+                    }
+                    hidden_id += 2;
+                },
+                .sse_i64_f32x, .sse_i64_f64x, .sse_i64_v2f32 => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = i64_ty });
+                    const second_ty = switch (class) {
+                        .sse_i64_f32x => try self.simpleType(.{ .float = 32 }),
+                        .sse_i64_f64x => try self.simpleType(.{ .float = 64 }),
+                        .sse_i64_v2f32 => try self.simpleType(.abi_vec2_f32),
+                        else => unreachable,
+                    };
+                    try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = second_ty });
+                    hidden_id += 2;
+                },
+                .sse_f64_i64x, .sse_f64_v2f32 => {
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .float = 64 }) });
+                    const second_ty = switch (class) {
+                        .sse_f64_i64x => i64_ty,
+                        .sse_f64_v2f32 => try self.simpleType(.abi_vec2_f32),
+                        else => unreachable,
+                    };
+                    try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = second_ty });
+                    hidden_id += 2;
+                },
                 .none => {
                     try params_list.append(self.allocator, .{ .local = hidden_id, .ty = ty });
                     hidden_id += 1;
@@ -258,6 +298,14 @@ pub const Lowering = struct {
             .sse_i64_f32 => try self.simpleType(.abi_i64_f32),
             .sse_f64_i64 => try self.simpleType(.abi_f64_i64),
             .sse_i64_f64 => try self.simpleType(.abi_i64_f64),
+            .sse_f32x2_i32 => try self.simpleType(.abi_v2f32_i32),
+            .sse_f32x2_i64 => try self.simpleType(.abi_v2f32_i64),
+            .sse_i64_f32x => try self.simpleType(.abi_i64_f32),
+            .sse_i64_f64x => try self.simpleType(.abi_i64_f64),
+            .sse_f64_i64x => try self.simpleType(.abi_f64_i64),
+            .sse_i64_v2f32 => try self.simpleType(.abi_i64_v2f32),
+            .sse_f64_v2f32 => try self.simpleType(.abi_f64_v2f32),
+            .sse_v2f32_f64 => try self.simpleType(.abi_v2f32_f64),
         };
 
         const function = try self.allocator.create(ir.Function);
@@ -303,6 +351,14 @@ pub const Lowering = struct {
             .sse_i64_f32 => .sse_i64_f32,
             .sse_f64_i64 => .sse_f64_i64,
             .sse_i64_f64 => .sse_i64_f64,
+            .sse_f32x2_i32 => .sse_f32x2_i32,
+            .sse_f32x2_i64 => .sse_f32x2_i64,
+            .sse_i64_f32x => .sse_i64_f32x,
+            .sse_i64_f64x => .sse_i64_f64x,
+            .sse_f64_i64x => .sse_f64_i64x,
+            .sse_i64_v2f32 => .sse_i64_v2f32,
+            .sse_f64_v2f32 => .sse_f64_v2f32,
+            .sse_v2f32_f64 => .sse_v2f32_f64,
             .memory => .memory,
         };
     }
@@ -573,7 +629,7 @@ pub const Lowering = struct {
             const sym = param.sym orelse continue;
             const class = if (boundary) self.aggregateBoundaryParam(sym.ty) else BoundaryClass.none;
             const padding: ?u16 = switch (class) {
-                .small_1, .small_2, .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64 => @intCast(self.aggregateSize(sym.ty) orelse 8),
+                .small_1, .small_2, .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64, .sse_f32x2_i32, .sse_f32x2_i64, .sse_i64_f32x, .sse_i64_f64x, .sse_f64_i64x, .sse_i64_v2f32, .sse_f64_v2f32, .sse_v2f32_f64 => @intCast(self.aggregateSize(sym.ty) orelse 8),
                 .memory => @intCast(self.aggregateSize(sym.ty) orelse 16),
                 .none => null,
             };
@@ -664,6 +720,25 @@ pub const Lowering = struct {
                             } });
                         }
                         visible_index += info.fields.len;
+                    },
+                    .sse_f32x2_i32, .sse_f32x2_i64, .sse_v2f32_f64, .sse_i64_f32x, .sse_i64_f64x, .sse_f64_i64x, .sse_i64_v2f32, .sse_f64_v2f32 => {
+                        // Two-slot transport: bytes 0-7 then bytes 8-15 in field order.
+                        if (function.params.len <= visible_index + 1) break;
+                        const first_ty = function.params[visible_index].ty;
+                        try self.emit(.{ .store = .{
+                            .ptr = .{ .local = sym.id },
+                            .value = .{ .param = function.params[visible_index].local },
+                            .ty = first_ty,
+                        } });
+                        const elem_i8 = try self.simpleType(.char);
+                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
+                        const second_ty = function.params[visible_index + 1].ty;
+                        try self.emit(.{ .store = .{
+                            .ptr = tail_ptr,
+                            .value = .{ .param = function.params[visible_index + 1].local },
+                            .ty = second_ty,
+                        } });
+                        visible_index += 2;
                     },
                     .memory => {
                         if (function.params.len <= visible_index) break;
@@ -785,7 +860,7 @@ pub const Lowering = struct {
                         if (!boundary) break :blk BoundaryClass.none;
                         break :blk self.aggregateBoundaryParam(ret_ty);
                     } else BoundaryClass.none;
-                    const sse_abi_return = ret_class == .sse_float or ret_class == .sse_double or ret_class == .sse_f32x2 or ret_class == .sse_f32x3 or ret_class == .sse_f32x4 or ret_class == .sse_f64x2 or ret_class == .sse_f64_i32 or ret_class == .sse_i32_f64 or ret_class == .sse_f32_f64 or ret_class == .sse_f64_f32 or ret_class == .sse_f32_i64 or ret_class == .sse_i64_f32 or ret_class == .sse_f64_i64 or ret_class == .sse_i64_f64;
+                    const sse_abi_return = ret_class == .sse_float or ret_class == .sse_double or ret_class == .sse_f32x2 or ret_class == .sse_f32x3 or ret_class == .sse_f32x4 or ret_class == .sse_f64x2 or ret_class == .sse_f64_i32 or ret_class == .sse_i32_f64 or ret_class == .sse_f32_f64 or ret_class == .sse_f64_f32 or ret_class == .sse_f32_i64 or ret_class == .sse_i64_f32 or ret_class == .sse_f64_i64 or ret_class == .sse_i64_f64 or ret_class == .sse_f32x2_i32 or ret_class == .sse_f32x2_i64 or ret_class == .sse_i64_f32x or ret_class == .sse_i64_f64x or ret_class == .sse_f64_i64x or ret_class == .sse_i64_v2f32 or ret_class == .sse_f64_v2f32 or ret_class == .sse_v2f32_f64;
                     const value: ir.Value = if (sse_abi_return) .none else try self.lowerExpr(expr);
                     const hidden_sret = boundary and ret_class == .memory;
                     if (hidden_sret) {
@@ -811,6 +886,14 @@ pub const Lowering = struct {
                                 .sse_i64_f32 => try self.simpleType(.abi_i64_f32),
                                 .sse_f64_i64 => try self.simpleType(.abi_f64_i64),
                                 .sse_i64_f64 => try self.simpleType(.abi_i64_f64),
+                                .sse_f32x2_i32 => try self.simpleType(.abi_v2f32_i32),
+                                .sse_f32x2_i64 => try self.simpleType(.abi_v2f32_i64),
+                                .sse_i64_f32x => try self.simpleType(.abi_i64_f32),
+                                .sse_i64_f64x => try self.simpleType(.abi_i64_f64),
+                                .sse_f64_i64x => try self.simpleType(.abi_f64_i64),
+                                .sse_i64_v2f32 => try self.simpleType(.abi_i64_v2f32),
+                                .sse_f64_v2f32 => try self.simpleType(.abi_f64_v2f32),
+                                .sse_v2f32_f64 => try self.simpleType(.abi_v2f32_f64),
                                 else => expr.ty.?.struct_type.fields[0].ty,
                             };
                             const field_value = try self.reg(abi_ty);
@@ -1393,6 +1476,36 @@ pub const Lowering = struct {
                     try types_list.append(self.allocator, vector_ty);
                     try byval_list.append(self.allocator, null);
                 },
+                .sse_f32x2_i32, .sse_f32x2_i64, .sse_v2f32_f64, .sse_i64_f32x, .sse_i64_f64x, .sse_f64_i64x, .sse_i64_v2f32, .sse_f64_v2f32 => {
+                    const slot = try self.lowerAggregateBase(arg, ty);
+                    const class_tag = self.aggregateBoundaryParam(ty);
+                    const slot0_ty = switch (class_tag) {
+                        .sse_f32x2_i32, .sse_f32x2_i64, .sse_v2f32_f64 => try self.simpleType(.abi_vec2_f32),
+                        .sse_i64_f32x, .sse_i64_f64x, .sse_i64_v2f32 => i64_ty,
+                        .sse_f64_i64x, .sse_f64_v2f32 => try self.simpleType(.{ .float = 64 }),
+                        else => unreachable,
+                    };
+                    const slot0_value = try self.reg(slot0_ty);
+                    try self.emit(.{ .load = .{ .dst = slot0_value, .ptr = slot, .ty = slot0_ty } });
+                    try args_list.append(self.allocator, .{ .reg = slot0_value });
+                    try types_list.append(self.allocator, slot0_ty);
+                    try byval_list.append(self.allocator, null);
+                    const elem_i8 = try self.simpleType(.char);
+                    const tail_ptr = try self.byteOffset(slot, 8, elem_i8);
+                    const slot1_ty = switch (class_tag) {
+                        .sse_f32x2_i32 => try self.simpleType(.{ .int = .{ .bits = 32, .signed = true } }),
+                        .sse_f32x2_i64, .sse_f64_i64x => i64_ty,
+                        .sse_v2f32_f64, .sse_i64_f64x => try self.simpleType(.{ .float = 64 }),
+                        .sse_i64_f32x => try self.simpleType(.{ .float = 32 }),
+                        .sse_i64_v2f32, .sse_f64_v2f32 => try self.simpleType(.abi_vec2_f32),
+                        else => unreachable,
+                    };
+                    const slot1_value = try self.reg(slot1_ty);
+                    try self.emit(.{ .load = .{ .dst = slot1_value, .ptr = tail_ptr, .ty = slot1_ty } });
+                    try args_list.append(self.allocator, .{ .reg = slot1_value });
+                    try types_list.append(self.allocator, slot1_ty);
+                    try byval_list.append(self.allocator, null);
+                },
                 .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
                     const info = ty.struct_type;
@@ -1471,6 +1584,14 @@ pub const Lowering = struct {
             .sse_i64_f32 => try self.simpleType(.abi_i64_f32),
             .sse_f64_i64 => try self.simpleType(.abi_f64_i64),
             .sse_i64_f64 => try self.simpleType(.abi_i64_f64),
+            .sse_f32x2_i32 => try self.simpleType(.abi_v2f32_i32),
+            .sse_f32x2_i64 => try self.simpleType(.abi_v2f32_i64),
+            .sse_i64_f32x => try self.simpleType(.abi_i64_f32),
+            .sse_i64_f64x => try self.simpleType(.abi_i64_f64),
+            .sse_f64_i64x => try self.simpleType(.abi_f64_i64),
+            .sse_i64_v2f32 => try self.simpleType(.abi_i64_v2f32),
+            .sse_f64_v2f32 => try self.simpleType(.abi_f64_v2f32),
+            .sse_v2f32_f64 => try self.simpleType(.abi_v2f32_f64),
             .memory, .none => void_ty,
         };
 
@@ -1495,7 +1616,7 @@ pub const Lowering = struct {
 
         switch (ret_class) {
             .none => return if (dst) |id| .{ .reg = id } else .none,
-            .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64 => {
+            .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64, .sse_f32x2_i32, .sse_f32x2_i64, .sse_i64_f32x, .sse_i64_f64x, .sse_f64_i64x, .sse_i64_v2f32, .sse_f64_v2f32, .sse_v2f32_f64 => {
                 const temp = self.module.ephemeral();
                 try self.addLocal(temp, "tmp.aggregate", call_result, null);
                 const abi_ty = switch (ret_class) {
@@ -1511,6 +1632,14 @@ pub const Lowering = struct {
                     .sse_i64_f32 => try self.simpleType(.abi_i64_f32),
                     .sse_f64_i64 => try self.simpleType(.abi_f64_i64),
                     .sse_i64_f64 => try self.simpleType(.abi_i64_f64),
+                    .sse_f32x2_i32 => try self.simpleType(.abi_v2f32_i32),
+                    .sse_f32x2_i64 => try self.simpleType(.abi_v2f32_i64),
+                    .sse_i64_f32x => try self.simpleType(.abi_i64_f32),
+                    .sse_i64_f64x => try self.simpleType(.abi_i64_f64),
+                    .sse_f64_i64x => try self.simpleType(.abi_f64_i64),
+                    .sse_i64_v2f32 => try self.simpleType(.abi_i64_v2f32),
+                    .sse_f64_v2f32 => try self.simpleType(.abi_f64_v2f32),
+                    .sse_v2f32_f64 => try self.simpleType(.abi_v2f32_f64),
                     else => call_result.struct_type.fields[0].ty,
                 };
                 try self.emit(.{ .store = .{
@@ -2356,6 +2485,11 @@ pub const Emitter = struct {
             .abi_i64_f32 => 8,
             .abi_f64_i64 => 8,
             .abi_i64_f64 => 8,
+            .abi_v2f32_i32 => 8,
+            .abi_v2f32_i64 => 8,
+            .abi_i64_v2f32 => 8,
+            .abi_f64_v2f32 => 8,
+            .abi_v2f32_f64 => 8,
             .pointer => 8,
             .enum_type => |info| llvmAlignmentOfType(info.backing),
             .array => |array| llvmAlignmentOfType(array.elem),
@@ -2565,7 +2699,7 @@ pub const Emitter = struct {
                 try writer.print("  %t{d} = load {s}, ptr ", .{ load.dst, try self.typeString(load.ty) });
                 try self.emitValue(writer, load.ptr, null);
                 if (load.ty.* == .abi_vec2_f32 or load.ty.* == .abi_v2f32_f32 or load.ty.* == .abi_v2f32_v2f32) try writer.writeAll(", align 4");
-                if (load.ty.* == .abi_f32_f64 or load.ty.* == .abi_f64_f32 or load.ty.* == .abi_f32_i64 or load.ty.* == .abi_i64_f32 or load.ty.* == .abi_f64_i64 or load.ty.* == .abi_i64_f64) try writer.writeAll(", align 8");
+                if (load.ty.* == .abi_f32_f64 or load.ty.* == .abi_f64_f32 or load.ty.* == .abi_f32_i64 or load.ty.* == .abi_i64_f32 or load.ty.* == .abi_f64_i64 or load.ty.* == .abi_i64_f64 or load.ty.* == .abi_v2f32_i32 or load.ty.* == .abi_v2f32_i64 or load.ty.* == .abi_i64_v2f32 or load.ty.* == .abi_f64_v2f32 or load.ty.* == .abi_v2f32_f64) try writer.writeAll(", align 8");
                 try writer.writeByte('\n');
             },
             .store => |store| {
@@ -2574,7 +2708,7 @@ pub const Emitter = struct {
                 try writer.writeAll(", ptr ");
                 try self.emitValue(writer, store.ptr, null);
                 if (store.ty.* == .abi_vec2_f32 or store.ty.* == .abi_v2f32_f32 or store.ty.* == .abi_v2f32_v2f32) try writer.writeAll(", align 4");
-                if (store.ty.* == .abi_f32_f64 or store.ty.* == .abi_f64_f32 or store.ty.* == .abi_f32_i64 or store.ty.* == .abi_i64_f32 or store.ty.* == .abi_f64_i64 or store.ty.* == .abi_i64_f64) try writer.writeAll(", align 8");
+                if (store.ty.* == .abi_f32_f64 or store.ty.* == .abi_f64_f32 or store.ty.* == .abi_f32_i64 or store.ty.* == .abi_i64_f32 or store.ty.* == .abi_f64_i64 or store.ty.* == .abi_i64_f64 or store.ty.* == .abi_v2f32_i32 or store.ty.* == .abi_v2f32_i64 or store.ty.* == .abi_i64_v2f32 or store.ty.* == .abi_f64_v2f32 or store.ty.* == .abi_v2f32_f64) try writer.writeAll(", align 8");
                 try writer.writeByte('\n');
             },
             .br => |branch| {
@@ -2717,6 +2851,11 @@ pub const Emitter = struct {
             .abi_i64_f32 => "{ i64, float }",
             .abi_f64_i64 => "{ double, i64 }",
             .abi_i64_f64 => "{ i64, double }",
+            .abi_v2f32_i32 => "{ <2 x float>, i32 }",
+            .abi_v2f32_i64 => "{ <2 x float>, i64 }",
+            .abi_i64_v2f32 => "{ i64, <2 x float> }",
+            .abi_f64_v2f32 => "{ double, <2 x float> }",
+            .abi_v2f32_f64 => "{ <2 x float>, double }",
             .pointer => "ptr",
             .array => |array| try std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{
                 array.len,

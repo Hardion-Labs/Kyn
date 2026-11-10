@@ -1,0 +1,17 @@
+struct FloatPairInt { low: f32, mid: f32, high: i32 }
+
+extern fn c_transform(value: FloatPairInt) FloatPairInt;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: FloatPairInt) FloatPairInt {
+    return FloatPairInt {
+        low: value.low + 1.0,
+        mid: value.mid + 2.0,
+        high: value.high + 3,
+    };
+}
+
+fn main() i32 {
+    let result: FloatPairInt = c_transform(FloatPairInt { low: 1.5, mid: 2.5, high: 4 });
+    return (result.low as i32) + (result.mid as i32) + result.high + c_verify_kyn();
+}

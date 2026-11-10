@@ -76,7 +76,13 @@ Milestones below are directions, not release promises.
   pair return, direct `{ f32, f64 }` / `{ f64, f32 }` layouts at offsets 0/8
   via two SSE registers, direct `{ f32, i64 }` / `{ f32, u64 }` and
   `{ f64, i64 }` / `{ f64, u64 }` layouts at offsets 0/8 via SSE+INTEGER
-  registers, and direct `{ f64, i32 }` / `{ i32, f64 }` layouts at
+  registers, exact multi-member layouts with an SSE-only slot and an
+  INTEGER/merged slot (`{ f32, f32, i32 }`, `{ f32, f32, i64 }`,
+  `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,
+  `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`,
+  `{ f64, i32/u32, i32/u32 }`, `{ f64, i32/u32, f32 }`,
+  `{ i64/u64, f32, f32 }`, `{ f32, f32, f64 }`, `{ f64, f32, f32 }`, and
+  the four-member runs) via their probed coercions, and direct `{ f64, i32 }` / `{ i32, f64 }` layouts at
   offsets 0/8 via their corresponding SSE+INTEGER register order.
 - Keep the all-checks-enabled runtime policy stable across profiles unless a
   separate language-level decision explicitly specifies observable profile

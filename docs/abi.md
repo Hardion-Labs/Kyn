@@ -39,7 +39,20 @@ extern fn free(ptr: *u8);
   returns as `{ float, i64 }`; the reverse `{ i64, f32 }` / `{ u64, f32 }`
   uses `i64, float` and `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }`
   use `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }`
-  use `i64, double` and `{ i64, double }`. A
+  use `i64, double` and `{ i64, double }`. Exact multi-member layouts
+  whose eightbytes split into an SSE-only slot and an INTEGER/merged slot
+  are also supported with their probed Clang coercions: `{ f32, f32, i32 }`
+  (`<2 x float>, i32` arguments and `{ <2 x float>, i32 }` returns),
+  `{ f32, f32, i64 }` (`<2 x float>, i64` and `{ <2 x float>, i64 }`),
+  `{ i32, f32, f32 }` and `{ f32, i32, f32 }` (merged `INTEGER` passed as
+  `i64`, then `float`; `{ i64, float }` returns), `{ i32, f32, f64 }` /
+  `{ f32, i32, f64 }` (merged `INTEGER` as `i64`, then `double`; `{ i64, double }`
+  returns), `{ f64, i32, i32 }` / `{ f64, i32, f32 }` (`double` then merged
+  `INTEGER`; `{ double, i64 }` returns), `{ i64, f32, f32 }` (`i64, <2 x float>`;
+  `{ i64, <2 x float> }` returns), and `{ i32, f32, f32, f32 }` /
+  `{ f32, i32, f32, f32 }` (same signature). Four-member `{ f32, f32, i32, f32 }`
+  uses `<2 x float>, i64` and `{ <2 x float>, i64 }`. Layouts outside these
+  exact shapes remain rejected with `E0473`. A
   direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
   8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
@@ -123,7 +136,12 @@ Caveats:
   layouts `{ f64, i32 }` / `{ f64, u32 }`
   use `double, i32`
   parameters and `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use
-  `i32, double` and `{ i32, double }`.
+  `i32, double` and `{ i32, double }`. Exact multi-member layouts whose
+  eightbytes split into an SSE-only slot and an INTEGER/merged slot use their
+  probed Clang coercions (`{ f32, f32, i32 }`, `{ f32, f32, i64/u64 }`,
+  `{ i32/u32/i64/u64, f32, f32 }`, `{ f32, i32/u32, f32 }`, `{ i32/u32, f32, f64 }`,
+  `{ f32, i32/u32, f64 }`, `{ f64, i32/u32, i32/u32 }`, `{ f64, i32/u32, f32 }`
+  and `{ i32/u32, f32, f32, f32 }` / `{ f32, i32/u32, f32, f32 }`).
   Larger supported aggregates use the hidden-pointer `byval`/`sret` form.
   Fixed arrays, nested wrappers, and other unsupported SSE/INTEGER layouts
   remain unsupported (`E0473`); pass a pointer instead.
@@ -221,7 +239,8 @@ clang hello.o -o hello
 - variadic extern functions;
 - fixed-size array parameters and returns by value, and aggregate layouts not
   supported by the selected target/classifier (including `SSE`-only forms
-  outside the supported scalar/pair/triple/quad shapes) (`E0473`);
+  outside the supported scalar/pair/triple/quad and multi-member run
+  shapes) (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

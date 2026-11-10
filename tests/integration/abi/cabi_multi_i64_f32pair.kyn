@@ -1,0 +1,17 @@
+struct LongFloatPair { a: i64, b: f32, c: f32 }
+
+extern fn c_transform(value: LongFloatPair) LongFloatPair;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: LongFloatPair) LongFloatPair {
+    return LongFloatPair {
+        a: value.a + 5,
+        b: value.b + 2.0,
+        c: value.c + 3.0,
+    };
+}
+
+fn main() i32 {
+    let result: LongFloatPair = c_transform(LongFloatPair { a: 10, b: 1.5, c: 2.5 });
+    return (result.a as i32) + (result.b as i32) + (result.c as i32) + c_verify_kyn();
+}

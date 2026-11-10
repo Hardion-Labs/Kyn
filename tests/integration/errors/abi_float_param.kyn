@@ -1,3 +1,3 @@
-struct FloatIntFloat { x: f32, count: i32, y: f32 }
-extern fn c_take(value: FloatIntFloat);
+struct SmallIntDouble { count: i16, amount: f64 }
+extern fn c_take(value: SmallIntDouble);
 fn main() i32 { return 0; }

@@ -256,7 +256,19 @@ pointer regardless of how the pointer variable itself was declared.
   the reverse `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and
   `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and
   `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double`
-  and `{ i64, double }`. A direct
+  and `{ i64, double }`. Exact multi-member layouts whose eightbytes split
+  into an SSE-only slot and an INTEGER/merged slot use their probed Clang
+  coercions: `{ f32, f32, i32 }` (`<2 x float>, i32` and `{ <2 x float>, i32 }`),
+  `{ f32, f32, i64 }` (`<2 x float>, i64` and `{ <2 x float>, i64 }`),
+  `{ i32/u32, f32, f32 }` and `{ f32, i32/u32, f32 }` (merged `INTEGER` as
+  `i64`, then `float`; `{ i64, float }` returns), `{ i32/u32, f32, f64 }` and
+  `{ f32, i32/u32, f64 }` (merged `INTEGER` as `i64`, then `double`;
+  `{ i64, double }` returns), `{ f64, i32/u32, i32/u32 }` / `{ f64, i32/u32, f32 }`
+  (`double` then merged `INTEGER`; `{ double, i64 }` returns), and
+  `{ i64/u64, f32, f32 }` (`i64, <2 x float>`; `{ i64, <2 x float> }`
+  returns). Four-member `{ f32, f32, i32, f32 }` / `{ i32, f32, f32, f32 }` /
+  `{ f32, i32, f32, f32 }` use `i64` or `<2 x float>` in the merged-INTEGER slot
+  with their probed coercions. A direct
   `{ f64, i32 }` / `{ f64, u32 }` structs use `double, i32` arguments and
   `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use `i32, double`
   and `{ i32, double }`. These rules cover only adjacent direct fields with

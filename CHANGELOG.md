@@ -38,6 +38,23 @@ promised between alpha releases.
   `cabi_mixed_i64_f32`, `cabi_mixed_f64_i64` and `cabi_mixed_i64_f64` cover
   argument and return paths in both directions; other mixed-class layouts
   remain rejected with `E0473`.
+- C ABI support on `x86_64` Linux for exact multi-member 12/16-byte layouts
+  whose eightbytes split into an SSE-only slot and an INTEGER/merged slot,
+  verified against Clang IR probes: `{ f32, f32, i32/u32 }`
+  (`<2 x float>, i32` and `{ <2 x float>, i32 }`), `{ f32, f32, i64/u64 }`
+  (`<2 x float>, i64` and `{ <2 x float>, i64 }`), `{ i32/u32, f32, f32 }` and
+  `{ f32, i32/u32, f32 }` (merged `INTEGER` as `i64`, then `float`),
+  `{ i32/u32, f32, f64 }` and `{ f32, i32/u32, f64 }` (merged `INTEGER` as
+  `i64`, then `double`), `{ f64, i32/u32, i32/u32 }` and `{ f64, i32/u32, f32 }`
+  (`double` then merged `INTEGER`), `{ i64/u64, f32, f32 }`
+  (`i64, <2 x float>` and `{ i64, <2 x float> }`), and
+  `{ i32/u32, f32, f32, f32 }` / `{ f32, i32/u32, f32, f32 }` (same signature).
+  Four-member `{ f32, f32, i32/u32, f32 }` uses `<2 x float>, i64` and
+  `{ <2 x float>, i64 }`. All signatures verified against Clang IR probes.
+  Integration fixtures `cabi_multi_f32x2_i32`, `cabi_multi_f32x2_i64`,
+  `cabi_multi_i32_f32pair`, `cabi_multi_i64_f32pair`, `cabi_multi_f64_v2f32`
+  and `cabi_multi_f32pair_f64` cover argument and return paths in both
+  directions; layouts outside these exact shapes remain rejected with `E0473`.
 
 ## [0.1.0-alpha.3] - 2026-11-09
 
