@@ -26,7 +26,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** aggregates with two
+- **Latest ABI increment completed and merged (`027315b`, PR #12):** aggregates with two
   or more smaller-INTEGER members packed into one eightbyte (only INTEGER
   members, size ≤ 8) followed by a single `f32` or `f64` in the next eightbyte
   pass (only that scalar) now lower as `( i64, float )` or
@@ -37,7 +37,9 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   `.sse_i64_f32x` and `.sse_i64_f64x` classes (two parameters, packed transport),
   so no new BoundaryClass variants or transport types are introduced.
   Previously rejected with `E0473`; now accepted with exact-shape acceptance
-  checks inside `classifyMixedRunAggregate`.
+  checks inside `classifyMixedRunAggregate`. Integration matrix reports
+  `162 passed, 0 failed` in all four profiles; CI runs for the merge and the
+  docs record are both green.
 - **Previous ABI increment completed and merged (`9f0affa`, PR #11):** singleton
   `enum` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
   at their backing integer width. Integration matrix reports
@@ -962,6 +964,51 @@ branch history; this increment does not redo them.
   docs.
 - No sanitizer run was performed; no sanitizer gate is configured. The interop
   tests used the installed `clang` (v23.1.2).
+
+## 30. Multi-member packed INTEGER eightbyte ABI increment (completed and merged)
+
+- Merged into `main` as PR #12 (merge commit `027315b`); implementation
+  commit `a6a6fda`. CI run for the PR (`42758453505`, 2m11s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `162 passed, 0 failed`. Release artifacts and tags are untouched.
+- Scope: aggregates with two or more smaller-INTEGER members packed into
+  one eightbyte (size ≤ 8) followed by a single `f32` or `f64` scalar in
+  the next eightbyte, where the scalar occupies that eightbyte alone (no
+  INTEGER member in the SSE slot). Clang passes the packed EB0 as one
+  `i64` register and the EB1 as its scalar SSE register. The accepted
+  signatures are:
+  - `( i64, float )` / `{ i64, float }` returns
+  - `( i64, double )` / `{ i64, double }` returns
+
+  Clang IR probes confirm all cases (`{ i32, i32, f64 }`, `{ i16, i16, f64 }`,
+  `{ i8, i8, f64 }`, `{ i32, i32, f32 }`, `{ i16, i16, i16, i16, f64 }`,
+  `{ i16, i16, i16, i16, f32 }`, `{ i16, i16, f64 }`, and the multi-member
+  reverse). Kyn now passes `{ i32, i32, f64 }` as `( i64, double )`, matching
+  Clang's EB0/EB1 assignment exactly.
+- Implementation: `classifyMixedRunAggregate` gains two new exact-shape
+  acceptance checks at the top (before the member-count loop), gated on
+  `eb0_int && !eb0_sse && eb1_sse && !eb1_int && fields.len >= 3`. The
+  lowering reuses the already-verified `.sse_i64_f32x` / `.sse_i64_f64x`
+  boundary classes (typeString `{ i64, float }` / `{ i64, double }`,
+  two-slot arms, definition-side unpack, call-site arg lowering, return
+  coercions), so no new `BoundaryClass` variants, transport types, or
+  backend arms are introduced. This makes the entire increment local to
+  sema.zig.
+- The previously-rejected `{ i32, i32, f64 }`, `{ i8, i8, f64 }` and
+  `{ i16, i16, i16, i16, f64 }` layouts now pass.
+  Negative `E0473` fixtures (nested wrappers, arrays) unchanged.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass; `zig fmt --check` clean; integration suite passes in all four
+  profiles with the new `cabi_packed_i64_f64` (exit 55) and
+  `cabi_packed_i64_xs_i16_f64` (exit 63) C↔Kyn fixtures.
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this continuity record
+  updated.
+- No sanitizer run was performed; no sanitizer gate is configured. The
+  interop tests used the installed `clang` (v23.1.2).
+- Git state: implementation is merged into `main`. Release artifacts and
+  tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
