@@ -125,7 +125,7 @@ fn main() i32 {
   qualified references; each file has its own top-level namespace, while
   unaliased imports open public names transitively and diagnose ambiguity.
   `private` declarations are enforced.
-- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, supported integer-class aggregates (including float/integer fields merged within one eightbyte), one-field `f32`/`f64` structs as scalar SSE values, two-adjacent-`f32` structs as `<2 x float>` SSE/SSEUP values, three-adjacent-`f32` structs as `<2 x float>, float`, four-adjacent-`f32` structs as `<2 x float>, <2 x float>`, two-direct-`f64` structs in two SSE argument registers, direct `{ f32, f64 }` and `{ f64, f32 }` structs in their two SSE argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` / `{ f64, u64 }` structs in one SSE and one INTEGER argument register, exact multi-member `SSE`/`INTEGER`-split layouts such as `{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32, f32, f32 }`, `{ f64, f32, f32 }`, and the reverse `{ f32, f32, f64 }` and `{ f32, i32, f32, f32 }` layouts, direct `{ f64, i32 }` and `{ i32, f64 }` structs in their SSE/INTEGER registers, larger supported structs via `sret`/`byval`, and slices (`struct { T *ptr; size_t len; }`). Variadics and other unsupported small mixed-class layouts remain unsupported.
+- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, supported integer-class aggregates (including float/integer fields merged within one eightbyte), one-field `f32`/`f64` structs as scalar SSE values, two-adjacent-`f32` structs as `<2 x float>` SSE/SSEUP values, three-adjacent-`f32` structs as `<2 x float>, float`, four-adjacent-`f32` structs as `<2 x float>, <2 x float>`, two-direct-`f64` structs in two SSE argument registers, direct `{ f32, f64 }` and `{ f64, f32 }` structs in their two SSE argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` / `{ f64, u64 }` structs in one SSE and one INTEGER argument register, direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` and the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }` structs in one exact-width INTEGER and one SSE argument register, exact multi-member `SSE`/`INTEGER`-split layouts such as `{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32, f32, f32 }`, `{ f64, f32, f32 }`, the reverse `{ f32, f32, f64 }` and `{ f32, i32, f32, f32 }` layouts, and sub-32-bit or `bool` integer members inside merged `INTEGER` eightbytes, direct `{ f64, i32 }` and `{ i32, f64 }` structs in their SSE/INTEGER registers, larger supported structs via `sret`/`byval`, and slices (`struct { T *ptr; size_t len; }`). Variadics and other unsupported small mixed-class layouts remain unsupported.
 
 ---
 
@@ -216,6 +216,7 @@ Aggregate by-value support across the C ABI is limited:
 - Exactly four adjacent direct `f32` fields via `<2 x float>, <2 x float>`: ✅ (`x86_64` Linux)
 - Direct `{ f32, f64 }` / `{ f64, f32 }` at offsets 0/8 via two SSE registers: ✅ (`x86_64` Linux)
 - Direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` / `{ f64, u64 }` at offsets 0/8 via SSE + INTEGER: ✅ (`x86_64` Linux)
+- Direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` and reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }` at offsets 0/8 via exact-width INTEGER + SSE: ✅ (`x86_64` Linux)
 - Multi-member `SSE`/`INTEGER`-split layouts (12/16 bytes): `{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32, f32, f32 }`, `{ f32, i32, f32 }`, `{ f64, i32, f32 }`, `{ i64, f32, f32 }`, `{ f64, f32, f32 }`, `{ f32, f32, f64 }`, `{ i32, f32, f64 }`, `{ f32, f32, i32, f32 }`, `{ i32, f32, f32, f32 }`: ✅ (`x86_64` Linux)
 - Exactly two direct `f64` fields via two SSE registers: ✅ (`x86_64` Linux)
 - Direct `{ f64, i32 }` / `{ i32, f64 }` at offsets 0/8 via SSE + INTEGER: ✅ (`x86_64` Linux)
@@ -303,7 +304,7 @@ build.zig            Builds the toolchain and wires test steps
 | Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Shipped in `v0.1.0-alpha.3` |
 | Relative-path imports, qualified aliases and module namespaces | ✅ Shipped in `v0.1.0-alpha.3` |
 | Integer-class mixed float/integer aggregate C ABI cases | ✅ Shipped in `v0.1.0-alpha.3` |
-| SSE aggregate C ABI coercions (scalar, `f32`/`f64` pairs, `f32` triple/quad, mixed `f32`/`f64` and SSE+INTEGER orders) | 🟡 Partial |
+| SSE aggregate C ABI coercions (scalar, `f32`/`f64` pairs, `f32` triple/quad, mixed widths, `i8`/`i16`/`bool` members, layouts splitting SSE/INTEGER eightbytes) | 🟡 Partial |
 | Explicit all-check runtime policy across profiles | ✅ Implemented |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.

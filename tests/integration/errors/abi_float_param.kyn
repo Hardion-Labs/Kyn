@@ -1,3 +1,3 @@
-struct SmallIntDouble { count: i16, amount: f64 }
-extern fn c_take(value: SmallIntDouble);
+struct SmallBoolDouble { count: bool, amount: f64 }
+extern fn c_take(value: SmallBoolDouble);
 fn main() i32 { return 0; }

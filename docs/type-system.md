@@ -256,7 +256,15 @@ pointer regardless of how the pointer variable itself was declared.
   the reverse `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and
   `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and
   `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double`
-  and `{ i64, double }`. Exact multi-member layouts whose eightbytes split
+  and `{ i64, double }`. A direct `{ i8/u8, f64 }` or `{ i16/u16, f64 }`
+  uses the member-width integer and `double` and returns `{ i8, double }` /
+  `{ i16, double }`; the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }`
+  uses `double, i8` / `double, i16` and `{ double, i8 }` / `{ double, i16 }`
+  returns. Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
+  are also accepted inside `INTEGER`-merged eightbytes, where the packed
+  `i64` is passed irrespective of member widths; singleton small members pass
+  at their own width, and singleton `bool` remains rejected.
+  Exact multi-member layouts whose eightbytes split
   into an SSE-only slot and an INTEGER/merged slot use their probed Clang
   coercions: `{ f32, f32, i32 }` (`<2 x float>, i32` and `{ <2 x float>, i32 }`),
   `{ f32, f32, i64 }` (`<2 x float>, i64` and `{ <2 x float>, i64 }`),

@@ -26,7 +26,17 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`edda8b9`, PR #7):** exact multi-member
+- **Latest ABI increment completed and locally validated:** exactly two
+  direct small integer members (`i8`/`u8` or `i16`/`u16`) at natural offsets
+  0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }` lowers as
+  `i8, double` parameters and a `{ i8, double }` return; `{ i16/u16, f64 }`
+  uses `i16, double` and `{ i16, double }`; the reverse `{ f64, i8/u8 }` /
+  `{ f64, i16/u16 }` uses `double, i8` / `double, i16` and the matching
+  `{ double, i8 }` / `{ double, i16 }` returns. Sub-32-bit integer members
+  (`i8`, `u8`, `i16`, `u16`) and `bool` are also accepted inside
+  `INTEGER`-merged eightbytes (packed `i64` irrespective of member widths),
+  verified against Clang IR probes; singleton `bool` remains rejected (`E0473`).
+- **Previous ABI increment completed and merged (`edda8b9`, PR #7):** exact multi-member
   12/16-byte layouts whose eightbytes split into an SSE-only slot and an
   INTEGER/merged slot. `{ f32, f32, i32 }` (`<2 x float>, i32` and
   `{ <2 x float>, i32 }`), `{ f32, f32, i64/u64 }` (`<2 x float>, i64` and
@@ -135,6 +145,17 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     IR probes; covered by `cabi_multi_f32x2_i32`, `cabi_multi_f32x2_i64`,
     `cabi_multi_i32_f32pair`, `cabi_multi_i64_f32pair`, `cabi_multi_f64_v2f32`
     and `cabi_multi_f32pair_f64`.
+    Exactly two direct small integer members (`i8`/`u8` or `i16`/`u16`) at
+    natural offsets 0/8 (16 bytes) are accepted, signedness irrelevant:
+    `{ i8/u8, f64 }` uses `i8, double` and `{ i8, double }`;
+    `{ i16/u16, f64 }` uses `i16, double` and `{ i16, double }`; the
+    reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }` uses `double, i8` /
+    `double, i16` and `{ double, i8 }` / `{ double, i16 }`. Sub-32-bit
+    integer members (`i8`, `u8`, `i16`, `u16`) and `bool` are also accepted
+    inside `INTEGER`-merged eightbytes (packed `i64` irrespective of member
+    widths); a singleton `bool` member remains rejected (`E0473`). Clang IR
+    probes confirm all signatures; covered by `cabi_small_i8_f64`,
+    `cabi_small_f64_i16` and `cabi_small_i8_merged`.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
     by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
     conventions, and function pointers/callbacks.
@@ -264,8 +285,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   slot, with the probed Clang signatures (`{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, merged-INTEGER-plus-single-f32/f64 runs,
   `{ i64/u64, f32, f32 }`, all-SSE `{ f32, f32, f64 }` / `{ f64, f32, f32 }`,
-  and the four-member runs); any other member or layout falls through to the
-  existing paths or is rejected with `E0473`. Other unsupported
+  and the four-member runs); sub-32-bit integer members (`i8`, `u8`, `i16`,
+  `u16`) and `bool` are admitted inside `INTEGER`-merged eightbytes (packed
+  `i64` irrespective of member widths). A direct singleton small integer
+  member in an INTEGER-only eightbyte passes at its member width; a
+  singleton `bool` member remains rejected (`E0473`). Any other member or
+  layout falls through to the existing paths or is rejected with `E0473`.
+  Other unsupported
   SSE/SSEUP and split-class layouts remain rejected.
 
 ## 7. Files modified / added in the current increment
@@ -721,6 +747,52 @@ branch history; this increment does not redo them.
   `clang` (v23.1.2).
 - Git state: merged into `main` (see the merge record at the top of this
   section). Release artifacts and tags are untouched.
+
+## 26. Small integer member ABI increment (completed, not yet committed)
+
+- Scope: exactly two direct small integer members (`i8`/`u8` or `i16`/`u16`)
+  at natural offsets 0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }`
+  uses `i8, double` parameters and a `{ i8, double }` return; `{ i16/u16, f64 }`
+  uses `i16, double` and `{ i16, double }`; the reverse `{ f64, i8/u8 }` /
+  `{ f64, i16/u16 }` uses `double, i8` / `double, i16` and the matching
+  `{ double, i8 }` / `{ double, i16 }` returns. Additionally, sub-32-bit
+  integer members (`i8`, `u8`, `i16`, `u16`) and `bool` are admitted inside
+  `INTEGER`-merged eightbytes in the existing multi-member layouts (packed
+  `i64` irrespective of member widths, matching Clang). A singleton `bool`
+  member remains rejected with `E0473` (Clang passes it as `i8` zeroext;
+  Kyn's bool is `i1`, which would need a dedicated zeroext emission).
+- Clang 23 IR probes confirm all signatures: singleton `{ i8, double }` ->
+  `(i8, double)` and `{ i8, double }` return; `{ short, double }` ->
+  `(i16, double)` and `{ i16, double }`; the reverse orders likewise. Merged
+  eightbytes carrying `i8`/`u8`/`i16`/`u16`/`bool` members probe as `i64`
+  (e.g. `{ _Bool, float, float }` -> `(i64, float)`).
+- Implementation: new transport types `.abi_i8_f64`, `.abi_i16_f64`,
+  `.abi_f64_i8` and `.abi_f64_i16`; new `BoundaryClass` variants `sse_i8_f64`,
+  `sse_i16_f64`, `sse_f64_i8` and `sse_f64_i16` in both sema and backend.
+  The size-16 exact-shape block runs the four new checks after the existing
+  `{ f64, i32/u32 }` checks. Parameters, definition-side unpacking and
+  call-side argument lowering reuse the shared per-field arms (field order
+  equals parameter order, signedness irrelevant); returns use the new
+  transport types with `align 8` loads/stores, matching Clang. In
+  `classifyMixedRunAggregate`, members with 8/16 bits are now counted with
+  the 32-bit `i32` bucket (and `bool` counted alike), which admits them into
+  the merged-INTEGER accepted layouts; any other unsupported member shape
+  still falls through to the existing paths or `E0473`.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass (74 tests; new `C ABI small integer members accept exact layouts`
+  acceptance test; the negative `E0473` fixtures moved from a now-supported
+  `{ i16, f64 }` to a singleton-`bool` `SmallBoolDouble` to preserve
+  coverage); `zig fmt --check` clean; integration suite passes in all four
+  profiles with the new `cabi_small_i8_f64` (exit 31), `cabi_small_f64_i16`
+  (exit 39) and `cabi_small_i8_merged` (exit 56) C<->Kyn fixtures, covering
+  argument and return paths in both directions. Emitted Kyn IR signatures
+  match the Clang probes exactly (`{ i8, double }`, `{ i16, double }`,
+  `{ double, i8 }`, `{ double, i16 }`). Total integration count:
+  154 passed, 0 failed.
+- No sanitizer run was performed; no sanitizer gate is configured. The
+  interop tests used the installed `clang` (v23.1.2).
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

@@ -1720,6 +1720,10 @@ pub const Sema = struct {
             .abi_i64_v2f32 => "<internal ABI pair>",
             .abi_f64_v2f32 => "<internal ABI pair>",
             .abi_v2f32_f64 => "<internal ABI pair>",
+            .abi_i8_f64 => "<internal ABI pair>",
+            .abi_i16_f64 => "<internal ABI pair>",
+            .abi_f64_i8 => "<internal ABI pair>",
+            .abi_f64_i16 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1784,6 +1788,10 @@ pub const BoundaryClass = enum {
     sse_i64_v2f32,
     sse_f64_v2f32,
     sse_v2f32_f64,
+    sse_i8_f64,
+    sse_i16_f64,
+    sse_f64_i8,
+    sse_f64_i16,
     memory,
 };
 
@@ -1891,6 +1899,34 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 // { i64, double }.
                 return .sse_i64_f64;
             }
+            if (fields.len == 2 and
+                fields[0].ty.* == .int and (fields[0].ty.int.bits == 8 or fields[0].ty.int.bits == 16) and
+                fields[1].ty.* == .float and fields[1].ty.float == 64 and
+                eightbytes[0].has_integer and !eightbytes[0].has_sse and
+                eightbytes[1].has_sse and !eightbytes[1].has_integer)
+            {
+                // A single sub-32-bit-width integer member is passed at its
+                // own width. LLVM uses the member-width integer and a double,
+                // returning the pair; signedness is irrelevant.
+                return switch (fields[0].ty.int.bits) {
+                    8 => .sse_i8_f64,
+                    16 => .sse_i16_f64,
+                    else => .sse_i8_f64,
+                };
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 64 and
+                fields[1].ty.* == .int and (fields[1].ty.int.bits == 8 or fields[1].ty.int.bits == 16) and
+                eightbytes[0].has_sse and !eightbytes[0].has_integer and
+                eightbytes[1].has_integer and !eightbytes[1].has_sse)
+            {
+                // The reverse layout is double then a sub-32-bit-width integer.
+                return switch (fields[1].ty.int.bits) {
+                    8 => .sse_f64_i8,
+                    16 => .sse_f64_i16,
+                    else => .sse_f64_i8,
+                };
+            }
         }
         if (ty.* == .struct_type) {
             if (classifyMixedRunAggregate(ty.struct_type.fields, &eightbytes)) |class| return class;
@@ -1960,13 +1996,14 @@ fn classifyMixedRunAggregate(
                 else => return null,
             },
             .int => |info| switch (info.bits) {
-                32 => i32_count += 1,
+                8, 16, 32 => i32_count += 1,
                 64 => i64_count += 1,
                 else => return null,
             },
             .char => i32_count += 1,
+            .bool => i32_count += 1,
             .enum_type => |info| switch (info.backing.intInfo().bits) {
-                32 => i32_count += 1,
+                1, 8, 16, 32 => i32_count += 1,
                 64 => i64_count += 1,
                 else => return null,
             },
@@ -2474,6 +2511,52 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
     );
 }
 
+test "C ABI small integer members accept exact layouts" {
+    try expectClean(
+        \\struct TinyDouble { count: i8, amount: f64 }
+        \\struct TinyUDouble { count: u8, amount: f64 }
+        \\struct SmallDouble { count: i16, amount: f64 }
+        \\struct SmallUDouble { count: u16, amount: f64 }
+        \\struct DoubleTiny { amount: f64, count: i8 }
+        \\struct DoubleSmall { amount: f64, count: i16 }
+        \\extern fn c_take_td(value: TinyDouble) TinyDouble;
+        \\extern fn c_take_tu(value: TinyUDouble) TinyUDouble;
+        \\extern fn c_take_sd(value: SmallDouble) SmallDouble;
+        \\extern fn c_take_su(value: SmallUDouble) SmallUDouble;
+        \\extern fn c_take_dt(value: DoubleTiny) DoubleTiny;
+        \\extern fn c_take_ds(value: DoubleSmall) DoubleSmall;
+        \\export fn kyn_id_td(value: TinyDouble) TinyDouble { return value; }
+        \\export fn kyn_id_tu(value: TinyUDouble) TinyUDouble { return value; }
+        \\export fn kyn_id_sd(value: SmallDouble) SmallDouble { return value; }
+        \\export fn kyn_id_su(value: SmallUDouble) SmallUDouble { return value; }
+        \\export fn kyn_id_dt(value: DoubleTiny) DoubleTiny { return value; }
+        \\export fn kyn_id_ds(value: DoubleSmall) DoubleSmall { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct TinyFloatPair { count: i8, low: f32, mid: f32 }
+        \\struct BoolFloatPair { count: bool, low: f32, mid: f32 }
+        \\struct SmallFloatPair { count: i16, low: f32, mid: f32 }
+        \\struct TinyFloatPair64 { count: i8, low: f32, ratio: f64 }
+        \\extern fn c_take_tff(value: TinyFloatPair) TinyFloatPair;
+        \\extern fn c_take_bfp(value: BoolFloatPair) BoolFloatPair;
+        \\extern fn c_take_sfp(value: SmallFloatPair) SmallFloatPair;
+        \\extern fn c_take_tfp(value: TinyFloatPair64) TinyFloatPair64;
+        \\export fn kyn_id_tff(value: TinyFloatPair) TinyFloatPair { return value; }
+        \\export fn kyn_id_bfp(value: BoolFloatPair) BoolFloatPair { return value; }
+        \\export fn kyn_id_sfp(value: SmallFloatPair) SmallFloatPair { return value; }
+        \\export fn kyn_id_tfp(value: TinyFloatPair64) TinyFloatPair64 { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectSemanticError(
+        \\struct SmallBoolDouble { count: bool, amount: f64 }
+        \\extern fn c_take(value: SmallBoolDouble);
+        \\fn main() i32 { return 0; }
+    , "E0473");
+}
+
 test "C ABI multi-member eightbyte layouts accept exact runs" {
     try expectClean(
         \\struct FloatPairInt { low: f32, mid: f32, high: i32 }
@@ -2523,8 +2606,8 @@ test "C ABI multi-member eightbyte layouts accept exact runs" {
     );
 
     try expectSemanticError(
-        \\struct SmallIntDouble { count: i16, amount: f64 }
-        \\extern fn c_take(value: SmallIntDouble);
+        \\struct SmallBoolDouble { count: bool, amount: f64 }
+        \\extern fn c_take(value: SmallBoolDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 }
@@ -2546,8 +2629,8 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
     );
 
     try expectSemanticError(
-        \\struct SmallIntDouble { count: i16, amount: f64 }
-        \\extern fn c_take(value: SmallIntDouble);
+        \\struct SmallBoolDouble { count: bool, amount: f64 }
+        \\extern fn c_take(value: SmallBoolDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 
