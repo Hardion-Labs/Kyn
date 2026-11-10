@@ -21,11 +21,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **Latest ABI increment completed and locally validated:** singleton
+- **Latest ABI increment completed and merged (`9bb08c4`, PR #13):** singleton
   `i8`/`i16`/`i32`/`i64` aggregates pass in one exact-width INTEGER argument
   register (size-derived: 1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`),
   matching Clang's exact-size register widths for the INTEGER class.
   `cabi_small_singleton` and `cabi_small_singleton_u8` cover both directions.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `164 passed, 0 failed`.
 - **Previous ABI increment completed and merged (`027315b`, PR #12):** aggregates with two
   or more smaller-INTEGER members packed into one eightbyte (only INTEGER
   members, size ≤ 8) followed by a single `f32` or `f64` in the next eightbyte
@@ -1015,7 +1018,13 @@ branch history; this increment does not redo them.
 - Git state: implementation is merged into `main`. Release artifacts and
   tags are untouched.
 
-## 31. Small-1 singleton integer ABI increment (completed, not yet committed)
+## 31. Small-1 singleton integer ABI increment (completed and merged)
+
+- Merged into `main` as PR #13 (merge commit `9bb08c4`); implementation
+  commit `ad6c6f3`. CI run for the PR (`42761244208`, 1m59s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `164 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: singleton INTEGER-only aggregates (`.small_1` eightbyte classification,
   size ≤ 8) now pass at the **member's own natural width** (LLVM `i8` for a
@@ -1058,8 +1067,6 @@ branch history; this increment does not redo them.
   `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
 - No sanitizer run was performed; no sanitizer gate is configured. Interop
   used the installed `clang` (v23.1.2).
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
