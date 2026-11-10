@@ -21,6 +21,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
+- **ABI increment in progress (not yet committed):** two-member structs whose
+  members occupy one eightbyte each and are both integer scalars now lower as
+  `.small_2s` — each member passes in its own register at its own width and
+  the aggregate returns as the matching pair (`{ i8, i64 }`, `{ i16, i64 }`,
+  `{ i32, i64 }` and the reversed layouts), matching Clang's System V
+  lowering for all six probed signatures. See §32 for the full scope,
+  implementation map and validation results.
 - **Latest ABI increment completed and merged (`9bb08c4`, PR #13):** singleton
   `i8`/`i16`/`i32`/`i64` aggregates pass in one exact-width INTEGER argument
   register (size-derived: 1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`),
@@ -250,7 +257,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 2. **Extended C ABI classification** (remaining System V SSE/SSEUP coercions
    beyond the f32 run shapes and f64 pair, complete eightbyte-class merging,
    function pointers, and target ABI selection instead of host-assumed
-   `64`-bit `usize`).
+   `64`-bit `usize`). Within the INTEGER class, the two-member
+   narrow-plus-wide pair shapes are now covered (§32); the remaining
+   INTEGER-class gap is Clang's leaf-flattening of nested-struct members
+   (e.g. `{ struct { short x; } a; long b; }` → `(i16, i64)`), which today
+   stays on the ABI-compatible `.small_2` lowering.
 3. **Tagged unions / explicit error-return types** (`Result`-style value flow
    without hidden exceptions or unwinding).
 4. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
@@ -1067,6 +1078,65 @@ branch history; this increment does not redo them.
   `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
 - No sanitizer run was performed; no sanitizer gate is configured. Interop
   used the installed `clang` (v23.1.2).
+
+## 32. Two-member integer-pair aggregate ABI increment (implemented, pending merge)
+
+- Scope: two-member structs whose members occupy one eightbyte each and are
+  both integer scalars now lower as `.small_2s`: each member passes in its own
+  register at its own width and the aggregate returns as the matching pair.
+  Clang's System V lowering was probed for every reachable shape before
+  implementing (Clang 23.1.2 IR):
+  - `{ i8, i64 }` → `(i8, i64)` params, `{ i8, i64 }` return
+  - `{ i64, i8 }` → `(i64, i8)` params, `{ i64, i8 }` return
+  - `{ i16, i64 }` → `(i16, i64)` params, `{ i16, i64 }` return
+  - `{ i64, i16 }` → `(i64, i16)` params, `{ i64, i16 }` return
+  - `{ i32, i64 }` → `(i32, i64)` params, `{ i32, i64 }` return
+  - `{ i64, i32 }` → `(i64, i32)` params, `{ i64, i32 }` return
+  - `{ i64, i64 }` stays on `.small_2` (`i128`), unchanged
+  - two members inside one eightbyte (e.g. `{ char, char, long }`) stay on
+    `.small_2` (merged INTEGER eightbyte), unchanged
+  - nested-struct members (e.g. `{ struct { short x; } a; long b; }`) stay on
+    `.small_2`, because Clang flattens the nested struct into its leaves and
+    the current `.small_2` lowering is already ABI-compatible there (the
+    register pair carries the same bytes); matching Clang's flattened
+    `(i16, i64)` exactly is not attempted in this increment
+- Implementation:
+  - `compiler/sema.zig`: new `pub fn memberBoundaryBits(ty)` returns the
+    INTEGER-class boundary width of an integer member (`int` → its own bits,
+    `bool` → 8, `char` → 32, `enum` → its backing width); `isIntLikeWithWidth`
+    now delegates to it, removing the duplicated width table. New private
+    `smallPairWidths(ty)` recognises the eligible two-member shapes (both
+    members integer-like, each fitting one eightbyte, the second starting at
+    offset ≥ 8) and returns the two widths; `aggregateBoundaryClass` maps
+    those shapes to `.small_2s` when exactly one of the widths is narrower
+    than 64 bits.
+  - `compiler/types.zig`: six new transport variants `abi_pair_i8_i64`,
+    `abi_pair_i16_i64`, `abi_pair_i32_i64`, `abi_pair_i64_i8`,
+    `abi_pair_i64_i16` and `abi_pair_i64_i32`, with `eql` and `displayName`
+    entries (`<internal ABI pair>` in the semantic analyzer).
+  - `compiler/backend/llvm.zig`: new `BoundaryClass.small_2s`; the backend's
+    duplicated member-width table was replaced by the sema helper
+    (`boundaryMemberBits` now delegates to `sema_mod.memberBoundaryBits`), so
+    classification and lowering cannot drift apart. `pairTransportType` now
+    takes the two widths and selects the transport type. The class is handled
+    in every switch that needed it: parameter allocation (`createFunction`),
+    return type (`.ret_ty`), boundary-class passthrough, parameter
+    unpacking in a callee (`lowerFunction`), the `return` statement
+    (`lowerStmt`), argument passing and result handling in a call
+    (`lowerCall`), plus the emitter's type string and alignment tables.
+- Validation: `zig build`, `zig build -Doptimize=ReleaseSafe`, `zig build test`
+  and `zig fmt --check build.zig compiler build-system` pass; the integration
+  suite passes in all four profiles (`debug`, `safe`, `release`, `fast`) with
+  `165 passed, 0 failed`, including the new `cabi_small_pair_widths` fixture
+  (exit 5) that exercises all six layouts in both directions. A separate
+  ad-hoc C↔Kyn check also confirmed `bool` and `enum` members behave as Clang
+  does (`(i8, i64)` and `(i64, i8)`).
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
+- No sanitizer run was performed; no sanitizer gate is configured. Interop
+  used the installed `clang` (v23.1.2).
+- Pending: this increment is not yet committed, pushed, or merged. The next
+  action is a branch, commit, PR, green CI, merge, and post-merge gates.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

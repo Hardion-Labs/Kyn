@@ -262,7 +262,15 @@ pointer regardless of how the pointer variable itself was declared.
   uses `double, i8` / `double, i16` and `{ double, i8 }` / `{ double, i16 }`
   returns. A direct `{ bool, f64 }` or `{ double, bool }` passes the singleton
   `bool` as a full `i8` parameter, with `{ i8, double }` / `{ double, i8 }`
-  returns. Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
+  returns. Two-member structs whose members occupy one eightbyte each and are
+  both integer scalars pass each member at its own width in its own register,
+  returning the matching pair: `{ i8/u8, i64 }` / `{ u8/u8, i64 }` uses
+  `i8, i64` and `{ i8, i64 }`; `{ i16/u16, i64 }` / `{ u16/u16, i64 }` uses
+  `i16, i64` and `{ i16, i64 }`; `{ i32, i64 }` / `{ u32, u64 }` uses
+  `i32, i64` and `{ i32, i64 }`; and the reversed layouts `{ i64, i8/u8 }`,
+  `{ i64, i16/u16 }` and `{ i64, i32/u32 }` use `i64, i8` / `i64, i16` /
+  `i64, i32` with the matching pair returns.
+  Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass
   at their own width; and a singleton `enum` member or singleton `bool` passes as an `i8`/`i16`/`i32`/`i64` at its backing width. Singleton `i8`/`i16`/`i32`/`i64` aggregates are passed in a single exact-width INTEGER argument register (1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`), matching Clang's IR exact-size registers.

@@ -39,7 +39,15 @@ extern fn free(ptr: *u8);
   returns as `{ float, i64 }`; the reverse `{ i64, f32 }` / `{ u64, f32 }`
   uses `i64, float` and `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }`
   use `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }`
-  use `i64, double` and `{ i64, double }`. A direct `{ i8/u8, f64 }` or
+  use `i64, double` and `{ i64, double }`. A two-member struct whose members
+  occupy one eightbyte each and are both integer scalars passes each member in
+  its own register at its own width and returns as the matching pair: the
+  `{ i8/u8, i64 }` / `{ u8/u8, i64 }` layout uses `i8, i64` and `{ i8, i64 }`,
+  `{ i16/u16, i64 }` / `{ u16/u16, i64 }` uses `i16, i64` and `{ i16, i64 }`,
+  `{ i32, i64 }` / `{ u32, u64 }` uses `i32, i64` and `{ i32, i64 }`, and the
+  reversed layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`
+  use `i64, i8` / `i64, i16` / `i64, i32` and the matching pair returns. A
+  direct `{ i8/u8, f64 }` or
   `{ i16/u16, f64 }` uses the member-width integer and `double`, and returns
   `{ i8, double }` / `{ i16, double }`; the reverse `{ f64, i8/u8 }` /
   `{ f64, i16/u16 }` uses `double, i8` / `double, i16` and returns
@@ -149,7 +157,15 @@ Caveats:
   `{ f64, i16/u16 }` use `double, i8` / `double, i16` and `{ double, i8 }` /
   `{ double, i16 }` returns. A direct `{ bool, f64 }` or `{ double, bool }`
   passes the singleton `bool` as a full `i8`, with `{ i8, double }` /
-  `{ double, i8 }` returns. Exact multi-member layouts whose
+  `{ double, i8 }` returns. Two-member structs whose members occupy one
+  eightbyte each and are both integer scalars pass each member at its own
+  width in its own register, returning the matching pair: `{ i8/u8, i64 }` /
+  `{ u8/u8, i64 }` uses `i8, i64` and `{ i8, i64 }`; `{ i16/u16, i64 }` /
+  `{ u16/u16, i64 }` uses `i16, i64` and `{ i16, i64 }`; `{ i32, i64 }` /
+  `{ u32, u64 }` uses `i32, i64` and `{ i32, i64 }`; and the reversed layouts
+  `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }` use
+  `i64, i8` / `i64, i16` / `i64, i32` with the matching pair returns. Exact
+  multi-member layouts whose
   eightbytes split into an SSE-only slot and an INTEGER/merged slot use their
   probed Clang coercions (`{ f32, f32, i32 }`, `{ f32, f32, i64/u64 }`,
   `{ i32/u32/i64/u64, f32, f32 }`, `{ f32, i32/u32, f32 }`, `{ i32/u32, f32, f64 }`,
