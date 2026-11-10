@@ -8,6 +8,19 @@ promised between alpha releases.
 
 ### Added
 
+- C ABI support on `x86_64` Linux for nested members in the C ABI: the
+  register of an eightbyte is now decided by the *leaves* it carries, with
+  nested structs flattened into their members exactly as Clang does. A nested
+  integer member travels at its own width (`{ struct { short x; } a; long b; }`
+  → `i16, i64` with a `{ i16, i64 }` return), a nested `f32` travels as a
+  scalar (`{ struct { float f; } a; long b; }` → `float, i64`), and a nested
+  `f64` pair travels as two scalars (`{ struct { double x; double y; } pair; }`
+  → `double, double`). The boundary classification now derives every
+  eightbyte register from the leaf model, which replaces the previous
+  member-shape rules and also accepts the merged-INTEGER eightbyte shapes
+  Clang supports. The negative fixtures `abi_sse_integer_param` and
+  `abi_sseup_pair` became the positive fixture `cabi_nested_sse_widths`
+  (exit 57), which covers the nested layouts in both directions.
 - C ABI support on `x86_64` Linux for structs whose two eightbytes each carry
   exactly one integer leaf (`.small_2s` eightbyte classification, 16 bytes):
   each leaf is passed in its own register at its own width and the aggregate

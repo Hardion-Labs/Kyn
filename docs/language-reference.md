@@ -235,9 +235,9 @@ fn log_message() {
   (`{ i8/u8, i64 }` → `i8, i64` / `{ i8, i64 }`, `{ i16/u16, i64 }` →
   `i16, i64` / `{ i16, i64 }`, `{ i32, i64 }` → `i32, i64` /
   `{ i32, i64 }`, and the reversed layouts → `i64, i8` / `i64, i16` /
-  `i64, i32` with the matching pair returns; nested integer members are
-  flattened into their leaves, so `{ struct { short x; } a; long b; }` →
-  `i16, i64` / `{ i16, i64 }`), while a singleton
+  `i64, i32` with the matching pair returns; the register of an eightbyte is
+  decided by the leaves it carries, with nested structs flattened into their
+  members exactly as Clang does), while a singleton
   `enum` member with a sub-32-bit backing passes as an `i8`/`i16`/`i32`/`i64` at its backing width;
   the exact multi-member layouts `{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,

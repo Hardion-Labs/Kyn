@@ -269,10 +269,13 @@ pointer regardless of how the pointer variable itself was declared.
   `{ i16, i64 }`; `{ i32, i64 }` / `{ u32, u64 }` uses `i32, i64` and
   `{ i32, i64 }`; and the reversed layouts `{ i64, i8/u8 }`,
   `{ i64, i16/u16 }` and `{ i64, i32/u32 }` use `i64, i8` / `i64, i16` /
-  `i64, i32` with the matching pair returns. Nested integer members are
-  flattened into their leaves like Clang does, so
-  `{ struct { short x; } a; long b; }` uses `i16, i64` and `{ i16, i64 }`,
-  while a nested member with more than one leaf merges its eightbyte.
+  `i64, i32` with the matching pair returns. The register of an eightbyte is
+  decided by the *leaves* it carries, with nested structs flattened into their
+  members exactly as Clang does: an eightbyte with a single integer leaf
+  travels at that leaf's width, one with several leaves travels as a full
+  `i64`, an eightbyte with a single `f32` or `f64` travels as that scalar,
+  and one with two `f32` leaves travels as `<2 x float>`. Nested members
+  therefore follow the same rules as direct ones.
   Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass

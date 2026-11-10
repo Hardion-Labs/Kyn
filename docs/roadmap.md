@@ -97,8 +97,11 @@ Milestones below are directions, not release promises.
   (`.small_2s`): each leaf passes in its own register at its own width and the
   aggregate returns as the matching pair, for `{ i8/u8, i64 }`,
   `{ i16/u16, i64 }`, `{ i32, i64 }` / `{ u32, u64 }` and the reversed
-  layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`, with
-  nested integer members flattened into their leaves.
+  layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`.
+- Boundary classification by leaves: the register of an eightbyte follows the
+  scalar leaves it carries, with nested structs flattened into their members
+  exactly as Clang does, so nested integer, `f32` and `f64` members follow
+  the same rules as direct ones.
 - Keep the all-checks-enabled runtime policy stable across profiles unless a
   separate language-level decision explicitly specifies observable profile
   differences and adds profile-specific regressions.
