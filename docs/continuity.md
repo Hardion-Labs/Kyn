@@ -449,7 +449,10 @@ branch history; this increment does not redo them.
   "no release exists" snapshot. No source/ABI stability is promised between
   alpha releases.
 
-## 22. Adjacent f32 runs ABI increment (completed, not yet committed)
+## 22. Adjacent f32 runs ABI increment (completed and merged)
+
+- Merged into `main` as PR #4 (merge commit `2869235`); implementation
+  commit `0ceb1f4`. CI run for the PR (`42731516995`, 1m55s) was green.
 
 - Scope: only aggregates with exactly three adjacent direct `f32` fields
   (12 bytes, natural layout) and exactly four adjacent direct `f32` fields
@@ -489,9 +492,10 @@ branch history; this increment does not redo them.
 - No sanitizer run was performed; no sanitizer gate is configured. Zig 0.17.0
   and its bundled Clang via `zig cc` are used for the toolchain; the
   integration interop tests used the installed `clang` (v23.1.2).
-- Git state: working tree has uncommitted changes from this increment on
-  `main` (branch based on `origin/main` at `9b47e26`). No commit/push/merge
-  was performed; the release artifacts and tags are untouched.
+- Git state: implementation is merged into `main` at `2869235` via PR #4.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, Debug/ReleaseSafe integration matrix — all report
+  `139 passed, 0 failed`. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
