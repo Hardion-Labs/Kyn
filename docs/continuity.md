@@ -26,7 +26,20 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`224e8f3`, PR #6):** exactly two
+- **Latest ABI increment completed and locally validated:** exact multi-member
+  12/16-byte layouts whose eightbytes split into an SSE-only slot and an
+  INTEGER/merged slot. `{ f32, f32, i32 }` (`<2 x float>, i32` and
+  `{ <2 x float>, i32 }`), `{ f32, f32, i64/u64 }` (`<2 x float>, i64` and
+  `{ <2 x float>, i64 }`), `{ i32/u32, f32, f32 }` / `{ f32, i32/u32, f32 }`
+  (merged `INTEGER` passed as `i64`, then `float`), `{ i32/u32, f32, f64 }` /
+  `{ f32, i32/u32, f64 }` (merged `INTEGER` as `i64`, then `double`),
+  `{ f64, i32/u32, i32/u32 }` / `{ f64, i32/u32, f32 }` (`double` then
+  merged `INTEGER`), `{ i64/u64, f32, f32 }` (`i64, <2 x float>`),
+  all-SSE triples `{ f32, f32, f64 }` (`<2 x float>, double`) and
+  `{ f64, f32, f32 }` (`double, <2 x float>`), and four-member
+  `{ f32, f32, i32, f32 }` / `{ i32/u32, f32, f32, f32 }` /
+  `{ f32, i32/u32, f32, f32 }`. Clang IR probes confirm every signature.
+- **Previous ABI increment completed and merged (`224e8f3`, PR #6):** exactly two
   direct mixed-width float/64-bit-integer fields at natural offsets 0/8
   (16 bytes), signedness irrelevant: `{ f32, i64 }` / `{ f32, u64 }` lower as
   `float, i64` parameters and a `{ float, i64 }` return; the reverse
@@ -108,6 +121,20 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     Clang IR probes confirm all eight signatures; covered by
     `cabi_mixed_f32_i64`, `cabi_mixed_i64_f32`, `cabi_mixed_f64_i64` and
     `cabi_mixed_i64_f64`.
+    Exact multi-member 12/16-byte layouts whose eightbytes split into an
+    SSE-only slot and an INTEGER/merged slot are also accepted, with their
+    probed Clang coercions: `{ f32, f32, i32 }` (`<2 x float>, i32`),
+    `{ f32, f32, i64 }` (`<2 x float>, i64`), `{ i32/u32, f32, f32 }` /
+    `{ f32, i32/u32, f32 }` (merged `INTEGER` passed as `i64`, then `float`),
+    `{ i32/u32, f32, f64 }` / `{ f32, i32/u32, f64 }` (merged `INTEGER` as
+    `i64`, then `double`), `{ f64, i32/u32, i32/u32 }` / `{ f64, i32/u32, f32 }`
+    (`double` then merged `INTEGER`), `{ i64/u64, f32, f32 }`
+    (`i64, <2 x float>`), and four-member
+    `{ f32, f32, i32, f32 }` / `{ i32/u32, f32, f32, f32 }` /
+    `{ f32, i32/u32, f32, f32 }`. All signatures verified against Clang
+    IR probes; covered by `cabi_multi_f32x2_i32`, `cabi_multi_f32x2_i64`,
+    `cabi_multi_i32_f32pair`, `cabi_multi_i64_f32pair`, `cabi_multi_f64_v2f32`
+    and `cabi_multi_f32pair_f64`.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
     by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
     conventions, and function pointers/callbacks.
@@ -232,7 +259,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   maps to `i64, float` and `{ i64, float }`; `{ f64, i64 }` maps to
   `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` maps to
   `i64, double` and `{ i64, double }` (signedness irrelevant throughout).
-  Other unsupported
+  `classifyMixedRunAggregate(fields, eightbytes)` handles exact three/four-member
+  layouts whose eightbytes split into an SSE-only slot and an INTEGER/merged
+  slot, with the probed Clang signatures (`{ f32, f32, i32 }`,
+  `{ f32, f32, i64 }`, merged-INTEGER-plus-single-f32/f64 runs,
+  `{ i64/u64, f32, f32 }`, all-SSE `{ f32, f32, f64 }` / `{ f64, f32, f32 }`,
+  and the four-member runs); any other member or layout falls through to the
+  existing paths or is rejected with `E0473`. Other unsupported
   SSE/SSEUP and split-class layouts remain rejected.
 
 ## 7. Files modified / added in the current increment
@@ -627,6 +660,61 @@ branch history; this increment does not redo them.
   `clang` (v23.1.2).
 - Git state: merged into `main` (see the merge record at the top of this
   section). Release artifacts and tags are untouched.
+
+## 25. Multi-member ABI increment (completed, not yet committed)
+
+- Scope: exact three- and four-member aggregates (12 or 16 bytes) whose
+  eightbytes split strictly into an SSE-only slot and an INTEGER/pure-or-
+  merged slot. Verified against Clang 23 IR probes (parameters and returns
+  for every shape, including u32/u64 variants): `{ f32, f32, i32/u32 }`
+  (`<2 x float>, i32`, ret `{ <2 x float>, i32 }`), `{ f32, f32, i64/u64 }`
+  (`<2 x float>, i64`, ret `{ <2 x float>, i64 }`), `{ i32/u32, f32, f32 }`
+  and `{ f32, i32/u32, f32 }` (merged INTEGER as `i64` then `float`, ret
+  `{ i64, float }`), `{ i32/u32, f32, f64 }` and `{ f32, i32/u32, f64 }`
+  (merged INTEGER as `i64` then `double`, ret `{ i64, double }`),
+  `{ f64, i32/u32, i32/u32 }` and `{ f64, i32/u32, f32 }` (`double` then
+  merged INTEGER, ret `{ double, i64 }`), `{ i64/u64, f32, f32 }`
+  (`i64, <2 x float>`, ret `{ i64, <2 x float> }`),
+  all-SSE triples `{ f32, f32, f64 }` (`<2 x float>, double`;
+  ret `{ <2 x float>, double }`) and `{ f64, f32, f32 }` (`double, <2 x float>`;
+  ret `{ double, <2 x float> }`), and four-member
+  `{ f32, f32, i32/u32, f32 }` (`<2 x float>, i64`; ret `{ <2 x float>, i64 }`),
+  `{ i32/u32, f32, f32, f32 }` and `{ f32, i32/u32, f32, f32 }`
+  (`i64, <2 x float>`; ret `{ i64, <2 x float> }`).
+- Implementation: new transport types `.abi_v2f32_i32`, `.abi_v2f32_i64`,
+  `.abi_i64_v2f32`, `.abi_f64_v2f32` and `.abi_v2f32_f64`; new
+  `BoundaryClass` variants `sse_f32x2_i32`, `sse_f32x2_i64`, `sse_i64_f32x`,
+  `sse_i64_f64x`, `sse_f64_i64x`, `sse_i64_v2f32`, `sse_f64_v2f32` and
+  `sse_v2f32_f64` in both sema and backend. `classifyMixedRunAggregate`
+  walks the member multiset (f32/f64/i32/i64 and `char`, 32/64-bit enum
+  backings count as int-like), rejects everything else, and is only reached
+  for aggregates ≤16 bytes after the existing exact-shape checks; it returns
+  to the existing all-SSE / INTEGER-only paths when it matches nothing.
+  Parameters/definitions/calls reuse the shared per-field flatten arms,
+  augmented by two-slot load/store arms built on `byte_offset`; returns
+  coerce through the new transports with `align 8` loads/stores, matching
+  Clang's emitted IR.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass (74 tests; new multi-member acceptance test and mirror blocks; the
+  `FloatIntFloat { f32, i32, f32 }` unit fixture was accepted, and the
+  `{ f32, f32, i32, f32 }` four-member accepted across two iterations of
+  merged-eightbyte condition fixes); `zig fmt --check` clean; integration
+  passes in all four profiles with six new C↔Kyn fixtures
+  (`cabi_multi_f32x2_i32` 50, `cabi_multi_f32x2_i64` 92,
+  `cabi_multi_i32_f32pair` 54, `cabi_multi_i64_f32pair` 52,
+  `cabi_multi_f64_v2f32` 64, `cabi_multi_f32pair_f64` 56). Emitted Kyn IR
+  signatures match the Clang probe for every multi-member shape, including
+  the order-sensitive all-SSE triples. Total integration count: 151 passed,
+  0 failed.
+- Two classification bugs were caught and fixed during the increment: a
+  merged eightbyte carrying an `f32` was incorrectly required to have
+  `has_sse == false` (it must be merged INTEGER and accepted), and the
+  all-SSE `{ f32, f32, f64 }` vs `{ f64, f32, f32 }` discrimination needed
+  field-order checks rather than member counts. No sanitizer run was
+  performed; no sanitizer gate is configured. Interop used the installed
+  `clang` (v23.1.2).
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

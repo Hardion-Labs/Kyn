@@ -217,7 +217,15 @@ fn log_message() {
   `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and `{ i64, float }`;
   `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and `{ double, i64 }`;
   and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`;
-  and a direct
+  the exact multi-member layouts `{ f32, f32, i32 }`,
+  `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,
+  `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`, `{ f64, i32/u32, i32/u32 }`,
+  `{ f64, i32/u32, f32 }`, `{ i64/u64, f32, f32 }`, `{ f32, f32, f64 }` and
+  `{ f64, f32, f32 }`, and their four-member variants
+  `{ f32, f32, i32, f32 }` / `{ i32/u32, f32, f32, f32 }` /
+  `{ f32, i32/u32, f32, f32 }`, use their probed Clang coercions with
+  `<2 x float>`, `float`, `double` or `i64` as the merged-INTEGER/SSE-slot
+  parameters; and a direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with fields at offsets 0 and 8 uses
   `double, i32` arguments and `{ double, i32 }` return coercion; the reverse
   `{ i32, f64 }` or `{ u32, f64 }` uses `i32, double` and
@@ -471,6 +479,13 @@ let sum: i32 = add(1, 2);
   argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` /
   `{ f64, u64 }` structs via one SSE and one INTEGER argument register, and the
   reverse `{ i64, f32 }` / `{ i64, f64 }` layouts via INTEGER then SSE,
+  exact multi-member layouts with an SSE-only slot and an INTEGER/merged slot
+  (`{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`,
+  `{ f32, i32/u32, f32 }`, `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`,
+  `{ f64, i32/u32, i32/u32 }`, `{ f64, i32/u32, f32 }`,
+  `{ i64/u64, f32, f32 }`, `{ f32, f32, f64 }`, `{ f64, f32, f32 }`, and
+  four-member `{ f32, f32, i32, f32 }` / `{ i32/u32, f32, f32, f32 }` /
+  `{ f32, i32/u32, f32, f32 }`) via their probed Clang coercions,
   direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
   direct `{ i32, f64 }` structs via INTEGER `i32` plus SSE `double`, and larger
   aggregates passed via `byval`; fixed arrays and other unsupported small

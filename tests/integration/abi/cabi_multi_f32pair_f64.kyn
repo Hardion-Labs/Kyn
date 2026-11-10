@@ -1,0 +1,17 @@
+struct FloatPairDouble { a: f32, b: f32, c: f64 }
+
+extern fn c_transform(value: FloatPairDouble) FloatPairDouble;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: FloatPairDouble) FloatPairDouble {
+    return FloatPairDouble {
+        a: value.a + 2.0,
+        b: value.b + 3.0,
+        c: value.c + 4.0,
+    };
+}
+
+fn main() i32 {
+    let result: FloatPairDouble = c_transform(FloatPairDouble { a: 1.5, b: 2.5, c: 1.5 });
+    return (result.a as i32) + (result.b as i32) + (result.c as i32) + c_verify_kyn();
+}

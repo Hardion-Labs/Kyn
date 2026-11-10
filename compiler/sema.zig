@@ -1715,6 +1715,11 @@ pub const Sema = struct {
             .abi_i64_f32 => "<internal ABI pair>",
             .abi_f64_i64 => "<internal ABI pair>",
             .abi_i64_f64 => "<internal ABI pair>",
+            .abi_v2f32_i32 => "<internal ABI pair>",
+            .abi_v2f32_i64 => "<internal ABI pair>",
+            .abi_i64_v2f32 => "<internal ABI pair>",
+            .abi_f64_v2f32 => "<internal ABI pair>",
+            .abi_v2f32_f64 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1771,6 +1776,14 @@ pub const BoundaryClass = enum {
     sse_i64_f32,
     sse_f64_i64,
     sse_i64_f64,
+    sse_f32x2_i32,
+    sse_f32x2_i64,
+    sse_i64_f32x,
+    sse_i64_f64x,
+    sse_f64_i64x,
+    sse_i64_v2f32,
+    sse_f64_v2f32,
+    sse_v2f32_f64,
     memory,
 };
 
@@ -1879,6 +1892,9 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 return .sse_i64_f64;
             }
         }
+        if (ty.* == .struct_type) {
+            if (classifyMixedRunAggregate(ty.struct_type.fields, &eightbytes)) |class| return class;
+        }
         const count: usize = @intCast((layout.size + 7) / 8);
         var sse_only_count: usize = 0;
         for (eightbytes[0..count]) |class| {
@@ -1919,6 +1935,107 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     if (layout.size <= 8) return .small_1;
     if (layout.size <= 16) return .small_2;
     return .memory;
+}
+
+// Three- and four-member aggregates whose eightbytes split strictly into an
+// SSE-only slot and an INTEGER-or-merged slot. All accepted shapes are exact
+// and verified against Clang IR; `char` and 32-bit enum backings count as
+// i32-like 32-bit integer members. Any other member (i8/i16/enum8+, bool,
+// pointer, slice, array, nested struct, enum backing wider/narrower than
+// 32/64 bits) is rejected here, and unmatched shapes fall through to the
+// existing all-SSE / INTEGER-only paths or `E0473`.
+fn classifyMixedRunAggregate(
+    fields: []const types.Field,
+    eightbytes: *const [2]AggregateEightbyte,
+) ?BoundaryClass {
+    var f32_count: usize = 0;
+    var f64_count: usize = 0;
+    var i32_count: usize = 0;
+    var i64_count: usize = 0;
+    for (fields) |field| {
+        switch (field.ty.*) {
+            .float => |bits| switch (bits) {
+                32 => f32_count += 1,
+                64 => f64_count += 1,
+                else => return null,
+            },
+            .int => |info| switch (info.bits) {
+                32 => i32_count += 1,
+                64 => i64_count += 1,
+                else => return null,
+            },
+            .char => i32_count += 1,
+            .enum_type => |info| switch (info.backing.intInfo().bits) {
+                32 => i32_count += 1,
+                64 => i64_count += 1,
+                else => return null,
+            },
+            else => return null,
+        }
+    }
+    // No float members: leave the aggregate to the all-INTEGER paths.
+    if (f32_count + f64_count == 0) return null;
+
+    const eb0_sse = eightbytes[0].has_sse and !eightbytes[0].has_integer;
+    const eb0_int = eightbytes[0].has_integer;
+    const eb1_sse = eightbytes[1].has_sse and !eightbytes[1].has_integer;
+    const eb1_int = eightbytes[1].has_integer;
+
+    if (fields.len == 3) {
+        if (f32_count == 2 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_sse and eb1_int and !eightbytes[1].has_sse) {
+            // {f32, f32, i32/u32}: <2 x float> then i32.
+            return .sse_f32x2_i32;
+        }
+        if (f32_count == 2 and i64_count == 1 and f64_count == 0 and i32_count == 0 and eb0_sse and eb1_int and !eightbytes[1].has_sse) {
+            // {f32, f32, i64/u64}: <2 x float> then i64.
+            return .sse_f32x2_i64;
+        }
+        if (i32_count == 1 and f32_count == 2 and f64_count == 0 and i64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
+            // {i32/u32, f32, f32} / {f32, i32/u32, f32}: merged INTEGER then float.
+            return .sse_i64_f32x;
+        }
+        if (i32_count == 1 and f32_count == 1 and f64_count == 1 and i64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
+            // {i32/u32, f32, f64} / {f32, i32/u32, f64}: merged INTEGER then double.
+            return .sse_i64_f64x;
+        }
+        if (i64_count == 1 and f32_count == 2 and i32_count == 0 and f64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
+            // {i64/u64, f32, f32}: i64 then <2 x float>.
+            return .sse_i64_v2f32;
+        }
+        if (f64_count == 1 and i32_count == 2 and f32_count == 0 and i64_count == 0 and eb0_sse and eb1_int) {
+            // {f64, i32/u32, i32/u32}: double then merged INTEGER.
+            return .sse_f64_i64x;
+        }
+        if (f64_count == 1 and i32_count == 1 and f32_count == 1 and i64_count == 0 and eb0_sse and eb1_int) {
+            // {f64, i32/u32, f32}: double then merged INTEGER.
+            return .sse_f64_i64x;
+        }
+        // A/B: same member multiset, distinguished by field order.
+        if (f64_count == 1 and f32_count == 2 and i32_count == 0 and i64_count == 0 and eb0_sse and eb1_sse and fields[0].ty.* == .float and fields[0].ty.float == 64) {
+            // {f64, f32, f32}: double then <2 x float>.
+            return .sse_f64_v2f32;
+        }
+        if (f32_count == 2 and f64_count == 1 and i32_count == 0 and i64_count == 0 and eb0_sse and eb1_sse and fields[2].ty.* == .float and fields[2].ty.float == 64) {
+            // {f32, f32, f64}: <2 x float> then double.
+            return .sse_v2f32_f64;
+        }
+        return null;
+    }
+
+    if (fields.len == 4) {
+        // {f32, f32, i32/u32, f32}: SSE(2x f32) then merged INTEGER.
+        if (f32_count == 3 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_sse and eb1_int) {
+            return .sse_f32x2_i64;
+        }
+        // {i32/u32, f32, f32, f32} / {f32, i32/u32, f32, f32}:
+        // merged INTEGER then <2 x float>.
+        if (f32_count == 3 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
+            return .sse_i64_v2f32;
+        }
+        return null;
+    }
+
+    return null;
 }
 
 const AggregateEightbyte = struct {
@@ -2357,6 +2474,61 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
     );
 }
 
+test "C ABI multi-member eightbyte layouts accept exact runs" {
+    try expectClean(
+        \\struct FloatPairInt { low: f32, mid: f32, high: i32 }
+        \\struct FloatPairUInt { low: f32, mid: f32, high: u32 }
+        \\struct FloatPairLong { low: f32, mid: f32, high: i64 }
+        \\struct IntPairFloat { a: i32, b: f32, c: f32 }
+        \\struct UIntPairFloat { a: u32, b: f32, c: f32 }
+        \\struct LongPairFloat { a: i64, b: f32, c: f32 }
+        \\struct FloatPairDouble { a: f32, b: f32, c: f64 }
+        \\struct DoubleFloats { a: f64, b: f32, c: f32 }
+        \\struct FloatIntFloat64 { a: f32, b: i32, c: f64 }
+        \\struct IntFloatDouble { a: i32, b: f32, c: f64 }
+        \\struct FloatLongFloat { a: f32, b: f32, c: i32, d: f32 }
+        \\struct FloatIntPair64 { a: f64, b: i32, c: f32 }
+        \\struct FloatIntFloat4 { a: f32, b: i32, c: f32, d: f32 }
+        \\extern fn c_take_fpi(value: FloatPairInt) FloatPairInt;
+        \\extern fn c_take_fpu(value: FloatPairUInt) FloatPairUInt;
+        \\extern fn c_take_fpl(value: FloatPairLong) FloatPairLong;
+        \\extern fn c_take_ipf(value: IntPairFloat) IntPairFloat;
+        \\extern fn c_take_upf(value: UIntPairFloat) UIntPairFloat;
+        \\extern fn c_take_lpf(value: LongPairFloat) LongPairFloat;
+        \\extern fn c_take_fdp(value: FloatPairDouble) FloatPairDouble;
+        \\extern fn c_take_dmf(value: DoubleFloats) DoubleFloats;
+        \\extern fn c_take_fid(value: FloatIntFloat64) FloatIntFloat64;
+        \\extern fn c_take_ifd(value: IntFloatDouble) IntFloatDouble;
+        \\extern fn c_take_flf(value: FloatLongFloat) FloatLongFloat;
+        \\extern fn c_take_fip64(value: FloatIntPair64) FloatIntPair64;
+        \\extern fn c_take_fip4(value: FloatIntFloat4) FloatIntFloat4;
+        \\export fn kyn_id_fpi(value: FloatPairInt) FloatPairInt { return value; }
+        \\export fn kyn_id_fpl(value: FloatPairLong) FloatPairLong { return value; }
+        \\export fn kyn_id_ipf(value: IntPairFloat) IntPairFloat { return value; }
+        \\export fn kyn_id_lpf(value: LongPairFloat) LongPairFloat { return value; }
+        \\export fn kyn_id_dpf(value: DoubleFloats) DoubleFloats { return value; }
+        \\export fn kyn_id_fid(value: FloatIntFloat64) FloatIntFloat64 { return value; }
+        \\export fn kyn_id_ifd(value: IntFloatDouble) IntFloatDouble { return value; }
+        \\export fn kyn_id_flf(value: FloatLongFloat) FloatLongFloat { return value; }
+        \\export fn kyn_id_fip64(value: FloatIntPair64) FloatIntPair64 { return value; }
+        \\export fn kyn_id_fip4(value: FloatIntFloat4) FloatIntFloat4 { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct FloatIntFloat { x: f32, count: i32, y: f32 }
+        \\export fn kyn_identity(value: FloatIntFloat) FloatIntFloat { return value; }
+        \\extern fn c_take(value: FloatIntFloat) FloatIntFloat;
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectSemanticError(
+        \\struct SmallIntDouble { count: i16, amount: f64 }
+        \\extern fn c_take(value: SmallIntDouble);
+        \\fn main() i32 { return 0; }
+    , "E0473");
+}
+
 test "unsupported C ABI aggregate parameters and returns use a dedicated diagnostic" {
     try expectSemanticError(
         \\fn takes_void(value: void) {}
@@ -2374,10 +2546,17 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
     );
 
     try expectSemanticError(
-        \\struct FloatIntFloat { x: f32, count: i32, y: f32 }
-        \\extern fn c_take(value: FloatIntFloat);
+        \\struct SmallIntDouble { count: i16, amount: f64 }
+        \\extern fn c_take(value: SmallIntDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
+
+    try expectClean(
+        \\struct FloatIntFloat { x: f32, count: i32, y: f32 }
+        \\extern fn c_take(value: FloatIntFloat);
+        \\export fn kyn_identity(value: FloatIntFloat) FloatIntFloat { return value; }
+        \\fn main() i32 { return 0; }
+    );
 
     try expectClean(
         \\struct FloatPair { x: f32, y: f32 }
