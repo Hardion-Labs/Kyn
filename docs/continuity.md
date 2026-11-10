@@ -26,7 +26,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** exactly two
+- **Latest ABI increment completed and merged (`224e8f3`, PR #6):** exactly two
   direct mixed-width float/64-bit-integer fields at natural offsets 0/8
   (16 bytes), signedness irrelevant: `{ f32, i64 }` / `{ f32, u64 }` lower as
   `float, i64` parameters and a `{ float, i64 }` return; the reverse
@@ -34,7 +34,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and `{ double, i64 }`;
   and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`.
   Clang IR probes confirm all eight signatures; other mixed-class layouts
-  remain `E0473`.
+  remain `E0473`. See section 24.
 - **Previous ABI increment completed and merged (`511350d`, PR #5):** exactly two
   direct mixed-width `f32`/`f64` fields at natural offsets 0/8 (16 bytes).
   `{ f32, f64 }` lowers as `float, double` parameters and a
@@ -577,7 +577,13 @@ branch history; this increment does not redo them.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
 
-## 24. Mixed-width float/64-bit-integer aggregate ABI increment (completed, not yet committed)
+## 24. Mixed-width float/64-bit-integer aggregate ABI increment (completed and merged)
+
+- Merged into `main` as PR #6 (merge commit `224e8f3`); implementation
+  commit `19a5908`. CI run for the PR (`42736702408`, 3m13s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `145 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: only aggregates with exactly two direct fields of one float
   (`f32`/`f64`) and one 64-bit integer (`i64`/`u64`) at natural offsets 0/8
@@ -619,8 +625,8 @@ branch history; this increment does not redo them.
   expected byte values, not in implementation or fixtures). No sanitizer run
   was performed; no sanitizer gate is configured. Interop used the installed
   `clang` (v23.1.2).
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
+- Git state: merged into `main` (see the merge record at the top of this
+  section). Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
