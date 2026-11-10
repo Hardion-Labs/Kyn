@@ -251,7 +251,12 @@ pointer regardless of how the pointer variable itself was declared.
   two SSE registers and an LLVM `{ double, double }` return coercion. A direct
   `{ f32, f64 }` struct at natural offsets 0/8 uses `float, double` arguments
   and `{ float, double }` returns; the reverse `{ f64, f32 }` layout uses
-  `double, float` and `{ double, float }`. A direct
+  `double, float` and `{ double, float }`. A direct `{ f32, i64 }` or
+  `{ f32, u64 }` uses `float, i64` arguments and `{ float, i64 }` returns;
+  the reverse `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and
+  `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and
+  `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double`
+  and `{ i64, double }`. A direct
   `{ f64, i32 }` / `{ f64, u32 }` structs use `double, i32` arguments and
   `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use `i32, double`
   and `{ i32, double }`. These rules cover only adjacent direct fields with

@@ -27,6 +27,17 @@ promised between alpha releases.
   `cabi_mixed_f32_f64` and `cabi_mixed_f64_f32` cover argument and return
   paths in both directions; other mixed-class layouts remain rejected with
   `E0473`.
+- C ABI support on `x86_64` Linux for exactly two direct mixed-width
+  float/`i64`-or-`u64` fields at natural offsets 0/8 (16 bytes), signedness
+  irrelevant: `{ f32, i64 }` / `{ f32, u64 }` use `float, i64` arguments and a
+  `{ float, i64 }` return; the reverse `{ i64, f32 }` / `{ u64, f32 }` uses
+  `i64, float` and `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }` use
+  `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }`
+  use `i64, double` and `{ i64, double }`. Verified against Clang IR probes
+  for all eight signatures. Integration fixtures `cabi_mixed_f32_i64`,
+  `cabi_mixed_i64_f32`, `cabi_mixed_f64_i64` and `cabi_mixed_i64_f64` cover
+  argument and return paths in both directions; other mixed-class layouts
+  remain rejected with `E0473`.
 
 ## [0.1.0-alpha.3] - 2026-11-09
 

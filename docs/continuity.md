@@ -26,7 +26,16 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`511350d`, PR #5):** exactly two
+- **Latest ABI increment completed and locally validated:** exactly two
+  direct mixed-width float/64-bit-integer fields at natural offsets 0/8
+  (16 bytes), signedness irrelevant: `{ f32, i64 }` / `{ f32, u64 }` lower as
+  `float, i64` parameters and a `{ float, i64 }` return; the reverse
+  `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and `{ i64, float }`;
+  `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and `{ double, i64 }`;
+  and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`.
+  Clang IR probes confirm all eight signatures; other mixed-class layouts
+  remain `E0473`.
+- **Previous ABI increment completed and merged (`511350d`, PR #5):** exactly two
   direct mixed-width `f32`/`f64` fields at natural offsets 0/8 (16 bytes).
   `{ f32, f64 }` lowers as `float, double` parameters and a
   `{ float, double }` return; the reverse `{ f64, f32 }` uses `double, float`
@@ -90,6 +99,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     arguments and a `{ float, double }` return; the reverse `{ f64, f32 }`
     uses `double, float` and `{ double, float }`. Clang IR probe confirms the
     coercions; covered by `cabi_mixed_f32_f64` and `cabi_mixed_f64_f32`.
+    Exactly two direct mixed-width float/64-bit-integer fields at natural
+    offsets 0/8 (16 bytes) are accepted as well, signedness irrelevant:
+    `{ f32, i64 }` / `{ f32, u64 }` use `float, i64` and `{ float, i64 }`;
+    `{ i64, f32 }` / `{ u64, f32 }` use `i64, float` and `{ i64, float }`;
+    `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and `{ double, i64 }`;
+    and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`.
+    Clang IR probes confirm all eight signatures; covered by
+    `cabi_mixed_f32_i64`, `cabi_mixed_i64_f32`, `cabi_mixed_f64_i64` and
+    `cabi_mixed_i64_f64`.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
     by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
     conventions, and function pointers/callbacks.
@@ -209,7 +227,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   `double, i32` parameters and `{ double, i32 }` returns. A direct
   `{ f32, f64 }` at offsets 0/8 maps to `float, double` parameters and a
   `{ float, double }` return; the reverse `{ f64, f32 }` maps to
-  `double, float` and `{ double, float }`. Other unsupported
+  `double, float` and `{ double, float }`. A direct `{ f32, i64 }` at offsets
+  0/8 maps to `float, i64` and `{ float, i64 }`; the reverse `{ i64, f32 }`
+  maps to `i64, float` and `{ i64, float }`; `{ f64, i64 }` maps to
+  `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` maps to
+  `i64, double` and `{ i64, double }` (signedness irrelevant throughout).
+  Other unsupported
   SSE/SSEUP and split-class layouts remain rejected.
 
 ## 7. Files modified / added in the current increment
@@ -553,6 +576,51 @@ branch history; this increment does not redo them.
   141 passed, 0 failed.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
+
+## 24. Mixed-width float/64-bit-integer aggregate ABI increment (completed, not yet committed)
+
+- Scope: only aggregates with exactly two direct fields of one float
+  (`f32`/`f64`) and one 64-bit integer (`i64`/`u64`) at natural offsets 0/8
+  with 16-byte layout, signedness irrelevant: `{ f32, i64 }` / `{ f32, u64 }`,
+  `{ i64, f32 }` / `{ u64, f32 }`, `{ f64, i64 }` / `{ f64, u64 }` and
+  `{ i64, f64 }` / `{ u64, f64 }`. No other behavior changed: internal Kyn
+  aggregate calls, the module system, and the runtime-check policy are
+  untouched, and all previously supported shapes keep their exact lowering
+  (the new exact-shape checks return before the shared SSE-only eightbyte
+  scan). The 12-byte `{ f64, i32 }` layout does not exist (alignment pads to
+  16) and is already supported as `sse_f64_i32`; `{ f32, i32 }` / `{ i32, f32 }`
+  are 8-byte merged-`INTEGER` eightbytes handled by `small_1`.
+- Clang 23 IR probes confirm all eight signatures:
+  - `{ f32, i64 }` / `{ f32, u64 }`: parameters `(float, i64)`, return `{ float, i64 }`;
+  - `{ i64, f32 }` / `{ u64, f32 }`: parameters `(i64, float)`, return `{ i64, float }`;
+  - `{ f64, i64 }` / `{ f64, u64 }`: parameters `(double, i64)`, return `{ double, i64 }`;
+  - `{ i64, f64 }` / `{ u64, f64 }`: parameters `(i64, double)`, return `{ i64, double }`.
+- Implementation: transport types `.abi_f32_i64`, `.abi_i64_f32`,
+  `.abi_f64_i64` and `.abi_i64_f64` added to `compiler/types.zig` and
+  `compiler/backend/llvm.zig`; new `BoundaryClass` variants `sse_f32_i64`,
+  `sse_i64_f32`, `sse_f64_i64` and `sse_i64_f64` in both sema and backend.
+  The size-16 exact-shape block runs the four new checks after the existing
+  `f64`/`i32`/`f32`/`f64` checks. Parameters, definition-side unpacking and
+  call-side argument lowering reuse the shared per-field flatten arm (field
+  order equals parameter order); returns use the new transport types with
+  `align 8` loads/stores, matching Clang.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass (74 tests; the `WideInt`/`{ f64, i64 }` unit fixture that previously
+  asserted `E0473` now asserts clean acceptance with `u64` mirrors, with
+  nested/mixed rejection coverage unchanged); `zig fmt --check` is clean;
+  integration suite passes in all four profiles with the new
+  `cabi_mixed_f32_i64` (exit 45), `cabi_mixed_i64_f32` (exit 39),
+  `cabi_mixed_f64_i64` (exit 49) and `cabi_mixed_i64_f64` (exit 55) C↔Kyn
+  fixtures, covering argument and return paths in both directions. Emitted
+  Kyn IR signatures match the Clang probe exactly. Total integration count:
+  145 passed, 0 failed.
+- Two `.exit` status files were corrected during the increment after the
+  compiler and C side were verified consistent (arithmetic slip in the
+  expected byte values, not in implementation or fixtures). No sanitizer run
+  was performed; no sanitizer gate is configured. Interop used the installed
+  `clang` (v23.1.2).
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

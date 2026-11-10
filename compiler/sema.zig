@@ -1711,6 +1711,10 @@ pub const Sema = struct {
             .abi_i32_f64 => "<internal ABI pair>",
             .abi_f32_f64 => "<internal ABI pair>",
             .abi_f64_f32 => "<internal ABI pair>",
+            .abi_f32_i64 => "<internal ABI pair>",
+            .abi_i64_f32 => "<internal ABI pair>",
+            .abi_f64_i64 => "<internal ABI pair>",
+            .abi_i64_f64 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1763,6 +1767,10 @@ pub const BoundaryClass = enum {
     sse_i32_f64,
     sse_f32_f64,
     sse_f64_f32,
+    sse_f32_i64,
+    sse_i64_f32,
+    sse_f64_i64,
+    sse_i64_f64,
     memory,
 };
 
@@ -1825,6 +1833,50 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 // double/float parameters in field order and returns
                 // { double, float }.
                 return .sse_f64_f32;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 32 and
+                fields[1].ty.* == .int and fields[1].ty.int.bits == 64 and
+                eightbytes[0].has_sse and !eightbytes[0].has_integer and
+                eightbytes[1].has_integer and !eightbytes[1].has_sse)
+            {
+                // One SSE-only eightbyte then one INTEGER-only eightbyte.
+                // LLVM uses float/i64 parameters in field order and returns
+                // { float, i64 }; signedness is irrelevant.
+                return .sse_f32_i64;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .int and fields[0].ty.int.bits == 64 and
+                fields[1].ty.* == .float and fields[1].ty.float == 32 and
+                eightbytes[0].has_integer and !eightbytes[0].has_sse and
+                eightbytes[1].has_sse and !eightbytes[1].has_integer)
+            {
+                // The reverse exact layout is INTEGER then SSE. LLVM uses
+                // i64/float parameters in field order and returns
+                // { i64, float }.
+                return .sse_i64_f32;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 64 and
+                fields[1].ty.* == .int and fields[1].ty.int.bits == 64 and
+                eightbytes[0].has_sse and !eightbytes[0].has_integer and
+                eightbytes[1].has_integer and !eightbytes[1].has_sse)
+            {
+                // One SSE-only eightbyte then one INTEGER-only eightbyte.
+                // LLVM uses double/i64 parameters in field order and returns
+                // { double, i64 }.
+                return .sse_f64_i64;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .int and fields[0].ty.int.bits == 64 and
+                fields[1].ty.* == .float and fields[1].ty.float == 64 and
+                eightbytes[0].has_integer and !eightbytes[0].has_sse and
+                eightbytes[1].has_sse and !eightbytes[1].has_integer)
+            {
+                // The reverse exact layout is INTEGER then SSE. LLVM uses
+                // i64/double parameters in field order and returns
+                // { i64, double }.
+                return .sse_i64_f64;
             }
         }
         const count: usize = @intCast((layout.size + 7) / 8);
@@ -2212,17 +2264,18 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
         \\fn main() i32 { return 0; }
     , "E0473");
 
-    try expectSemanticError(
+    try expectClean(
         \\struct WideInt { amount: f64, count: i64 }
-        \\extern fn c_take(value: WideInt);
+        \\struct WideUInt { amount: f64, count: u64 }
+        \\extern fn c_take_wide(value: WideInt) WideInt;
+        \\extern fn c_take_wide_u(value: WideUInt) WideUInt;
+        \\export fn kyn_make_wide(amount: f64, count: i64) WideInt {
+        \\    return WideInt { amount: amount, count: count };
+        \\}
+        \\export fn kyn_id_wide(value: WideInt) WideInt { return value; }
+        \\export fn kyn_id_wide_u(value: WideUInt) WideUInt { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
-
-    try expectSemanticError(
-        \\struct WideInt { amount: f64, count: i64 }
-        \\export fn kyn_make() WideInt { return WideInt { amount: 2.0, count: 1 }; }
-        \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectSemanticError(
         \\struct Inner { count: i32 }
@@ -2284,6 +2337,22 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
         \\struct DoubleFloat { ratio: f64, amount: f32 }
         \\extern fn c_take(value: DoubleFloat) DoubleFloat;
         \\export fn kyn_identity(value: DoubleFloat) DoubleFloat { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct FloatLong { amount: f32, count: i64 }
+        \\struct LongFloat { count: i64, amount: f32 }
+        \\struct DoubleLong { ratio: f64, count: i64 }
+        \\struct LongDouble { count: i64, ratio: f64 }
+        \\extern fn c_take_fl(value: FloatLong) FloatLong;
+        \\extern fn c_take_lf(value: LongFloat) LongFloat;
+        \\extern fn c_take_dl(value: DoubleLong) DoubleLong;
+        \\extern fn c_take_ld(value: LongDouble) LongDouble;
+        \\export fn kyn_id_fl(value: FloatLong) FloatLong { return value; }
+        \\export fn kyn_id_lf(value: LongFloat) LongFloat { return value; }
+        \\export fn kyn_id_dl(value: DoubleLong) DoubleLong { return value; }
+        \\export fn kyn_id_ld(value: LongDouble) LongDouble { return value; }
         \\fn main() i32 { return 0; }
     );
 }
