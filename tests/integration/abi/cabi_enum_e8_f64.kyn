@@ -1,0 +1,24 @@
+enum Color8: u8 { Red = 2, Blue = 3 }
+
+struct EnumDouble { color: Color8, ratio: f64 }
+
+extern fn c_transform(value: EnumDouble) EnumDouble;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: EnumDouble) EnumDouble {
+    return EnumDouble {
+        color: value.color,
+        ratio: value.ratio + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: EnumDouble = c_transform(EnumDouble { color: Color8.Red, ratio: 1.5 });
+    var accumulator: i32 = 0;
+    if (result.color == Color8.Red) {
+        accumulator = 1;
+    } else {
+        accumulator = 0;
+    }
+    return accumulator + (result.ratio as i32) + c_verify_kyn();
+}

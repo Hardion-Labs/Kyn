@@ -1814,7 +1814,7 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
             }
             if (fields.len == 2 and
                 fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                fields[1].ty.* == .int and fields[1].ty.int.bits == 32 and
+                isIntLikeWithWidth(fields[1].ty, 32) and
                 eightbytes[0].has_sse and !eightbytes[0].has_integer and
                 eightbytes[1].has_integer and !eightbytes[1].has_sse)
             {
@@ -1824,7 +1824,7 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 return .sse_f64_i32;
             }
             if (fields.len == 2 and
-                fields[0].ty.* == .int and fields[0].ty.int.bits == 32 and
+                isIntLikeWithWidth(fields[0].ty, 32) and
                 fields[1].ty.* == .float and fields[1].ty.float == 64 and
                 eightbytes[0].has_integer and !eightbytes[0].has_sse and
                 eightbytes[1].has_sse and !eightbytes[1].has_integer)
@@ -1857,7 +1857,7 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
             }
             if (fields.len == 2 and
                 fields[0].ty.* == .float and fields[0].ty.float == 32 and
-                fields[1].ty.* == .int and fields[1].ty.int.bits == 64 and
+                isIntLikeWithWidth(fields[1].ty, 64) and
                 eightbytes[0].has_sse and !eightbytes[0].has_integer and
                 eightbytes[1].has_integer and !eightbytes[1].has_sse)
             {
@@ -1867,7 +1867,7 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 return .sse_f32_i64;
             }
             if (fields.len == 2 and
-                fields[0].ty.* == .int and fields[0].ty.int.bits == 64 and
+                isIntLikeWithWidth(fields[0].ty, 64) and
                 fields[1].ty.* == .float and fields[1].ty.float == 32 and
                 eightbytes[0].has_integer and !eightbytes[0].has_sse and
                 eightbytes[1].has_sse and !eightbytes[1].has_integer)
@@ -1879,7 +1879,7 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
             }
             if (fields.len == 2 and
                 fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                fields[1].ty.* == .int and fields[1].ty.int.bits == 64 and
+                isIntLikeWithWidth(fields[1].ty, 64) and
                 eightbytes[0].has_sse and !eightbytes[0].has_integer and
                 eightbytes[1].has_integer and !eightbytes[1].has_sse)
             {
@@ -1889,7 +1889,7 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 return .sse_f64_i64;
             }
             if (fields.len == 2 and
-                fields[0].ty.* == .int and fields[0].ty.int.bits == 64 and
+                isIntLikeWithWidth(fields[0].ty, 64) and
                 fields[1].ty.* == .float and fields[1].ty.float == 64 and
                 eightbytes[0].has_integer and !eightbytes[0].has_sse and
                 eightbytes[1].has_sse and !eightbytes[1].has_integer)
@@ -1902,7 +1902,8 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
             if (fields.len == 2 and
                 fields[1].ty.* == .float and fields[1].ty.float == 64 and
                 (fields[0].ty.* == .bool or
-                    (fields[0].ty.* == .int and (fields[0].ty.int.bits == 8 or fields[0].ty.int.bits == 16))) and
+                    isIntLikeWithWidth(fields[0].ty, 8) or
+                    isIntLikeWithWidth(fields[0].ty, 16)) and
                 eightbytes[0].has_integer and !eightbytes[0].has_sse and
                 eightbytes[1].has_sse and !eightbytes[1].has_integer)
             {
@@ -1911,26 +1912,21 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 // LLVM uses the member-width integer and a double, returning
                 // the pair; signedness is irrelevant.
                 if (fields[0].ty.* == .bool) return .sse_i8_f64;
-                return switch (fields[0].ty.int.bits) {
-                    8 => .sse_i8_f64,
-                    16 => .sse_i16_f64,
-                    else => .sse_i8_f64,
-                };
+                if (isIntLikeWithWidth(fields[0].ty, 16)) return .sse_i16_f64;
+                return .sse_i8_f64;
             }
             if (fields.len == 2 and
                 fields[0].ty.* == .float and fields[0].ty.float == 64 and
                 (fields[1].ty.* == .bool or
-                    (fields[1].ty.* == .int and (fields[1].ty.int.bits == 8 or fields[1].ty.int.bits == 16))) and
+                    isIntLikeWithWidth(fields[1].ty, 8) or
+                    isIntLikeWithWidth(fields[1].ty, 16)) and
                 eightbytes[0].has_sse and !eightbytes[0].has_integer and
                 eightbytes[1].has_integer and !eightbytes[1].has_sse)
             {
                 // The reverse layout is double then a sub-32-bit-width member.
                 if (fields[1].ty.* == .bool) return .sse_f64_i8;
-                return switch (fields[1].ty.int.bits) {
-                    8 => .sse_f64_i8,
-                    16 => .sse_f64_i16,
-                    else => .sse_f64_i8,
-                };
+                if (isIntLikeWithWidth(fields[1].ty, 16)) return .sse_f64_i16;
+                return .sse_f64_i8;
             }
         }
         if (ty.* == .struct_type) {
@@ -1980,11 +1976,10 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
 
 // Three- and four-member aggregates whose eightbytes split strictly into an
 // SSE-only slot and an INTEGER-or-merged slot. All accepted shapes are exact
-// and verified against Clang IR; `char` and 32-bit enum backings count as
-// i32-like 32-bit integer members. Any other member (i8/i16/enum8+, bool,
-// pointer, slice, array, nested struct, enum backing wider/narrower than
-// 32/64 bits) is rejected here, and unmatched shapes fall through to the
-// existing all-SSE / INTEGER-only paths or `E0473`.
+// and verified against Clang IR; `char`, `bool` and 8/16/32-bit enum backings
+// count as i32-like integer members, and 64-bit enum backings count as
+// i64-like members. Any other member falls through to the existing all-SSE /
+// INTEGER-only paths or `E0473`.
 fn classifyMixedRunAggregate(
     fields: []const types.Field,
     eightbytes: *const [2]AggregateEightbyte,
@@ -2005,13 +2000,13 @@ fn classifyMixedRunAggregate(
                 64 => i64_count += 1,
                 else => return null,
             },
-            .char => i32_count += 1,
-            .bool => i32_count += 1,
             .enum_type => |info| switch (info.backing.intInfo().bits) {
                 1, 8, 16, 32 => i32_count += 1,
                 64 => i64_count += 1,
                 else => return null,
             },
+            .char => i32_count += 1,
+            .bool => i32_count += 1,
             else => return null,
         }
     }
@@ -2137,6 +2132,19 @@ pub const AggregateLayout = struct {
     size: u64,
     align_: u64,
 };
+
+/// Returns true when `ty` carries an integer register of exactly `bits`
+/// bits, treating `char` as 32-bit, `enum` members by their backing integer,
+/// and plain `.int`s by their own width. Signedness never affects the class.
+fn isIntLikeWithWidth(ty: *Type, bits: u16) bool {
+    return switch (ty.*) {
+        .int => |info| info.bits == bits,
+        .char => bits == 32,
+        .bool => bits == 8,
+        .enum_type => |info| info.backing.intInfo().bits == bits,
+        else => false,
+    };
+}
 
 pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
     return switch (ty.*) {
@@ -2562,11 +2570,43 @@ test "C ABI small integer members accept exact layouts" {
     );
 
     try expectSemanticError(
-        \\enum Color: u8 { Red = 2 }
-        \\struct SmallEnumDouble { count: Color, amount: f64 }
-        \\extern fn c_take(value: SmallEnumDouble);
+        \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
+        \\extern fn c_take(value: SmallArrayDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
+}
+
+test "C ABI enum members accept exact layouts" {
+    try expectClean(
+        \\enum E8 : u8 { a = 2 }
+        \\enum E16 : u16 { b = 3 }
+        \\enum E32 : u32 { c = 100 }
+        \\enum E64 : u64 { d = 4000 }
+        \\struct Enum8Double { tag: E8, amount: f64 }
+        \\struct Double8Enum { amount: f64, tag: E8 }
+        \\struct Enum16Double { tag: E16, amount: f64 }
+        \\struct Double16Enum { amount: f64, tag: E16 }
+        \\struct Enum32Double { tag: E32, amount: f64 }
+        \\struct Double32Enum { amount: f64, tag: E32 }
+        \\struct Enum64Double { tag: E64, amount: f64 }
+        \\struct Double64Enum { amount: f64, tag: E64 }
+        \\struct Enum64Float { tag: E64, low: f32, mid: f32 }
+        \\struct FloatPairEnum32 { low: f32, mid: f32, high: E32 }
+        \\extern fn c_take_e8(value: Enum8Double) Enum8Double;
+        \\extern fn c_take_d8(value: Double8Enum) Double8Enum;
+        \\extern fn c_take_e16(value: Enum16Double) Enum16Double;
+        \\extern fn c_take_d16(value: Double16Enum) Double16Enum;
+        \\extern fn c_take_e32(value: Enum32Double) Enum32Double;
+        \\extern fn c_take_d32(value: Double32Enum) Double32Enum;
+        \\extern fn c_take_e64(value: Enum64Double) Enum64Double;
+        \\extern fn c_take_d64(value: Double64Enum) Double64Enum;
+        \\extern fn c_take_elf(value: Enum64Float) Enum64Float;
+        \\extern fn c_take_fpe(value: FloatPairEnum32) FloatPairEnum32;
+        \\export fn kyn_id_e8(value: Enum8Double) Enum8Double { return value; }
+        \\export fn kyn_id_e32(value: Enum32Double) Enum32Double { return value; }
+        \\export fn kyn_id_elf(value: Enum64Float) Enum64Float { return value; }
+        \\fn main() i32 { return 0; }
+    );
 }
 
 test "C ABI multi-member eightbyte layouts accept exact runs" {
@@ -2618,9 +2658,8 @@ test "C ABI multi-member eightbyte layouts accept exact runs" {
     );
 
     try expectSemanticError(
-        \\enum Color: u8 { Red = 2 }
-        \\struct SmallEnumDouble { count: Color, amount: f64 }
-        \\extern fn c_take(value: SmallEnumDouble);
+        \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
+        \\extern fn c_take(value: SmallArrayDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 }
@@ -2642,9 +2681,8 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
     );
 
     try expectSemanticError(
-        \\enum Color: u8 { Red = 2 }
-        \\struct SmallEnumDouble { count: Color, amount: f64 }
-        \\extern fn c_take(value: SmallEnumDouble);
+        \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
+        \\extern fn c_take(value: SmallArrayDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 

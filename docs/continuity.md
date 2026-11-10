@@ -26,13 +26,19 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`2ba5000`, PR #10):** singleton
+- **Latest ABI increment completed and locally validated:** singleton
+  `enum` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
+  at their backing integer width. `{ enum:u8, f64 }` lowers as
+  `i8, double` parameters and an `{ i8, double }` return; the reverse
+  `{ f64, enum:u8 }` lowers as `double, i8` and a `{ double, i8 }` return.
+  `{ enum:u16, f64 }` and `{ enum:u32, f64 }` and `{ enum:u64, f64 }`
+  lower analogously (`i16`, `i32`, `i64`). Clang IR probes confirm all
+  eight signatures. Negative `E0473` fixtures moved from singleton-`enum`
+  to singleton-array layouts. Integration matrix reports
+  `160 passed, 0 failed` in all four profiles.
+- **Previous ABI increment completed and merged (`2ba5000`, PR #10):** singleton
   `bool` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
-  as a full `i8` parameter. `{ bool, f64 }` lowers as `i8, double` parameters
-  and a `{ i8, double }` return; the reverse `{ f64, bool }` lowers as
-  `double, i8` and a `{ double, i8 }` return. Clang IR probes confirm both
-  signatures. Negative `E0473` fixtures moved from singleton-`bool` to
-  singleton-8-bit-`enum` layouts. Integration matrix reports
+  as a full `i8` parameter. Integration matrix reports
   `157 passed, 0 failed` in all four profiles.
 - **Previous increment completed and merged (`f869fb1`, PR #9): bool zero-extension fix.** Previously
   `bool` fields/locals were stored into memory as raw `i1`, leaving the upper
@@ -860,6 +866,43 @@ branch history; this increment does not redo them.
   154 passed, 0 failed.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
+
+## 29. Singleton enum aggregate ABI increment (completed, not yet committed)
+
+- Scope: singleton `enum` members at natural offsets 0 or 8 (16 bytes),
+  signedness irrelevant, passing at their backing integer width. The eight
+  two-field exact layouts are now `{ enum:i8/I8/u8, f64 }` family and its
+  reverse. Clang IR probes confirm all signatures. Singleton enum members
+  with sub-32-bit backings are now accepted; the backings in scope are
+  i8/u8 (1 byte), i16/u16 (2 bytes), i32/u32 (4 bytes) and i64/u64 (8 bytes).
+  An enum member whose backing is a bool-sized 1 bit remains rejected
+  (`E0473`).
+- Implementation: `isIntLikeWithWidth(ty, bits)` generalizes the exact-shape
+  `int` checks to also match `char` (32 bits), `.bool` mapped to 8 bits, and
+  `enum` members by backing width — `enum` members with 32/64-bit backings
+  share the previously-supported `{ i32, f64 }` / `{ f64, i32 }` /
+  `{ i64, f64 }` / `{ f64, i64 }` coercions. In `classifyMixedRunAggregate`,
+  `.enum_type` members with 8/16/32-bit backings are counted as `i32_count`
+  and 64-bit backings as `i64_count`, so four-member mixed runs with enum
+  members now accepted (e.g. `{ enum:u8, f32, f32 }` as merged-INTEGER then
+  SSE-float). Everywhere previously gated on `.int` with a specific bit width
+  now admits an `enum` member of that backing width, and the small-member
+  two-field checks were generalized the same way.
+- Validation: `zig build test` passes (75 tests; new acceptance test
+  `C ABI enum members accept exact layouts` covers param/return positions
+  for all four widths and the mixed-run acceptances); `zig fmt --check` is
+  clean; integration suite passes in all four profiles with the new
+  `cabi_enum_e8_f64` (exit 50), `cabi_enum_e64_f64` (exit 56) and
+  `cabi_enum_e8_f32f32` (exit 67) C<->Kyn fixtures. Emitted Kyn IR signatures
+  match the Clang probes exactly (`{ i8, double }` … `{ i64, double }`).
+  Total integration count: 160 passed, 0 failed.
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, and `CHANGELOG.md` (`[Unreleased]`) updated; this continuity
+  record is the source of truth for the post-increment stage.
+- Negative fixtures preserving `E0473` acceptance moved from
+  singleton-`enum:u8` to singleton-`[2]i8` arrays in `abi_float_param.kyn`,
+  `abi_float_return.kyn` and the two unit tests to keep the negative
+  coverage true to intent.
 
 ## 28. Singleton bool aggregate ABI increment (completed and merged)
 

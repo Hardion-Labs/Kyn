@@ -1,4 +1,3 @@
-enum Color: u8 { Red = 2 }
-struct SmallEnumDouble { count: Color, amount: f64 }
-extern fn c_take(value: SmallEnumDouble);
+struct SmallArrayDouble { count: [2]i8, amount: f64 }
+extern fn c_take(value: SmallArrayDouble);
 fn main() i32 { return 0; }
