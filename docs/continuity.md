@@ -1293,8 +1293,106 @@ branch history; this increment does not redo them.
   `165 passed, 0 failed`. Release artifacts and tags are untouched.
 - Next task: the register pairs Clang supports that Kyn still rejects are the
   remaining gap — for example `(float, float)` for a 16-byte aggregate with
-  one `f32` per eightbyte, and pointer members, which have no integer
-  transport type.
+  one `f32` per eightbyte. Pointer members, also listed here as a gap, were
+  closed by §35.
+
+## 35. Pointer-leaf and narrow-slot ABI increment (completed)
+
+- Scope: three gaps left open by §34. (a) A pointer member had no leaf kind of
+  its own, so an eightbyte carrying one was classified through the integer
+  table and a pointer expected in a full-width `ptr` register was either
+  narrowed to a neighbouring integer width or rejected. (b) A 12-byte
+  aggregate whose second eightbyte carries a single leaf narrower than a
+  register wrote the whole 8-byte slot instead of only the leaf's bytes.
+  (c) Single-member aggregates had no coverage at all: the shape-space probe
+  only generated 2–4 member shapes, so a lone-pointer struct was never compared
+  against Clang. It is ABI-correct (`i64` and `ptr` are the same INTEGER
+  register, verified bit-exactly in execution), and it is now covered
+  explicitly so a future change cannot break it unnoticed.
+- Rule (probed with Clang 23.1.2 before implementing, 17 shapes):
+  - a single pointer leaf travels as `ptr`, never narrowed: `{ ptr, i64 }`,
+    `{ i8, ptr }`, `{ ptr, ptr }`, `{ ptr, f64 }`, `{ f32, ptr }`
+  - an eightbyte with several leaves merges to `i64` even when one of them is
+    a float (`{ i32, f32 }` → `i64`, `{ f32, i32, bool }` → `{ i64, i8 }`,
+    `{ i32, i32, ptr }` → `{ i64, ptr }`) — this corrected a wrong assumption
+    that Clang rejects mixed int/float eightbytes; it packs them
+  - a two-`f32` SSE slot paired with a narrower second leaf keeps its packing:
+    `{ f32, f32, i16 }` → `<2 x float>, i16`, `{ f32, f32, i8 }` /
+    `{ f32, f32, bool }` → `<2 x float>, i8`, `{ f32, f32, ptr }` →
+    `<2 x float>, ptr`, plus the mirrored `{ i16, f32, f32 }` / `{ ptr, f32, f32 }` /
+    `{ i32, f32, f32 }` orders
+- Implementation:
+  - `compiler/types.zig`: `AbiScalar` became `AbiSlot` (adds `f32x2`, plus
+    `bits()` and `isFloat()`), `AbiPair` is now two `AbiSlot`s, and the
+    duplicated scalar block was removed. `AbiSlot.bits()` is the single source
+    of truth for register width, so a narrow slot writes only its own width.
+  - `compiler/sema.zig`: `eightbyteSlot` replaced `eightbyteScalar`; the
+    two-eightbyte branch maps `i64+i64` → `.small_2`, `f64+f64` →
+    `.sse_f64x2`, `f32x2+f32` → `.sse_f32x3`, `f32x2+f32x2` → `.sse_f32x4`,
+    anything else → `.pair`. `BoundaryClass` was trimmed to the classes that
+    actually lower differently (`none`, `small_1`, `small_2`, `sse_float`,
+    `sse_double`, `sse_f32x2`, `sse_f32x3`, `sse_f32x4`, `sse_f64x2`, `pair`,
+    `memory`) plus the `eql`/`crosses`/`isPair` helpers; three previously
+    distinct classes that shared a transport are now the single `pair`.
+  - `compiler/backend/llvm.zig`: `BoundaryParams`, `sseReturnTransport`,
+    `abiSlotType`, `pairTransport`, `sseBoundaryParams` and `abiSlotName`
+    drive every transport from `AbiSlot`, so `pair` needs no per-shape code
+    path; `.f32x2` emits `<2 x float>`. Pair slots are zero-padded to 16 bytes;
+    `<2 x float>` is 4-byte aligned while the others are 8-byte aligned.
+  - `lowerPackedAggregate` copies `source_ty.int.bits/8` bytes (fallback 8),
+    clamped to `size - offset` — this is the actual narrow-slot write fix.
+- Tests:
+  - unit: `C ABI boundary classification follows Clang's leaf registers`
+    asserts the exact register sequence for 21 shapes, including the four
+    rejection rows. Its power was verified by mutation: narrowing a merged
+    eightbyte to `i16` makes the test fail.
+  - integration: `cabi_pointer_members` (exit 199) and
+    `cabi_pair_slot_widths` (exit 215) cover both directions.
+    `cabi_pointer_members` exercises 7 pointer shapes plus 6 single-member or
+    odd-width shapes (lone `*u8`, `i16`, `f32`, `f64`, `{i16,i16,i16}`,
+    `{i8,i8,i8}`), which the shape-space probe never generated. Pointer
+    identity is verified from C, because a by-value aggregate is copied at the
+    call (a Kyn-side `anchor != anchor2` folds statically), and the fixture
+    magnitudes are kept below 256 so a wrong sum cannot wrap into the expected
+    exit code.
+  - mutation check: both integration fixtures were confirmed to detect a real
+    classifier regression. Forcing the second slot to `i64` fails 21 tests with
+    wrong exits (215→132 and 199→151), so the fixtures are not vacuous. A
+    `ptr`→`i64` mutation is *not* detectable, and correctly so: both are one
+    INTEGER register and bit-identical.
+- Validation (re-run from a cleaned `.zig-cache`): `zig build` OK;
+  `zig build test` **78/78**; integration **167/0** in Debug and **167/0** in
+  ReleaseSafe; `zig fmt --check build.zig
+  compiler build-system` clean; differential probe over **1872 shapes**:
+  1872 accepted, **0 real gaps** after filtering the known noise (`i128` vs
+  `{i64,i64}`, `i24/i40/i48/i56` vs covering width, `sret(%struct.X)` naming,
+  `%argN` names, `dead_on_unwind noalias writable`). The original probe only
+  built 2–4 member shapes, so a focused second probe was written for
+  single-member and pointer-bearing aggregates: **1293 shapes, 1212 exact
+  matches, 81 covering-width matches, 0 real gaps, 0 rejections**. The
+  covering-width equivalence was verified in execution, not assumed
+  (`{i16,i16,i16}` is Clang `i48` and Kyn `i64`; the round trip returns the
+  exact value, exit 242).
+- Expectation errors worth remembering: two "failures" during this increment
+  were arithmetic mistakes in the expected exit code, not compiler defects.
+  The C side performs the transform for Kyn→C calls while `c_check_kyn`
+  checks the Kyn export, so the two sums differ (`count *= 3` → 63 on one
+  path, `count * 2` → 42 on the other; the fixture exits 215, not 194).
+  Re-derive the expectation from the code before treating a mismatch as a bug.
+- Docs: `abi.md` §1 and §3 (leaf model, pointer slot, narrow slot, and the
+  stale "nested wrappers are unsupported" claim corrected — nested wrappers
+  are supported, fixed arrays and `i128` are the actual limitation),
+  `type-system.md` §8, `language-reference.md` §3.2, `roadmap.md` "Next
+  direction", `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record.
+- Limitations: the target is `x86_64` Linux only; variadics remain
+  unsupported; fixed array fields and `i128` still have no boundary register
+  and are rejected with `E0473`; `SSE`-class aggregates beyond the enumerated
+  shapes (for example `{ f32, f32, f32, f32, f32 }`) keep using memory/sret.
+  No sanitizer gate is configured, so none was run.
+- Next task: continue the remaining Clang register pairs still rejected —
+  `(float, float)` for a 16-byte aggregate with one `f32` per eightbyte is the
+  most visible one — and specify cross-compilation targets before exposing
+  further layouts across `extern`/`export`.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

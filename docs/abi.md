@@ -19,8 +19,12 @@ extern fn free(ptr: *u8);
 - Calls use the default C calling convention.
 - Aggregate parameters and returns, including slices, are supported on
   `x86_64` Linux when their layout is classifiable by the current lowering.
-  Aggregates up to 16 bytes whose occupied System V eightbytes merge to the
-  `INTEGER` class use one or two 64-bit integer registers, with safe zero-padded
+  Every register is decided per eightbyte by the *leaves* that eightbyte
+  carries, after nested structs are flattened exactly as Clang flattens them;
+  the classification is described once in
+  [the type system](type-system.md#8-aggregates) and the exact
+  supported shapes are listed below. An eightbyte whose leaves merge to the
+  `INTEGER` class uses one 64-bit integer register, with safe zero-padded
   packing for partial eightbytes. This includes a float field when an integer
   field in the same eightbyte causes the merged class to be `INTEGER`. A struct
   containing one direct `f32`/`f64` field uses scalar SSE; exactly two
@@ -39,14 +43,27 @@ extern fn free(ptr: *u8);
   returns as `{ float, i64 }`; the reverse `{ i64, f32 }` / `{ u64, f32 }`
   uses `i64, float` and `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }`
   use `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }`
-  use `i64, double` and `{ i64, double }`. A two-member struct whose members
-  occupy one eightbyte each and are both integer scalars passes each member in
-  its own register at its own width and returns as the matching pair: the
-  `{ i8/u8, i64 }` / `{ u8/u8, i64 }` layout uses `i8, i64` and `{ i8, i64 }`,
-  `{ i16/u16, i64 }` / `{ u16/u16, i64 }` uses `i16, i64` and `{ i16, i64 }`,
-  `{ i32, i64 }` / `{ u32, u64 }` uses `i32, i64` and `{ i32, i64 }`, and the
-  reversed layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`
-  use `i64, i8` / `i64, i16` / `i64, i32` and the matching pair returns. A
+  use `i64, double` and `{ i64, double }`. A struct whose two eightbytes each
+  carry exactly one scalar *leaf* passes each leaf in its own register at its own
+  width and returns as the matching pair. The register of an eightbyte follows
+  the leaves it carries, exactly as Clang classifies them: one integer leaf
+  travels at that leaf's width (`i8`/`i16`/`i32`/`i64`), one `f32`/`f64` leaf
+  travels as a `float`/`double` SSE value, one pointer leaf travels as `ptr` and
+  is never narrowed to an integer width, and an eightbyte carrying two or more
+  leaves merges to a full `i64` — which is what Clang does even when one of
+  those leaves is a float. Nested structs are flattened into their leaves first,
+  so `{ struct { ptr inner; } value; f64 }` classifies exactly like
+  `{ ptr, f64 }` and a nested `f64` pair classifies like a direct one.
+  Consequently `{ i8/u8, i64 }` uses `i8, i64` and `{ i8, i64 }`,
+  `{ i16/u16, i64 }` uses `i16, i64` and `{ i16, i64 }`, `{ i32, i64 }` /
+  `{ u32, u64 }` uses `i32, i64`, `{ ptr, i64 }` uses `ptr, i64`,
+  `{ i8, ptr }` uses `i8, ptr`, `{ ptr, f64 }` uses `ptr, double`,
+  `{ f32, ptr }` uses `float, ptr`, and `{ i32, i32, ptr }` merges its first
+  eightbyte to `i64, ptr`. The reversed `{ i64, i8/u8 }`, `{ i64, i16/u16 }`,
+  `{ i64, i32/u32 }` and `{ i64, ptr }` layouts use `i64, i8` / `i64, i16` /
+  `i64, i32` / `i64, ptr` with matching pair returns. A 12-byte aggregate whose
+  second slot is narrower than a register writes only its own bytes, leaving the
+  padding bytes of the 16-byte slot untouched. A
   direct `{ i8/u8, f64 }` or
   `{ i16/u16, f64 }` uses the member-width integer and `double`, and returns
   `{ i8, double }` / `{ i16, double }`; the reverse `{ f64, i8/u8 }` /
@@ -66,8 +83,14 @@ extern fn free(ptr: *u8);
   `INTEGER`; `{ double, i64 }` returns), `{ i64, f32, f32 }` (`i64, <2 x float>`;
   `{ i64, <2 x float> }` returns), and `{ i32, f32, f32, f32 }` /
   `{ f32, i32, f32, f32 }` (same signature). Four-member `{ f32, f32, i32, f32 }`
-  uses `<2 x float>, i64` and `{ <2 x float>, i64 }`. Layouts outside these
-  exact shapes remain rejected with `E0473`. A
+  uses `<2 x float>, i64` and `{ <2 x float>, i64 }`. When one eightbyte carries
+  two `f32` leaves and the other carries a single leaf narrower than a register,
+  the SSE slot keeps its `<2 x float>` packing: `{ f32, f32, i16 }` uses
+  `<2 x float>, i16`, `{ f32, f32, i8 }` and `{ f32, f32, bool }` use
+  `<2 x float>, i8`, `{ f32, f32, ptr }` uses `<2 x float>, ptr`, and the
+  reversed `{ i16, f32, f32 }` / `{ ptr, f32, f32 }` / `{ i32, f32, f32 }` runs
+  use `i16, <2 x float>` / `ptr, <2 x float>` / `i32, <2 x float>`. Layouts
+  outside these
   direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
   8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
@@ -158,7 +181,7 @@ Caveats:
   `{ double, i16 }` returns. A direct `{ bool, f64 }` or `{ double, bool }`
   passes the singleton `bool` as a full `i8`, with `{ i8, double }` /
   `{ double, i8 }` returns. A struct whose two eightbytes each carry exactly
-  one integer leaf passes each leaf at its own width in its own register,
+  one scalar leaf passes each leaf at its own width in its own register,
   returning the matching pair: `{ i8/u8, i64 }` /
   `{ u8/u8, i64 }` uses `i8, i64` and `{ i8, i64 }`; `{ i16/u16, i64 }` /
   `{ u16/u16, i64 }` uses `i16, i64` and `{ i16, i64 }`; `{ i32, i64 }` /
@@ -167,13 +190,16 @@ Caveats:
   `i64, i8` / `i64, i16` / `i64, i32` with the matching pair returns. The
   register of an eightbyte is decided by the *leaves* it carries, with
   nested structs flattened into their members exactly as Clang does: an
-  eightbyte with a single integer leaf travels at that leaf's width, one with
-  several leaves travels as a full `i64`, an eightbyte with a single `f32` or
-  `f64` travels as that scalar, and one with two `f32` leaves travels as
-  `<2 x float>`. Nested members therefore follow the same rules as direct
+  eightbyte with a single integer leaf travels at that leaf's width, one with a
+  single pointer leaf travels as `ptr` and is never narrowed to an integer
+  member width, one with several leaves travels as a full `i64` (even when a
+  float is among them), an eightbyte with a single `f32` or `f64` travels as
+  that scalar, and one with two `f32` leaves travels as `<2 x float>`. Nested
+  members therefore follow the same rules as direct
   ones: `{ struct { short x; } a; long b; }` uses `i16, i64` and
   `{ i16, i64 }`, `{ struct { float f; } a; long b; }` uses `float, i64` and
-  `{ float, i64 }`, and `{ struct { double x; double y; } pair; }` uses
+  `{ float, i64 }`, `{ struct { char *p; } a; long b; }` uses `ptr, i64`, and
+  `{ struct { double x; double y; } pair; }` uses
   `double, double` and `{ double, double }`. Exact
   multi-member layouts whose
   eightbytes split into an SSE-only slot and an INTEGER/merged slot use their
@@ -182,8 +208,15 @@ Caveats:
   `{ f32, i32/u32, f64 }`, `{ f64, i32/u32, i32/u32 }`, `{ f64, i32/u32, f32 }`
   and `{ i32/u32, f32, f32, f32 }` / `{ f32, i32/u32, f32, f32 }`).
   Larger supported aggregates use the hidden-pointer `byval`/`sret` form.
-  Fixed arrays, nested wrappers, and other unsupported SSE/INTEGER layouts
-  remain unsupported (`E0473`); pass a pointer instead.
+  A single-member aggregate is one eightbyte, so its leaf alone decides the
+  register: a lone `*u8` member rides a full INTEGER register (emitted as an
+  integer, which is bit-identical to `ptr`), and `{ i16 }`, `{ f32 }` and
+  `{ f64 }` use the scalar rules above. Nested struct wrappers are classified
+  by their flattened leaves, so they follow the same rules as the direct
+  layouts they expand to. Fixed array
+  fields (`i128` included, which has no register transport) and other
+  unsupported SSE/INTEGER layouts remain unsupported (`E0473`); pass a pointer
+  instead.
 - Slices are passed by value as pointer+length, matching a C
   `struct { ptr base; size_t len; }` layout.
 - Enums are passed as their backing integer, but a C enum's width is

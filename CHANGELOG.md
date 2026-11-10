@@ -8,6 +8,26 @@ promised between alpha releases.
 
 ### Added
 
+- C ABI support on `x86_64` Linux for pointer members and narrow second slots
+  in two-eightbyte aggregates. The eightbyte classification now records a
+  pointer leaf as its own register kind, so a pointer is never narrowed to a
+  neighbouring integer member width: `{ *u8, i64 }` lowers to `ptr, i64`,
+  `{ i8, *u8 }` to `i8, ptr`, `{ *u8, *u8 }` to `ptr, ptr`, `{ *u8, f64 }` to
+  `ptr, double`, `{ f32, *u8 }` to `float, ptr`, and `{ i32, i32, *u8 }`
+  merges its first eightbyte to `i64, ptr`. A 12-byte aggregate whose second
+  eightbyte carries a single leaf narrower than a register transports only that
+  width, so `{ f32, f32, i16 }` uses `<2 x float>, i16`, `{ f32, f32, i8 }`
+  and `{ f32, f32, bool }` use `<2 x float>, i8`, and the mirrored
+  `{ i16, f32, f32 }` / `{ *u8, f32, f32 }` / `{ i32, f32, f32 }` orders
+  reverse the registers; the padding bytes of the 16-byte slot stay untouched.
+  Integration fixtures `cabi_pointer_members` (exit 199) and
+  `cabi_pair_slot_widths` (exit 215) cover both directions, including the
+  single-member and odd-width layouts the shape-space probe never generated
+  (lone `*u8`, `i16`, `f32`, `f64`, `{ i16, i16, i16 }`, `{ i8, i8, i8 }`).
+  Pointer identity is verified through C, because a by-value aggregate is
+  copied at the call. The shared `AbiSlot` model replaces the duplicated scalar
+  enumeration, and a classifier unit test asserts the exact register sequence
+  for 21 shapes.
 - C ABI support on `x86_64` Linux for nested members in the C ABI: the
   register of an eightbyte is now decided by the *leaves* it carries, with
   nested structs flattened into their members exactly as Clang does. A nested

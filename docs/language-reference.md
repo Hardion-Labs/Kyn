@@ -230,14 +230,20 @@ fn log_message() {
   (packed `i64` passed irrespective of member widths), direct
   `{ bool, f64 }` / `{ f64, bool }` use a full `i8` parameter and
   `{ i8, double }` / `{ double, i8 }` returns, a struct whose two eightbytes
-  each carry exactly one integer leaf passes each leaf at its own width in its
+  each carry exactly one scalar leaf passes each leaf at its own width in its
   own register, returning the matching pair
   (`{ i8/u8, i64 }` → `i8, i64` / `{ i8, i64 }`, `{ i16/u16, i64 }` →
   `i16, i64` / `{ i16, i64 }`, `{ i32, i64 }` → `i32, i64` /
-  `{ i32, i64 }`, and the reversed layouts → `i64, i8` / `i64, i16` /
-  `i64, i32` with the matching pair returns; the register of an eightbyte is
-  decided by the leaves it carries, with nested structs flattened into their
-  members exactly as Clang does), while a singleton
+  `{ i32, i64 }`, `{ ptr, i64 }` → `ptr, i64`, `{ i8, ptr }` → `i8, ptr`,
+  `{ i32, i32, ptr }` → `i64, ptr`, and the reversed layouts → `i64, i8` /
+  `i64, i16` / `i64, i32` / `i64, ptr` with the matching pair returns; the
+  register of an eightbyte is decided by the leaves it carries — an integer
+  leaf at its width, a pointer leaf as `ptr` and never narrowed, several
+  leaves as a packed `i64`, a single `f32`/`f64` as that scalar, and two
+  `f32` leaves as `<2 x float>` — with nested structs flattened into their
+  members exactly as Clang does, and a two-`f32` slot paired with a narrow
+  leaf keeping its packing as `<2 x float>, i16` / `i8` and the mirrored
+  `{ i16, f32, f32 }` / `{ i32, f32, f32 }` orders), while a singleton
   `enum` member with a sub-32-bit backing passes as an `i8`/`i16`/`i32`/`i64` at its backing width;
   the exact multi-member layouts `{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,

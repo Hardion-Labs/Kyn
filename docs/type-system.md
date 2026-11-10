@@ -262,20 +262,28 @@ pointer regardless of how the pointer variable itself was declared.
   uses `double, i8` / `double, i16` and `{ double, i8 }` / `{ double, i16 }`
   returns. A direct `{ bool, f64 }` or `{ double, bool }` passes the singleton
   `bool` as a full `i8` parameter, with `{ i8, double }` / `{ double, i8 }`
-  returns. A struct whose two eightbytes each carry exactly one integer leaf
+  returns. A struct whose two eightbytes each carry exactly one scalar leaf
   passes each leaf at its own width in its own register, returning the
   matching pair: `{ i8/u8, i64 }` / `{ u8/u8, i64 }` uses `i8, i64` and
   `{ i8, i64 }`; `{ i16/u16, i64 }` / `{ u16/u16, i64 }` uses `i16, i64` and
   `{ i16, i64 }`; `{ i32, i64 }` / `{ u32, u64 }` uses `i32, i64` and
-  `{ i32, i64 }`; and the reversed layouts `{ i64, i8/u8 }`,
-  `{ i64, i16/u16 }` and `{ i64, i32/u32 }` use `i64, i8` / `i64, i16` /
-  `i64, i32` with the matching pair returns. The register of an eightbyte is
-  decided by the *leaves* it carries, with nested structs flattened into their
-  members exactly as Clang does: an eightbyte with a single integer leaf
-  travels at that leaf's width, one with several leaves travels as a full
-  `i64`, an eightbyte with a single `f32` or `f64` travels as that scalar,
-  and one with two `f32` leaves travels as `<2 x float>`. Nested members
-  therefore follow the same rules as direct ones.
+  `{ i32, i64 }`; `{ ptr, i64 }` uses `ptr, i64`, `{ i8, ptr }` uses
+  `i8, ptr`, and `{ i32, i32, ptr }` merges its first eightbyte to
+  `i64, ptr`; and the reversed layouts `{ i64, i8/u8 }`,
+  `{ i64, i16/u16 }`, `{ i64, i32/u32 }` and `{ i64, ptr }` use `i64, i8` /
+  `i64, i16` / `i64, i32` / `i64, ptr` with the matching pair returns. The
+  register of an eightbyte is decided by the *leaves* it carries, with nested
+  structs flattened into their members exactly as Clang does: an eightbyte with
+  a single integer leaf travels at that leaf's width, one with a single pointer
+  leaf travels as `ptr` and is never narrowed to an integer member width, one
+  with several leaves travels as a full `i64` (even when a float is among
+  them), an eightbyte with a single `f32` or `f64` travels as that scalar, and
+  one with two `f32` leaves travels as `<2 x float>`. A two-`f32` slot paired
+  with a narrow second leaf keeps its packing, so `{ f32, f32, i16 }` uses
+  `<2 x float>, i16` and `{ f32, f32, i8 }` / `{ f32, f32, bool }` use
+  `<2 x float>, i8`; the mirrored `{ i16, f32, f32 }` and `{ i32, f32, f32 }`
+  orders reverse the registers. A narrow second slot writes only its own bytes.
+  Nested members therefore follow the same rules as direct ones.
   Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass

@@ -73,7 +73,9 @@ Milestones below are directions, not release promises.
   `{ <2 x float>, float }` return, exactly four adjacent direct `f32` fields
   via `<2 x float>, <2 x float>` with a `{ <2 x float>, <2 x float> }` return,
   exactly two direct `f64` fields via two SSE parameter registers and an LLVM
-  pair return, direct `{ f32, f64 }` / `{ f64, f32 }` layouts at offsets 0/8
+  pair return, two-`f32` SSE slots paired with a narrow INTEGER or pointer
+  second slot (`{ f32, f32, i16/i8/bool/ptr }` and the mirrored orders), direct
+  `{ f32, f64 }` / `{ f64, f32 }` layouts at offsets 0/8
   via two SSE registers, direct `{ f32, i64 }` / `{ f32, u64 }` and
   `{ f64, i64 }` / `{ f64, u64 }` layouts at offsets 0/8 via SSE+INTEGER
   registers, direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` and the reverse
@@ -93,11 +95,17 @@ Milestones below are directions, not release promises.
   `{ i64/u64, f32, f32 }`, `{ f32, f32, f64 }`, `{ f64, f32, f32 }`, and
   the four-member runs) via their probed coercions, and direct `{ f64, i32 }` / `{ i32, f64 }` layouts at
   offsets 0/8 via their corresponding SSE+INTEGER register order.
-- Aggregates whose two eightbytes each carry exactly one integer leaf
-  (`.small_2s`): each leaf passes in its own register at its own width and the
-  aggregate returns as the matching pair, for `{ i8/u8, i64 }`,
-  `{ i16/u16, i64 }`, `{ i32, i64 }` / `{ u32, u64 }` and the reversed
-  layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`.
+- Aggregates whose two eightbytes each carry exactly one scalar leaf: each
+  leaf passes in its own register at its own width and the aggregate returns as
+  the matching pair, for integer leaves (`{ i8/u8, i64 }`, `{ i16/u16, i64 }`,
+  `{ i32, i64 }` / `{ u32, u64 }` and the reversed `{ i64, i8/u8 }`,
+  `{ i64, i16/u16 }`, `{ i64, i32/u32 }`), pointer leaves (`{ ptr, i64 }`,
+  `{ i8, ptr }`, `{ ptr, ptr }`, `{ ptr, f64 }`, `{ f32, ptr }`, plus
+  `{ i32, i32, ptr }` merging to `i64, ptr`) and narrow second slots of a
+  12-byte aggregate (`{ f32, f32, i16 }`, `{ f32, f32, i8 }`,
+  `{ f32, f32, bool }`, `{ f32, f32, ptr }` and the mirrored
+  `{ i16/ptr/i32, f32, f32 }` orders). A pointer leaf is never narrowed to an
+  integer member width, and a narrow slot writes only its own bytes.
 - Boundary classification by leaves: the register of an eightbyte follows the
   scalar leaves it carries, with nested structs flattened into their members
   exactly as Clang does, so nested integer, `f32` and `f64` members follow
