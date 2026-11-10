@@ -22,6 +22,9 @@ struct FourLongs { v: [4]i64 }
 // the shape interoperates with either compiler. `[1]f32` is what makes it
 // observable, so the fixture pins it in both directions.
 struct TrailingFloatArray { head: [1]i64, tail: [1]f32 }
+// A fully merged eightbyte: four `i16` elements pack into the four bytes that
+// the ABI transports as one `i32` (Clang emits `{ i64, i32 }` here).
+struct PackedShorts { v: [6]i16 }
 
 extern fn c_take_small_array_double(value: SmallArrayDouble) SmallArrayDouble;
 extern fn c_take_two_ints(value: TwoInts) TwoInts;
@@ -34,6 +37,7 @@ extern fn c_take_four_longs(value: FourLongs) FourLongs;
 extern fn c_take_two_pointers(value: TwoPointers) TwoPointers;
 extern fn c_take_trailing_float_array(value: TrailingFloatArray) TrailingFloatArray;
 extern fn c_lane_check(value: TrailingFloatArray) i64;
+extern fn c_take_packed_shorts(value: PackedShorts) PackedShorts;
 extern fn c_check_kyn() i32;
 
 export fn kyn_take_small_array_double(value: SmallArrayDouble) SmallArrayDouble {
@@ -53,6 +57,12 @@ export fn kyn_take_four_longs(value: FourLongs) FourLongs {
 
 export fn kyn_take_two_pointers(value: TwoPointers) TwoPointers {
     return value;
+}
+
+export fn kyn_take_packed_shorts(value: PackedShorts) PackedShorts {
+    return PackedShorts {
+        v: [value.v[0] + 1, value.v[1] + 2, value.v[2] + 3, value.v[3] + 4, value.v[4] + 5, value.v[5] + 6],
+    };
 }
 
 export fn kyn_take_trailing_float_array(value: TrailingFloatArray) TrailingFloatArray {
@@ -140,6 +150,10 @@ fn main() i32 {
     // value, so Kyn's `float` is a valid spelling of Clang's `<2 x float>`.
     if (c_lane_check(TrailingFloatArray { head: [2], tail: [4.0] }) != 6) {
         return 100;
+    }
+    let packed = c_take_packed_shorts(PackedShorts { v: [1, 2, 3, 4, 5, 6] });
+    if (packed.v[0] != 2 || packed.v[2] != 6 || packed.v[5] != 12) {
+        return 101;
     }
     // The narrow INTEGER eightbyte of `{ [2]i8, f64 }` must not disturb the
     // neighbouring double, and `c_check_kyn` verifies that from the C side.

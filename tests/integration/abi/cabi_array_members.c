@@ -12,12 +12,16 @@ struct FourLongs { int64_t v[4]; };
 /* Clang spells the second eightbyte `<2 x float>`; Kyn spells it `float`.
    Both put the value in the low lane of the same SSE register. */
 struct TrailingFloatArray { int64_t head[1]; float tail[1]; };
+/* Four occupied bytes in the second eightbyte: Clang passes this as
+   `{ i64, i32 }`. */
+struct PackedShorts { int16_t v[6]; };
 
 extern struct SmallArrayDouble kyn_take_small_array_double(struct SmallArrayDouble value);
 extern struct TwoInts kyn_take_two_ints(struct TwoInts value);
 extern struct FourLongs kyn_take_four_longs(struct FourLongs value);
 extern struct TwoPointers kyn_take_two_pointers(struct TwoPointers value);
 extern struct TrailingFloatArray kyn_take_trailing_float_array(struct TrailingFloatArray value);
+extern struct PackedShorts kyn_take_packed_shorts(struct PackedShorts value);
 
 static const char BYTES[4] = { 1, 2, 3, 4 };
 
@@ -89,6 +93,13 @@ struct TrailingFloatArray c_take_trailing_float_array(struct TrailingFloatArray 
     return value;
 }
 
+struct PackedShorts c_take_packed_shorts(struct PackedShorts value) {
+    for (int index = 0; index < 6; ++index) {
+        value.v[index] += index + 1;
+    }
+    return value;
+}
+
 int64_t c_lane_check(struct TrailingFloatArray value) {
     return value.head[0] + (int64_t)(value.tail[0] * 1.0f);
 }
@@ -100,10 +111,12 @@ int32_t c_check_kyn(void) {
     struct TwoPointers d = kyn_take_two_pointers((struct TwoPointers){ { BYTES, BYTES } });
     struct TrailingFloatArray e =
         kyn_take_trailing_float_array((struct TrailingFloatArray){ { 40 }, { 1.5f } });
+    struct PackedShorts f = kyn_take_packed_shorts((struct PackedShorts){ { 1, 2, 3, 4, 5, 6 } });
     int ok = a.count[0] == 2 && a.count[1] == 4 && a.amount == 4.0 &&
              b.v[0] == 11 && b.v[1] == 22 &&
              c.v[0] == 2 && c.v[1] == 4 && c.v[2] == 6 && c.v[3] == 8 &&
              d.v[0] == BYTES && d.v[1] == BYTES &&
-             e.head[0] == 41 && e.tail[0] == 2.5f;
+             e.head[0] == 41 && e.tail[0] == 2.5f &&
+             f.v[0] == 2 && f.v[2] == 6 && f.v[5] == 12;
     return ok ? 0 : 1;
 }

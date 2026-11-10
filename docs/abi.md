@@ -221,7 +221,9 @@ Caveats:
   `double, double`, `{ [2]*const u8 }` is `ptr, ptr`, and any layout wider
   than 16 bytes uses `byval`/`sret`. An array whose element is itself an
   aggregate expands recursively, so nested arrays and arrays of structs follow
-  the same rules.
+  the same rules. An eightbyte whose members fill only part of it transports
+  at the width they occupy, which is what makes `{ [6]i16 }` (four occupied
+  bytes in its second eightbyte) a `{ i64, i32 }` pair.
   A *bare* array is not an aggregate: C decays an array parameter to a
   pointer, so `extern fn take(values: [2]i32)` is rejected (`E0473`) — write
   `*const i32` (or a struct wrapping the array) instead. Arrays nested inside

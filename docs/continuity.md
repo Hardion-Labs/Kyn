@@ -1447,11 +1447,14 @@ branch history; this increment does not redo them.
   and C routes the value through the low SSE lane in both directions and
   against both Clang and GCC, returning the expected value in all four
   combinations. The fixture pins this with `c_lane_check`.
-- Fixtures: `tests/integration/abi/cabi_array_members.{kyn,c}` covers nine
+- Fixtures: `tests/integration/abi/cabi_array_members.{kyn,c}` covers ten
   array shapes (`{ [2]i8, f64 }`, `{ [2]i32 }`, `{ [3]i32 }`, `{ [4]i8 }`,
-  `{ [3]i16 }`, `{ [2]f32 }`, `{ [2]f64 }`, `{ [2]*const u8 }`,
-  `{ [4]i64 }` ⇒ `sret`/`byval`) plus `{ [1]i64, [1]f32 }`, in both
-  directions, with a C-side reverse check. Guard codes 80–100. Two stale error
+  `{ [3]i16 }`, `{ [6]i16 }`, `{ [2]f32 }`, `{ [2]f64 }`,
+  `{ [2]*const u8 }`, `{ [4]i64 }` ⇒ `sret`/`byval`) plus
+  `{ [1]i64, [1]f32 }`, in both directions, with a C-side reverse check.
+  Guard codes 80–101. `{ [6]i16 }` is the one shape whose second eightbyte is
+  only partially occupied *and* merged from several leaves, so it pins the
+  occupied-width transport rather than a full `i64`. Two stale error
   fixtures were rewritten to layouts that are still rejected
   (`abi_float_param.kyn` and `abi_float_return.kyn` now use `{ i128 }`),
   keeping the `E0473` coverage rather than deleting it.
@@ -1473,6 +1476,15 @@ branch history; this increment does not redo them.
   working directory — the suite passed from the repo root and reported 56
   broken links when run from `tests/integration`. It now resolves once and
   indexes anchors by resolved path.
+- Investigated and dismissed during validation: `{ [6]i16 }` and
+  `{ [10]i8 }` look different in IR from Clang (`i128` versus `{ i64, i32 }`),
+  but that is only how the *two-register* pair is spelled. Kyn packs both
+  registers into one `i128` value whose byte layout matches the aggregate, and
+  the C callee reads exactly the bytes it expects. Verified in execution in
+  both directions against Clang and GCC (`exit 42` each time, members read
+  individually as `a*1 + b*10 + … + f*100000`), so no change was made. This is
+  the same class as the width noise in the differential probe: a different
+  spelling of the same register pair.
 - Limitations: the target remains `x86_64` Linux only. Still rejected with
   `E0473`: a lone `i128` member, a bare array parameter, and a struct whose
   only field is a slice. `Clang`'s `<2 x float>` spelling for a lone `f32`
