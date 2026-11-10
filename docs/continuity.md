@@ -26,12 +26,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** exactly two
+- **Latest ABI increment completed and merged (`511350d`, PR #5):** exactly two
   direct mixed-width `f32`/`f64` fields at natural offsets 0/8 (16 bytes).
   `{ f32, f64 }` lowers as `float, double` parameters and a
   `{ float, double }` return; the reverse `{ f64, f32 }` uses `double, float`
   and `{ double, float }`. Clang IR probe confirms the coercions; other
-  mixed-class layouts remain `E0473`.
+  mixed-class layouts remain `E0473`. Main CI for the merge and post-merge
+  validation are both green (see section 23).
 - **Previous ABI increment (merged, `2869235`):** exactly three
   adjacent direct `f32` fields (12-byte layout, `<2 x float>, float`
   arguments and a `{ <2 x float>, float }` return) and exactly four adjacent
@@ -511,7 +512,7 @@ branch history; this increment does not redo them.
   builds and unit tests, Debug/ReleaseSafe integration matrix — all report
   `139 passed, 0 failed`. Release artifacts and tags are untouched.
 
-## 23. Mixed-width f32/f64 aggregate ABI increment (completed, not yet committed)
+## 23. Mixed-width f32/f64 aggregate ABI increment (completed and merged)
 
 - Scope: only aggregates with exactly two direct fields of mixed float
   widths at natural offsets 0/8 with 16-byte layout: `{ f32, f64 }` and
@@ -519,6 +520,11 @@ branch history; this increment does not redo them.
   the module system, and the runtime-check policy are untouched, and all
   previously supported shapes are bit-identical (the new exact-shape checks
   return before the shared SSE-only scan).
+- Merged into `main` as PR #5 (merge commit `511350d`); implementation
+  commit `ed9f9a9`. CI run for the PR (`42733863688`, 3m27s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `141 passed, 0 failed`. Release artifacts and tags are untouched.
 - System V AMD64 eightbyte classification does not merge these two eightbytes
   into one register pair for the struct; Clang 23 IR probes show Clang lowers
   them directly as scalar parameters in field order and returns the struct
@@ -547,8 +553,6 @@ branch history; this increment does not redo them.
   141 passed, 0 failed.
 - No sanitizer run was performed; no sanitizer gate is configured. The
   interop tests used the installed `clang` (v23.1.2).
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
