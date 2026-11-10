@@ -1800,6 +1800,11 @@ pub const BoundaryClass = union(enum) {
 
 pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     if (builtin.target.os.tag != .linux or builtin.target.cpu.arch != .x86_64) return null;
+    // A bare array is not a by-value aggregate at the boundary: a C array
+    // parameter decays to a pointer, so passing the elements in registers
+    // would silently disagree with the callee. Only arrays nested inside a
+    // struct are values, and those are flattened by the leaf walk below.
+    if (ty.* == .array) return null;
     const layout = aggregateLayoutGuess(ty) orelse return null;
     if (layout.size > 16) return .memory;
     if (ty.* != .struct_type) {
@@ -1960,6 +1965,18 @@ fn collectAggregateLeaves(ty: *Type, base_offset: u64, leaves: *[2]EightbyteLeaf
             return true;
         },
         .enum_type => |info| return collectAggregateLeaves(info.backing, base_offset, leaves),
+        .array => |info| {
+            // Each element contributes its own leaves, exactly as `len`
+            // consecutive members would: Clang flattens an array the same way
+            // it flattens a nested struct.
+            const element = aggregateLayoutGuess(info.elem) orelse return false;
+            var offset = base_offset;
+            for (0..info.len) |_| {
+                if (!collectAggregateLeaves(info.elem, offset, leaves)) return false;
+                offset += element.size;
+            }
+            return true;
+        },
         .bool => return recordIntegerLeaf(ty, base_offset, 1, leaves),
         .char => return recordIntegerLeaf(ty, base_offset, 4, leaves),
         .int => |info| return recordIntegerLeaf(ty, base_offset, @as(u64, info.bits / 8), leaves),
@@ -2053,6 +2070,17 @@ pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
             }
             size = std.mem.alignForward(u64, size, align_);
             break :blk .{ .size = size, .align_ = align_ };
+        },
+        .array => |info| blk: {
+            // A fixed array is `len` element copies, aligned to its element.
+            // No size cap here: an aggregate wider than 16 bytes is still a
+            // valid aggregate, it simply travels by memory (see
+            // `aggregateBoundaryClass`), so only the multiplication has to be
+            // guarded against overflow.
+            const element = aggregateLayoutGuess(info.elem) orelse return null;
+            const len: u64 = @intCast(info.len);
+            const size = std.math.mul(u64, element.size, len) catch return null;
+            break :blk .{ .size = size, .align_ = element.align_ };
         },
         .bool => .{ .size = 1, .align_ = 1 },
         .char => .{ .size = 4, .align_ = 4 },
@@ -2210,9 +2238,14 @@ test "C ABI boundary classification follows Clang's leaf registers" {
         // it, so `{ int; float }` and `{ float; int; bool }` pack to `i64`.
         .{ .decl = "struct S { a: i32, b: f32 }", .expected = .small_1 },
         .{ .decl = "struct S { a: f32, b: i32, c: bool }", .expected = .{ .pair = .{ .first = .i64, .second = .i8 } } },
-        // Shapes without a register transport keep their rejection: an array
-        // field and a lone `i128` have no supported boundary register.
-        .{ .decl = "struct S { a: [2]i8, b: f64 }", .expected = null },
+        // An array member contributes one leaf per element, so it follows the
+        // same rules as consecutive members: `{ [2]i8, f64 }` is a packed
+        // INTEGER eightbyte followed by an SSE double.
+        .{ .decl = "struct S { a: [2]i8, b: f64 }", .expected = .{ .pair = .{ .first = .i64, .second = .f64 } } },
+        .{ .decl = "struct S { a: [2]i32 }", .expected = .small_1 },
+        .{ .decl = "struct S { a: [3]i32 }", .expected = .{ .pair = .{ .first = .i64, .second = .i32 } } },
+        .{ .decl = "struct S { a: [2]f32 }", .expected = .sse_f32x2 },
+        // A lone `i128` still has no boundary register.
         .{ .decl = "struct S { a: i128 }", .expected = null },
     };
 
@@ -2604,11 +2637,15 @@ test "C ABI small integer members accept exact layouts" {
         \\fn main() i32 { return 0; }
     );
 
-    try expectSemanticError(
+    // `{ [2]i8, f64 }` is one packed INTEGER eightbyte followed by an SSE
+    // double: an array member follows the same leaf rules as consecutive
+    // members, so this layout is supported rather than rejected.
+    try expectClean(
         \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
         \\extern fn c_take(value: SmallArrayDouble);
+        \\export fn kyn_take(value: SmallArrayDouble) SmallArrayDouble { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 }
 
 test "C ABI enum members accept exact layouts" {
@@ -2726,11 +2763,15 @@ test "C ABI multi-member eightbyte layouts accept exact runs" {
         \\fn main() i32 { return 0; }
     );
 
-    try expectSemanticError(
+    // `{ [2]i8, f64 }` is one packed INTEGER eightbyte followed by an SSE
+    // double: an array member follows the same leaf rules as consecutive
+    // members, so this layout is supported rather than rejected.
+    try expectClean(
         \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
         \\extern fn c_take(value: SmallArrayDouble);
+        \\export fn kyn_take(value: SmallArrayDouble) SmallArrayDouble { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectClean(
         \\struct FloatLeaf { value: f32 }
@@ -2757,11 +2798,15 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
         \\fn main() i32 { return 0; }
     );
 
-    try expectSemanticError(
+    // `{ [2]i8, f64 }` is one packed INTEGER eightbyte followed by an SSE
+    // double: an array member follows the same leaf rules as consecutive
+    // members, so this layout is supported rather than rejected.
+    try expectClean(
         \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
         \\extern fn c_take(value: SmallArrayDouble);
+        \\export fn kyn_take(value: SmallArrayDouble) SmallArrayDouble { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectClean(
         \\struct FloatIntFloat { x: f32, count: i32, y: f32 }

@@ -1,3 +1,6 @@
-struct SmallArrayDouble { count: [2]i8, amount: f64 }
-extern fn c_take(value: SmallArrayDouble);
+// A lone `i128` has no boundary register: the classification only knows
+// `i8`/`i16`/`i32`/`i64` INTEGER slots and SSE slots, so a 16-byte integer
+// leaf is rejected instead of being guessed at. Pass a pointer instead.
+struct WideInteger { value: i128 }
+extern fn c_take(value: WideInteger);
 fn main() i32 { return 0; }

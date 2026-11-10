@@ -2378,7 +2378,12 @@ pub const Emitter = struct {
             },
             .call => |call| {
                 if (call.dst) |dst| try writer.print("  %t{d} = ", .{dst}) else try writer.writeAll("  ");
-                try writer.print("call {s} @{s}(", .{ try self.typeString(call.ret), call.name });
+                // A `sret` call returns void: the hidden pointer already names
+                // the destination, so the call has no result value. Printing
+                // the aggregate type here would declare a second, conflicting
+                // result for the same call, which makes the result undefined.
+                const call_ret = if (call.sret) "void" else try self.typeString(call.ret);
+                try writer.print("call {s} @{s}(", .{ call_ret, call.name });
                 for (call.args, 0..) |arg, i| {
                     if (i > 0) try writer.writeAll(", ");
                     const byval_type = if (i < call.byval_types.len) call.byval_types[i] else null;

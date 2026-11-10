@@ -1,0 +1,161 @@
+// Fixed-array members at the C ABI boundary, in both directions.
+//
+// An array member contributes one scalar leaf per element, exactly as that
+// many consecutive members would, because Clang flattens an array the same way
+// it flattens a nested struct. `{ [2]i8, f64 }` is therefore a packed INTEGER
+// eightbyte (the two bytes plus padding) followed by an SSE double, which
+// Clang passes as `i64, double`.
+struct SmallArrayDouble { count: [2]i8, amount: f64 }
+struct TwoInts { v: [2]i32 }
+struct ThreeInts { v: [3]i32 }
+struct FourBytes { v: [4]i8 }
+struct ThreeShorts { v: [3]i16 }
+struct TwoFloats { v: [2]f32 }
+struct TwoDoubles { v: [2]f64 }
+struct TwoPointers { v: [2]*const u8 }
+// Wider than 16 bytes: the array keeps the aggregate in the memory class, so
+// the boundary uses the hidden `sret`/`byval` pointers instead of registers.
+struct FourLongs { v: [4]i64 }
+// A lone `f32` array element in the second eightbyte. Clang spells that
+// eightbyte `<2 x float>` (SSE followed by SSEUP) while GCC and Kyn spell it
+// `float`; both carry the value in the low lane of the same SSE register, so
+// the shape interoperates with either compiler. `[1]f32` is what makes it
+// observable, so the fixture pins it in both directions.
+struct TrailingFloatArray { head: [1]i64, tail: [1]f32 }
+// A fully merged eightbyte: four `i16` elements pack into the four bytes that
+// the ABI transports as one `i32` (Clang emits `{ i64, i32 }` here).
+struct PackedShorts { v: [6]i16 }
+
+extern fn c_take_small_array_double(value: SmallArrayDouble) SmallArrayDouble;
+extern fn c_take_two_ints(value: TwoInts) TwoInts;
+extern fn c_take_three_ints(value: ThreeInts) ThreeInts;
+extern fn c_take_four_bytes(value: FourBytes) FourBytes;
+extern fn c_take_three_shorts(value: ThreeShorts) ThreeShorts;
+extern fn c_take_two_floats(value: TwoFloats) TwoFloats;
+extern fn c_take_two_doubles(value: TwoDoubles) TwoDoubles;
+extern fn c_take_four_longs(value: FourLongs) FourLongs;
+extern fn c_take_two_pointers(value: TwoPointers) TwoPointers;
+extern fn c_take_trailing_float_array(value: TrailingFloatArray) TrailingFloatArray;
+extern fn c_lane_check(value: TrailingFloatArray) i64;
+extern fn c_take_packed_shorts(value: PackedShorts) PackedShorts;
+extern fn c_check_kyn() i32;
+
+export fn kyn_take_small_array_double(value: SmallArrayDouble) SmallArrayDouble {
+    return SmallArrayDouble {
+        count: [value.count[0] + 1, value.count[1] + 2],
+        amount: value.amount + 1.0,
+    };
+}
+
+export fn kyn_take_two_ints(value: TwoInts) TwoInts {
+    return TwoInts { v: [value.v[0] + 1, value.v[1] + 2] };
+}
+
+export fn kyn_take_four_longs(value: FourLongs) FourLongs {
+    return FourLongs { v: [value.v[0] + 1, value.v[1] + 2, value.v[2] + 3, value.v[3] + 4] };
+}
+
+export fn kyn_take_two_pointers(value: TwoPointers) TwoPointers {
+    return value;
+}
+
+export fn kyn_take_packed_shorts(value: PackedShorts) PackedShorts {
+    return PackedShorts {
+        v: [value.v[0] + 1, value.v[1] + 2, value.v[2] + 3, value.v[3] + 4, value.v[4] + 5, value.v[5] + 6],
+    };
+}
+
+export fn kyn_take_trailing_float_array(value: TrailingFloatArray) TrailingFloatArray {
+    return TrailingFloatArray {
+        head: [value.head[0] + 1],
+        tail: [value.tail[0] + 1.0],
+    };
+}
+
+const BYTES: [4]u8 = [1, 2, 3, 4];
+
+fn main() i32 {
+    let anchor: *const u8 = &BYTES[0];
+    let sad = c_take_small_array_double(SmallArrayDouble { count: [1, 2], amount: 3.0 });
+    if (sad.count[0] != 2) {
+        return 80;
+    }
+    if (sad.count[1] != 4) {
+        return 81;
+    }
+    if (sad.amount != 4.0) {
+        return 82;
+    }
+    let two_ints = c_take_two_ints(TwoInts { v: [10, 20] });
+    if (two_ints.v[0] != 11) {
+        return 83;
+    }
+    if (two_ints.v[1] != 22) {
+        return 84;
+    }
+    let three_ints = c_take_three_ints(ThreeInts { v: [1, 2, 3] });
+    if (three_ints.v[0] != 2) {
+        return 85;
+    }
+    if (three_ints.v[2] != 6) {
+        return 86;
+    }
+    let four_bytes = c_take_four_bytes(FourBytes { v: [10, 20, 30, 40] });
+    if (four_bytes.v[0] != 11) {
+        return 87;
+    }
+    if (four_bytes.v[3] != 44) {
+        return 88;
+    }
+    let three_shorts = c_take_three_shorts(ThreeShorts { v: [1, 2, 3] });
+    if (three_shorts.v[0] != 2) {
+        return 89;
+    }
+    if (three_shorts.v[2] != 6) {
+        return 90;
+    }
+    let two_floats = c_take_two_floats(TwoFloats { v: [1.5, 2.5] });
+    if (two_floats.v[0] != 2.5) {
+        return 91;
+    }
+    if (two_floats.v[1] != 4.5) {
+        return 92;
+    }
+    let two_doubles = c_take_two_doubles(TwoDoubles { v: [1.5, 2.5] });
+    if (two_doubles.v[0] != 2.5) {
+        return 93;
+    }
+    if (two_doubles.v[1] != 4.5) {
+        return 94;
+    }
+    let four_longs = c_take_four_longs(FourLongs { v: [1, 2, 3, 4] });
+    if (four_longs.v[0] != 2) {
+        return 95;
+    }
+    if (four_longs.v[3] != 8) {
+        return 96;
+    }
+    let two_pointers = c_take_two_pointers(TwoPointers { v: [anchor, anchor] });
+    if (two_pointers.v[0] != anchor) {
+        return 97;
+    }
+    let trailing = c_take_trailing_float_array(TrailingFloatArray { head: [40], tail: [1.5] });
+    if (trailing.head[0] != 41) {
+        return 98;
+    }
+    if (trailing.tail[0] != 2.5) {
+        return 99;
+    }
+    // Reading the float back through C proves the low SSE lane carries the
+    // value, so Kyn's `float` is a valid spelling of Clang's `<2 x float>`.
+    if (c_lane_check(TrailingFloatArray { head: [2], tail: [4.0] }) != 6) {
+        return 100;
+    }
+    let packed = c_take_packed_shorts(PackedShorts { v: [1, 2, 3, 4, 5, 6] });
+    if (packed.v[0] != 2 || packed.v[2] != 6 || packed.v[5] != 12) {
+        return 101;
+    }
+    // The narrow INTEGER eightbyte of `{ [2]i8, f64 }` must not disturb the
+    // neighbouring double, and `c_check_kyn` verifies that from the C side.
+    return c_check_kyn();
+}

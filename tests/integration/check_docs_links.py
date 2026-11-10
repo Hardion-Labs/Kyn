@@ -46,7 +46,7 @@ def headings(text: str) -> set[str]:
 
 def main() -> int:
     files = markdown_files()
-    anchors = {path: headings(path.read_text()) for path in files}
+    anchors = {path.resolve(): headings(path.read_text()) for path in files}
     failures: list[str] = []
 
     for path in files:
@@ -64,17 +64,21 @@ def main() -> int:
                     continue
                 target_path, anchor = (target.split('#', 1) + [''])[:2]
 
-                linked = path if not target_path else (path.parent / target_path).resolve()
+                resolved = path if not target_path else (path.parent / target_path).resolve()
                 try:
-                    linked = linked.relative_to(ROOT)
+                    resolved.relative_to(ROOT)
                 except ValueError:
                     failures.append(f'{path.relative_to(ROOT)}:{line_number}: link escapes repository: {target}')
                     continue
-                if not linked.exists():
+                # Existence and anchors must be tested on the resolved absolute
+                # path. Testing the repository-relative spelling made the result
+                # depend on the caller's working directory: run from
+                # `tests/integration`, every relative target looked missing.
+                if not resolved.exists():
                     failures.append(f'{path.relative_to(ROOT)}:{line_number}: missing target: {target}')
                     continue
-                if anchor and linked.suffix.lower() == '.md':
-                    generated = anchors.get(ROOT / linked, set())
+                if anchor and resolved.suffix.lower() == '.md':
+                    generated = anchors.get(resolved, set())
                     if anchor not in generated:
                         failures.append(f'{path.relative_to(ROOT)}:{line_number}: missing anchor: {target}')
 

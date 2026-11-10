@@ -1,3 +1,7 @@
-struct SmallArrayDouble { count: [2]i8, amount: f64 }
-export fn kyn_make() SmallArrayDouble { return SmallArrayDouble { count: [1, 2], amount: 3.0 }; }
+// The same limitation on the return side: a struct whose only leaf is an
+// `i128` cannot be returned by value across the C ABI boundary.
+struct WideInteger { value: i128 }
+export fn kyn_make() WideInteger {
+    return WideInteger { value: 1 as i128 };
+}
 fn main() i32 { return 0; }

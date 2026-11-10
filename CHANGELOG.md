@@ -8,7 +8,25 @@ promised between alpha releases.
 
 ### Added
 
-- C ABI support on `x86_64` Linux for pointer members and narrow second slots
+- C ABI support on `x86_64` Linux for fixed-array struct members. An array
+  field contributes one scalar leaf per element, exactly as that many
+  consecutive members would, so `{ [2]i8, f64 }` is a packed INTEGER eightbyte
+  followed by an SSE double (`i64, double`), `{ [3]i16 }` is one INTEGER
+  eightbyte, `{ [3]i32 }` is `{ i64, i32 }`, `{ [2]f32 }` is `<2 x float>`,
+  `{ [2]f64 }` is `double, double`, `{ [2]*const u8 }` is `ptr, ptr`, and a
+  layout wider than 16 bytes (`{ [4]i64 }`) uses `byval`/`sret` with matching
+  alignment. Nested arrays and arrays of aggregates expand recursively.
+  Array length participates in the layout without an arbitrary size cap: the
+  element size is multiplied with an overflow check instead. A *bare* array
+  parameter stays rejected (`E0473`), because C decays an array parameter to a
+  pointer, and a struct wrapping the array is the supported form.
+  Integration fixture `cabi_array_members` covers nine array shapes plus a
+  `{ [1]i64, [1]f32 }` case in both directions; its guards are mutation-checked
+  against one-leaf-per-array, array-size-as-element-size and a pair-slot offset
+  change. A `sret` call now returns `void` in the emitted IR instead of naming
+  the aggregate result type, which had produced invalid IR and silently zeroed
+  results.
+ and narrow second slots
   in two-eightbyte aggregates. The eightbyte classification now records a
   pointer leaf as its own register kind, so a pointer is never narrowed to a
   neighbouring integer member width: `{ *u8, i64 }` lowers to `ptr, i64`,

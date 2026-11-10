@@ -1399,5 +1399,102 @@ branch history; this increment does not redo them.
   most visible one — and specify cross-compilation targets before exposing
   further layouts across `extern`/`export`.
 
+## 36. Fixed-array member ABI increment (in progress on `arena/df9afc79-kyn`)
+
+- Scope: array fields were the last common C struct shape rejected with
+  `E0473`. §35 taught the classifier about pointers and narrow second slots
+  but still refused `[N]T` members outright.
+- Implementation (`compiler/sema.zig`): `aggregateLayoutGuess` gained an
+  `.array` case whose size is `element.size * len` (guarded by
+  `std.math.mul`, deliberately *not* capped at 16 bytes so an oversized
+  aggregate correctly falls into the memory class) and whose alignment is the
+  element's. `collectAggregateLeaves` expands it into `len` element leaves at
+  `base + i * element.size`, so nested arrays and arrays of aggregates expand
+  recursively through the same recursion that already flattened nested
+  structs. No backend change was needed for the shapes themselves.
+- Defect found and fixed while validating: `.call` emission printed the
+  aggregate as the result type *and* passed `sret`, which is invalid IR and
+  silently zeroed results. A `sret` call now returns `void`
+  (`compiler/backend/llvm.zig`).
+- Regression I introduced and then fixed: after generalising arrays, a *bare*
+  array parameter (`extern fn take(values: [2]i32)`) was accepted and passed
+  by value. In C an array parameter decays to a pointer, so this had to stay
+  rejected; an early `if (ty.* == .array) return null;` in
+  `aggregateBoundaryClass` restores `E0473` while arrays nested in structs
+  remain accepted.
+- A suspected `.pair` transport bug was *not* a compiler bug: the "garbage
+  `double`" came from a hand-written `dbg(f64, i32)` harness that declared
+  `%f`/`%d` against the wrong register class. Verified through a real C
+  function instead (`exit 42`, `c = [2, 4] d = 3`). Lesson: never trust a
+  hand-written debug harness when a real C callee can answer the question.
+- The last open divergence was `{ [1]i64, [1]f32 }`: Clang emits
+  `{ i64, <2 x float> }`, Kyn emits `{ i64, float }`. Characterised with
+  targeted Clang sweeps rather than guessed:
+  - the trigger is specifically a *lone `f32` coming from an array element*;
+    a direct `f32` member in the same position stays `float`, and a
+    two-element `f32` array is already `<2 x float>` by the existing two-lane
+    rule;
+  - it is not padding: `{ i64, f32 }` and `{ i64, f32[1] }` are both 16 bytes
+    yet differ;
+  - it is not a SysV rule: GCC emits `float` for both forms (`movd` in both
+    cases) and follows the generic `{ i64, f32 }` classification;
+  - Clang's own choice is size-sensitive in a way the ABI does not require
+    (12-byte `{ i16[3], f32[1] }` ⇒ `float`, 16-byte `{ i16[3], f32[2] }` ⇒
+    `<2 x float>`), so reproducing it would add target-specific
+    complexity for no interoperability gain.
+  Kyn therefore keeps the SysV (`float`) spelling, matching GCC, and the
+  equivalence is *proved in execution*: a caller/callee pair built from Kyn
+  and C routes the value through the low SSE lane in both directions and
+  against both Clang and GCC, returning the expected value in all four
+  combinations. The fixture pins this with `c_lane_check`.
+- Fixtures: `tests/integration/abi/cabi_array_members.{kyn,c}` covers ten
+  array shapes (`{ [2]i8, f64 }`, `{ [2]i32 }`, `{ [3]i32 }`, `{ [4]i8 }`,
+  `{ [3]i16 }`, `{ [6]i16 }`, `{ [2]f32 }`, `{ [2]f64 }`,
+  `{ [2]*const u8 }`, `{ [4]i64 }` ⇒ `sret`/`byval`) plus
+  `{ [1]i64, [1]f32 }`, in both directions, with a C-side reverse check.
+  Guard codes 80–101. `{ [6]i16 }` is the one shape whose second eightbyte is
+  only partially occupied *and* merged from several leaves, so it pins the
+  occupied-width transport rather than a full `i64`. Two stale error
+  fixtures were rewritten to layouts that are still rejected
+  (`abi_float_param.kyn` and `abi_float_return.kyn` now use `{ i128 }`),
+  keeping the `E0473` coverage rather than deleting it.
+- Mutation checks: forcing one leaf per array and setting the array size to
+  `element.size` both break compilation; changing the `.pair` second-slot
+  offset from 8 to 4 breaks at runtime (exit 82) plus five older fixtures;
+  dropping the C-side `tail += 1.0f` trips guard 99; changing the Kyn-side
+  `head + 1` trips the C reverse check. The guards are not vacuous.
+- Validation: `zig build` OK; `zig build test --summary all` **78/78**;
+  integration **168 passed / 0 failed** in Debug *and* ReleaseSafe;
+  `zig fmt --check build.zig compiler build-system` clean.
+  Differential probe over **552 shapes**: 358 exact, 68 covering-width,
+  112 rejected (bare arrays and `i128`, both intentional), and 14 remaining
+  diffs, all classified: 9 are width/padding noise (`i40` vs `i64`,
+  `{ i64, i32 }` vs `i128` — the same register pair) and 5 are the SSEUP
+  `float` vs `<2 x float>` spelling analysed above.
+- Also fixed an unrelated but real defect found while running the gates:
+  `tests/integration/check_docs_links.py` tested `exists()` on a path it had
+  already made repository-relative, so the result depended on the caller's
+  working directory — the suite passed from the repo root and reported 56
+  broken links when run from `tests/integration`. It now resolves once and
+  indexes anchors by resolved path.
+- Investigated and dismissed during validation: `{ [6]i16 }` and
+  `{ [10]i8 }` look different in IR from Clang (`i128` versus `{ i64, i32 }`),
+  but that is only how the *two-register* pair is spelled. Kyn packs both
+  registers into one `i128` value whose byte layout matches the aggregate, and
+  the C callee reads exactly the bytes it expects. Verified in execution in
+  both directions against Clang and GCC (`exit 42` each time, members read
+  individually as `a*1 + b*10 + … + f*100000`), so no change was made. This is
+  the same class as the width noise in the differential probe: a different
+  spelling of the same register pair.
+- Limitations: the target remains `x86_64` Linux only. Still rejected with
+  `E0473`: a lone `i128` member, a bare array parameter, and a struct whose
+  only field is a slice. `Clang`'s `<2 x float>` spelling for a lone `f32`
+  array element is not reproduced (deliberate, see above). No sanitizer gate
+  is configured, so none was run.
+- Next task: specify cross-compilation targets, then continue with the
+  remaining `SSE`-class shapes (`{ f32, f32, f32, f32, f32 }` and similar
+  memory-class fallbacks) before exposing further layouts across
+  `extern`/`export`.
+
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

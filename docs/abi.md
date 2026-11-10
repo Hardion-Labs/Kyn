@@ -142,7 +142,7 @@ available. Other `fn` declarations use internal linkage.
 | `f64` | `double` | `double` |
 | `usize`/`isize` | `size_t`/`ssize_t` (currently 64-bit) | `i64` |
 | `*T`, `*const T` | `T *`, `const T *` | `ptr` |
-| `[N]T` | `T[N]` (layout only) | `[N x T]` |
+| `[N]T` | `T[N]` (struct member; a bare parameter decays to a pointer) | `[N x T]` |
 | `struct S` | `struct S` (by value when its ABI classes are supported) | `%struct.S` |
 | `[]T`, `[]const T` | `struct { T *ptr; size_t len; }` | `%kyn.slice` (`{ ptr, i64 }`) |
 | `enum E: U` | integer backing type `U` | backing integer |
@@ -213,10 +213,30 @@ Caveats:
   integer, which is bit-identical to `ptr`), and `{ i16 }`, `{ f32 }` and
   `{ f64 }` use the scalar rules above. Nested struct wrappers are classified
   by their flattened leaves, so they follow the same rules as the direct
-  layouts they expand to. Fixed array
-  fields (`i128` included, which has no register transport) and other
-  unsupported SSE/INTEGER layouts remain unsupported (`E0473`); pass a pointer
+  layouts they expand to.
+  A fixed array field contributes one leaf per element, exactly as that many
+  consecutive members would, so `{ [2]i8, f64 }` is a packed INTEGER
+  eightbyte followed by an SSE double (`i64, double`), `{ [3]i16 }` is a
+  single INTEGER eightbyte, `{ [2]f32 }` is `<2 x float>`, `{ [2]f64 }` is
+  `double, double`, `{ [2]*const u8 }` is `ptr, ptr`, and any layout wider
+  than 16 bytes uses `byval`/`sret`. An array whose element is itself an
+  aggregate expands recursively, so nested arrays and arrays of structs follow
+  the same rules. An eightbyte whose members fill only part of it transports
+  at the width they occupy, which is what makes `{ [6]i16 }` (four occupied
+  bytes in its second eightbyte) a `{ i64, i32 }` pair.
+  A *bare* array is not an aggregate: C decays an array parameter to a
+  pointer, so `extern fn take(values: [2]i32)` is rejected (`E0473`) — write
+  `*const i32` (or a struct wrapping the array) instead. Arrays nested inside
+  a struct are supported.
+  Only a lone `i128` member (which has no register transport) and a struct
+  whose only field is a slice remain unsupported (`E0473`); pass a pointer
   instead.
+  One deliberate deviation from Clang: an eightbyte whose only leaf is a lone
+  `f32` array element (`{ [1]i64, [1]f32 }`) is spelled `float` here, where
+  Clang spells it `<2 x float>`. GCC spells it `float` too. Both carry the
+  value in the low lane of the same SSE register with the upper lane padding,
+  so the two spellings interoperate in both directions with either compiler;
+  the fixture `cabi_array_members` pins that down.
 - Slices are passed by value as pointer+length, matching a C
   `struct { ptr base; size_t len; }` layout.
 - Enums are passed as their backing integer, but a C enum's width is
@@ -309,11 +329,12 @@ clang hello.o -o hello
 ## 8. Not supported in v0.1
 
 - variadic extern functions;
-- fixed-size array parameters and returns by value, and aggregate layouts not
+- bare fixed-size array parameters and returns by value (C decays them to a
+  pointer; a struct wrapping the array works), and aggregate layouts not
   supported by the selected target/classifier (including `SSE`-only forms
   outside the supported scalar/pair/triple/quad and multi-member run shapes,
-  and singleton `enum` members with 1-bit backings)
-  (`E0473`);
+  a lone `i128` member, a struct whose only field is a slice, and singleton
+  `enum` members with 1-bit backings) (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;
