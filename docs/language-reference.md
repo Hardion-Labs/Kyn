@@ -204,8 +204,12 @@ fn log_message() {
   eightbytes. A float field may participate when an integer field in the same
   eightbyte makes the merged class `INTEGER`. A one-field direct `f32`/`f64`
   struct uses scalar SSE; exactly two adjacent direct `f32` fields use one
-  `<2 x float>` SSE/SSEUP value; exactly two direct `f64` fields use two SSE
-  registers with LLVM `{ double, double }` return coercion; and a direct
+  `<2 x float>` SSE/SSEUP value; exactly three adjacent direct `f32` fields
+  use one `<2 x float>` SSE/SSEUP value plus one `float` SSE value, returning
+  `{ <2 x float>, float }`; exactly four adjacent direct `f32` fields use
+  two `<2 x float>` values, returning `{ <2 x float>, <2 x float> }`;
+  exactly two direct `f64` fields use two SSE registers with LLVM
+  `{ double, double }` return coercion; and a direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with fields at offsets 0 and 8 uses
   `double, i32` arguments and `{ double, i32 }` return coercion; the reverse
   `{ i32, f64 }` or `{ u32, f64 }` uses `i32, double` and
@@ -452,7 +456,9 @@ let sum: i32 = add(1, 2);
   `export` functions support integer-class aggregates on `x86_64-linux`,
   including float/integer members merged within one eightbyte, one-field
   `f32`/`f64` structs via scalar SSE, two-adjacent-`f32` structs via
-  `<2 x float>` SSE/SSEUP, two-direct-`f64` structs via two SSE argument
+  `<2 x float>` SSE/SSEUP, three-adjacent-`f32` structs via
+  `<2 x float>, float`, four-adjacent-`f32` structs via `<2 x float>, <2 x float>`,
+  two-direct-`f64` structs via two SSE argument
   registers, direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
   direct `{ i32, f64 }` structs via INTEGER `i32` plus SSE `double`, and larger
   aggregates passed via `byval`; fixed arrays and other unsupported small

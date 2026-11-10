@@ -1,0 +1,17 @@
+struct FloatTriple { low: f32, middle: f32, high: f32 }
+
+extern fn c_transform_triple(value: FloatTriple) FloatTriple;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_scale_triple(value: FloatTriple) FloatTriple {
+    return FloatTriple {
+        low: value.low * 2.0,
+        middle: value.middle + 3.0,
+        high: value.high + 4.0,
+    };
+}
+
+fn main() i32 {
+    let result: FloatTriple = c_transform_triple(FloatTriple { low: 1.5, middle: 2.0, high: 4.0 });
+    return (result.low as i32) + (result.middle as i32) + (result.high as i32) + c_verify_kyn();
+}

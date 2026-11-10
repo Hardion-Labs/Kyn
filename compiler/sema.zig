@@ -1704,6 +1704,8 @@ pub const Sema = struct {
             .int => |info| info.name(),
             .float => |bits| if (bits == 32) "f32" else "f64",
             .abi_vec2_f32 => "<internal ABI vector>",
+            .abi_v2f32_f32 => "<internal ABI pair>",
+            .abi_v2f32_v2f32 => "<internal ABI pair>",
             .abi_pair_f64 => "<internal ABI pair>",
             .abi_f64_i32 => "<internal ABI pair>",
             .abi_i32_f64 => "<internal ABI pair>",
@@ -1752,6 +1754,8 @@ pub const BoundaryClass = enum {
     sse_float,
     sse_double,
     sse_f32x2,
+    sse_f32x3,
+    sse_f32x4,
     sse_f64x2,
     sse_f64_i32,
     sse_i32_f64,
@@ -1799,32 +1803,38 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
             }
         }
         const count: usize = @intCast((layout.size + 7) / 8);
-        var sse_only_index: ?usize = null;
-        for (eightbytes[0..count], 0..) |class, index| {
-            if (!class.has_sse or class.has_integer) continue;
-            if (sse_only_index != null) return null;
-            sse_only_index = index;
+        var sse_only_count: usize = 0;
+        for (eightbytes[0..count]) |class| {
+            if (class.has_sse and !class.has_integer) sse_only_count += 1;
         }
-        if (sse_only_index) |index| {
-            // SSE-only aggregates are accepted only for a one-field scalar
-            // float or the exact two-f32 SSE/SSEUP pair below. SSE plus INTEGER
-            // in separate eightbytes needs a distinct lowering and is rejected.
-            if (index != 0 or layout.size > 8 or ty.* != .struct_type) return null;
+        if (sse_only_count != 0) {
+            // At least one SSE-only eightbyte: accept only exact single-register
+            // shapes (adjacent direct f32 runs, or one scalar float). Any other
+            // mixture of SSE-only and INTEGER eightbytes is rejected.
+            if (ty.* != .struct_type) return null;
             const fields = ty.struct_type.fields;
-            if (fields.len == 1 and fields[0].ty.* == .float) {
+            var all_f32 = true;
+            for (fields) |field| {
+                if (field.ty.* != .float or field.ty.float != 32) {
+                    all_f32 = false;
+                    break;
+                }
+            }
+            const field_count: usize = @intCast(fields.len);
+            if (all_f32) {
+                const expected_size: usize = field_count * 4;
+                if (field_count == 1 and expected_size == 4 and sse_only_count == 1) return .sse_float;
+                if (field_count == 2 and expected_size == 8 and sse_only_count == 1) return .sse_f32x2;
+                if (field_count == 3 and expected_size == 12 and sse_only_count == 2) return .sse_f32x3;
+                if (field_count == 4 and expected_size == 16 and sse_only_count == 2) return .sse_f32x4;
+                return null;
+            }
+            if (fields.len == 1 and fields[0].ty.* == .float and sse_only_count == 1) {
                 return switch (fields[0].ty.float) {
                     32 => .sse_float,
                     64 => .sse_double,
                     else => null,
                 };
-            }
-            // Two adjacent direct f32 fields occupy exactly one SSE/SSEUP
-            // eightbyte and use LLVM's <2 x float> ABI coercion.
-            if (layout.size == 8 and fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 32 and
-                fields[1].ty.* == .float and fields[1].ty.float == 32)
-            {
-                return .sse_f32x2;
             }
             return null;
         }
@@ -2245,15 +2255,19 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
         \\fn main() i32 { return 0; }
     , "E0410");
 
-    try expectSemanticError(
+    try expectClean(
         \\struct FloatTriple { x: f32, y: f32, z: f32 }
-        \\extern fn c_take(pair: FloatTriple);
+        \\struct FloatQuad { x: f32, y: f32, z: f32, w: f32 }
+        \\extern fn c_take_triple(value: FloatTriple) FloatTriple;
+        \\extern fn c_take_quad(value: FloatQuad) FloatQuad;
+        \\export fn kyn_identity_triple(value: FloatTriple) FloatTriple { return value; }
+        \\export fn kyn_identity_quad(value: FloatQuad) FloatQuad { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectSemanticError(
-        \\struct FloatTriple { x: f32, y: f32, z: f32 }
-        \\export fn kyn_make() FloatTriple { return FloatTriple { x: 1.0, y: 2.0, z: 3.0 }; }
+        \\struct FloatIntFloat { x: f32, count: i32, y: f32 }
+        \\extern fn c_take(value: FloatIntFloat);
         \\fn main() i32 { return 0; }
     , "E0473");
 

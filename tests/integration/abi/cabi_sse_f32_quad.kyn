@@ -1,0 +1,18 @@
+struct FloatQuad { a: f32, b: f32, c: f32, d: f32 }
+
+extern fn c_transform_quad(value: FloatQuad) FloatQuad;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform_quad(value: FloatQuad) FloatQuad {
+    return FloatQuad {
+        a: value.a + 1.0,
+        b: value.b + 2.0,
+        c: value.c + 3.0,
+        d: value.d + 4.0,
+    };
+}
+
+fn main() i32 {
+    let result: FloatQuad = c_transform_quad(FloatQuad { a: 1.5, b: 2.0, c: 3.0, d: 4.0 });
+    return (result.a as i32) + (result.b as i32) + (result.c as i32) + (result.d as i32) + c_verify_kyn();
+}

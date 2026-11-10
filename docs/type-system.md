@@ -243,13 +243,17 @@ pointer regardless of how the pointer variable itself was declared.
   aggregates use `sret`/`byval` memory passing.
 - A struct containing one direct `f32`/`f64` field crosses `extern`/`export`
   boundaries as one scalar SSE value. Exactly two adjacent direct `f32` fields
-  use one `<2 x float>` SSE/SSEUP value; exactly two direct `f64` fields use
+  use one `<2 x float>` SSE/SSEUP value; exactly three adjacent direct `f32`
+  fields (12 bytes) use one `<2 x float>` SSE/SSEUP value plus one `float` SSE
+  value and a `{ <2 x float>, float }` return; exactly four adjacent direct
+  `f32` fields (16 bytes) use two `<2 x float>` values and a
+  `{ <2 x float>, <2 x float> }` return; exactly two direct `f64` fields use
   two SSE registers and an LLVM `{ double, double }` return coercion. A direct
   `{ f64, i32 }` / `{ f64, u32 }` structs use `double, i32` arguments and
   `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use `i32, double`
-  and `{ i32, double }`. These rules cover only two direct fields with natural
-  offsets. Nested or other unsupported small SSE/INTEGER layouts, fixed arrays
-  by value, and unsupported targets are rejected with `E0473`.
+  and `{ i32, double }`. These rules cover only adjacent direct fields with
+  natural offsets. Nested or other unsupported small SSE/INTEGER layouts, fixed
+  arrays by value, and unsupported targets are rejected with `E0473`.
 - Slices may also cross the C ABI boundary when their layout matches a C
   `struct { ptr, usize }`.
 - A pointer to an aggregate remains the preferred way to avoid large copies.
