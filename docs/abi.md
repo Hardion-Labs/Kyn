@@ -157,14 +157,17 @@ Caveats:
   `{ f64, i16/u16 }` use `double, i8` / `double, i16` and `{ double, i8 }` /
   `{ double, i16 }` returns. A direct `{ bool, f64 }` or `{ double, bool }`
   passes the singleton `bool` as a full `i8`, with `{ i8, double }` /
-  `{ double, i8 }` returns. Two-member structs whose members occupy one
-  eightbyte each and are both integer scalars pass each member at its own
-  width in its own register, returning the matching pair: `{ i8/u8, i64 }` /
+  `{ double, i8 }` returns. A struct whose two eightbytes each carry exactly
+  one integer leaf passes each leaf at its own width in its own register,
+  returning the matching pair: `{ i8/u8, i64 }` /
   `{ u8/u8, i64 }` uses `i8, i64` and `{ i8, i64 }`; `{ i16/u16, i64 }` /
   `{ u16/u16, i64 }` uses `i16, i64` and `{ i16, i64 }`; `{ i32, i64 }` /
   `{ u32, u64 }` uses `i32, i64` and `{ i32, i64 }`; and the reversed layouts
   `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }` use
-  `i64, i8` / `i64, i16` / `i64, i32` with the matching pair returns. Exact
+  `i64, i8` / `i64, i16` / `i64, i32` with the matching pair returns. Nested
+  integer members are flattened into their leaves like Clang does, so
+  `{ struct { short x; } a; long b; }` uses `i16, i64` and `{ i16, i64 }`,
+  while a nested member with more than one leaf merges its eightbyte. Exact
   multi-member layouts whose
   eightbytes split into an SSE-only slot and an INTEGER/merged slot use their
   probed Clang coercions (`{ f32, f32, i32 }`, `{ f32, f32, i64/u64 }`,

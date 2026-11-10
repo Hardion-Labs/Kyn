@@ -8,20 +8,24 @@ promised between alpha releases.
 
 ### Added
 
-- C ABI support on `x86_64` Linux for two-member structs whose members occupy
-  one eightbyte each and are both integer scalars (`.small_2s` eightbyte
-  classification, 16 bytes): each member is passed in its own register at its
-  own width and the aggregate returns as the matching pair. `{ i8/u8, i64 }`
-  lowers to `i8, i64` parameters and a `{ i8, i64 }` return,
-  `{ i16/u16, i64 }` to `i16, i64` / `{ i16, i64 }`, `{ i32, i64 }` /
-  `{ u32, u64 }` to `i32, i64` / `{ i32, i64 }`, and the reversed layouts
-  `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }` to
-  `i64, i8` / `i64, i16` / `i64, i32` with the matching pair returns, matching
-  Clang's System V lowering as verified against Clang IR probes for all six
-  signatures. Six new boundary transport types (`{ i8, i64 }`, `{ i16, i64 }`,
+- C ABI support on `x86_64` Linux for structs whose two eightbytes each carry
+  exactly one integer leaf (`.small_2s` eightbyte classification, 16 bytes):
+  each leaf is passed in its own register at its own width and the aggregate
+  returns as the matching pair. `{ i8/u8, i64 }` lowers to `i8, i64`
+  parameters and a `{ i8, i64 }` return, `{ i16/u16, i64 }` to `i16, i64` /
+  `{ i16, i64 }`, `{ i32, i64 }` / `{ u32, u64 }` to `i32, i64` /
+  `{ i32, i64 }`, and the reversed layouts `{ i64, i8/u8 }`,
+  `{ i64, i16/u16 }` and `{ i64, i32/u32 }` to `i64, i8` / `i64, i16` /
+  `i64, i32` with the matching pair returns, matching Clang's System V
+  lowering as verified against Clang IR probes for all six signatures. Nested
+  integer members are flattened into their leaves like Clang does, so
+  `{ struct { short x; } a; long b; }` lowers to `i16, i64` parameters and a
+  `{ i16, i64 }` return, while a nested member with more than one leaf keeps
+  the packed form. Six boundary transport types (`{ i8, i64 }`, `{ i16, i64 }`,
   `{ i32, i64 }`, `{ i64, i8 }`, `{ i64, i16 }` and `{ i64, i32 }`) carry the
-  pair values. The integration fixture `cabi_small_pair_widths` (exit 5) covers
-  argument and return paths in both directions for all six layouts.
+  pair values. The integration fixtures `cabi_small_pair_widths` (exit 5) and
+  `cabi_nested_pair_widths` (exit 96) cover argument and return paths in both
+  directions for the direct and the nested layouts.
 - C ABI support on `x86_64` Linux for exactly three adjacent direct `f32`
   fields (12-byte layout): arguments flatten to `<2 x float>, float` and the
   return coerces to `{ <2 x float>, float }`, matching Clang's System V

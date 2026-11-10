@@ -229,13 +229,15 @@ fn log_message() {
   members and `bool` are also accepted inside `INTEGER`-merged eightbytes
   (packed `i64` passed irrespective of member widths), direct
   `{ bool, f64 }` / `{ f64, bool }` use a full `i8` parameter and
-  `{ i8, double }` / `{ double, i8 }` returns, two-member structs whose
-  members occupy one eightbyte each and are both integer scalars pass each
-  member at its own width in its own register, returning the matching pair
+  `{ i8, double }` / `{ double, i8 }` returns, a struct whose two eightbytes
+  each carry exactly one integer leaf passes each leaf at its own width in its
+  own register, returning the matching pair
   (`{ i8/u8, i64 }` → `i8, i64` / `{ i8, i64 }`, `{ i16/u16, i64 }` →
   `i16, i64` / `{ i16, i64 }`, `{ i32, i64 }` → `i32, i64` /
   `{ i32, i64 }`, and the reversed layouts → `i64, i8` / `i64, i16` /
-  `i64, i32` with the matching pair returns), while a singleton
+  `i64, i32` with the matching pair returns; nested integer members are
+  flattened into their leaves, so `{ struct { short x; } a; long b; }` →
+  `i16, i64` / `{ i16, i64 }`), while a singleton
   `enum` member with a sub-32-bit backing passes as an `i8`/`i16`/`i32`/`i64` at its backing width;
   the exact multi-member layouts `{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,

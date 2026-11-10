@@ -93,11 +93,12 @@ Milestones below are directions, not release promises.
   `{ i64/u64, f32, f32 }`, `{ f32, f32, f64 }`, `{ f64, f32, f32 }`, and
   the four-member runs) via their probed coercions, and direct `{ f64, i32 }` / `{ i32, f64 }` layouts at
   offsets 0/8 via their corresponding SSE+INTEGER register order.
-- Two-member integer-pair aggregates whose members occupy one eightbyte each
-  (`.small_2s`): each member passes in its own register at its own width and
-  the aggregate returns as the matching pair, for `{ i8/u8, i64 }`,
+- Aggregates whose two eightbytes each carry exactly one integer leaf
+  (`.small_2s`): each leaf passes in its own register at its own width and the
+  aggregate returns as the matching pair, for `{ i8/u8, i64 }`,
   `{ i16/u16, i64 }`, `{ i32, i64 }` / `{ u32, u64 }` and the reversed
-  layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`.
+  layouts `{ i64, i8/u8 }`, `{ i64, i16/u16 }` and `{ i64, i32/u32 }`, with
+  nested integer members flattened into their leaves.
 - Keep the all-checks-enabled runtime policy stable across profiles unless a
   separate language-level decision explicitly specifies observable profile
   differences and adds profile-specific regressions.
