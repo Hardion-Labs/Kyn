@@ -26,7 +26,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** exact multi-member
+- **Latest ABI increment completed and merged (`edda8b9`, PR #7):** exact multi-member
   12/16-byte layouts whose eightbytes split into an SSE-only slot and an
   INTEGER/merged slot. `{ f32, f32, i32 }` (`<2 x float>, i32` and
   `{ <2 x float>, i32 }`), `{ f32, f32, i64/u64 }` (`<2 x float>, i64` and
@@ -661,7 +661,13 @@ branch history; this increment does not redo them.
 - Git state: merged into `main` (see the merge record at the top of this
   section). Release artifacts and tags are untouched.
 
-## 25. Multi-member ABI increment (completed, not yet committed)
+## 25. Multi-member ABI increment (completed and merged)
+
+- Merged into `main` as PR #7 (merge commit `edda8b9`); implementation
+  commit `9530e63`. CI run for the PR (`42742224537`, 3m35s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `151 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: exact three- and four-member aggregates (12 or 16 bytes) whose
   eightbytes split strictly into an SSE-only slot and an INTEGER/pure-or-
@@ -713,8 +719,8 @@ branch history; this increment does not redo them.
   field-order checks rather than member counts. No sanitizer run was
   performed; no sanitizer gate is configured. Interop used the installed
   `clang` (v23.1.2).
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
+- Git state: merged into `main` (see the merge record at the top of this
+  section). Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
