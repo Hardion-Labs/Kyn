@@ -33,6 +33,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   builds and unit tests, and the Debug/Safe/Release/Fast integration matrix
   — all report `166 passed, 0 failed`. See §33 for the full scope,
   implementation map and validation results.
+- **ABI increment in progress (not yet committed):** the C ABI boundary
+  classification now derives every eightbyte register from the *leaf* model,
+  with nested structs flattened into their members exactly as Clang does. A
+  nested integer member travels at its own width (`{ struct { short x; } a;
+  long b; }` → `i16, i64`), a nested `f32` travels as a scalar and a nested
+  `f64` pair as two scalars. The rule set shrank by roughly 400 lines. See
+  §34 for the full scope, implementation map and validation results.
 - **Latest ABI increment completed and merged (`1a76dbb`, PR #14):** two-member
   structs whose members occupy one eightbyte each and are both integer scalars
   now lower as `.small_2s` — each member passes in its own register at its own
@@ -273,13 +280,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 2. **Extended C ABI classification** (remaining System V SSE/SSEUP coercions
    beyond the f32 run shapes and f64 pair, complete eightbyte-class merging,
    function pointers, and target ABI selection instead of host-assumed
-   `64`-bit `usize`). Within the INTEGER class, the two-member
-   narrow-plus-wide pair shapes are now covered (§32) and the leaf-flattening
-   of nested integer members follows Clang as well (§33); the remaining
-   INTEGER-class gap is the SSE-side leaf flattening of nested members
-   (e.g. `{ struct { float f; } a; long b; }` → `(float, i64)`), which stays
-   rejected with `E0473` because the current SSE classes only recognise
-   direct members.
+   `64`-bit `usize`). The INTEGER and SSE classes now follow Clang's
+   leaf-flattening rule, so nested members are covered as well (§32, §33,
+   §34); the remaining gaps are the register pairs Clang supports that Kyn
+   still rejects (for example `(float, float)` for a 16-byte aggregate with
+   one `f32` per eightbyte, or a pointer member, which has no integer
+   transport type).
 3. **Tagged unions / explicit error-return types** (`Result`-style value flow
    without hidden exceptions or unwinding).
 4. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
@@ -1224,6 +1230,59 @@ branch history; this increment does not redo them.
   remaining leaf-flattening gap; it needs its own boundary classes because
   the current SSE classes only recognise direct members, and until then the
   nested SSE shapes stay rejected with `E0473`.
+
+## 34. Leaf-based C ABI boundary classification increment (implemented, pending merge)
+
+- Scope: the register of an eightbyte is now decided by the *leaves* it
+  carries, with nested structs flattened into their members exactly as Clang
+  does. Previously the classification matched the aggregate's direct members,
+  so a nested member was rejected with `E0473` even when Clang supports the
+  layout. The rule was probed with Clang 23.1.2 before implementing, over 31
+  shapes:
+  - nested integer: `{ struct { short x; } a; long b; }` → `(i16, i64)`,
+    `{ struct { int x; } a; long b; }` → `(i32, i64)`,
+    `{ long a; struct { short x; } b; }` → `(i64, i16)`
+  - nested float: `{ struct { float f; } a; long b; }` → `(float, i64)`,
+    `{ struct { float f; } a; }` → `(float)`
+  - nested double pair: `{ struct { double x; double y; } pair; }` →
+    `(double, double)`
+  - a nested member with several leaves merges its eightbyte and keeps the
+    packed form, exactly as Clang does
+- Implementation:
+  - `compiler/sema.zig`: the leaf model grew into the single source of truth
+    for the boundary. `EightbyteLeaf` now counts the leaves of an eightbyte
+    and records the lone leaf (kind, width, byte offset); `EightbyteRegister`
+    names the register an eightbyte travels in (an integer width, `f32`,
+    `f64` or `<2 x float>`). `collectAggregateLeaves` walks nested structs and
+    `classifyRegisterPair` maps a register pair to the boundary class. The
+    previous member-shape rules and the separate multi-member classifier were
+    removed: the register-pair table subsumes them, which removed roughly 400
+    lines of classification rules.
+  - `compiler/backend/llvm.zig`: the argument registers and the return
+    transport now come from the boundary class (`sseBoundaryParams` and
+    `sseReturnTransport`) instead of the aggregate's direct members, so a
+    nested member is loaded from and stored into the byte slot that holds
+    it. Every two-register class uses the same slot layout (bytes 0-7 then
+    bytes 8-15), which also replaced the field-index lowering. Three classes
+    that shared a transport with another class (`.sse_i64_f32x`,
+    `.sse_i64_f64x` and `.sse_f64_i64x`) were removed, and the dead
+    `boundaryMemberType` helper went with them.
+- Validation: `zig build`, `zig build -Doptimize=ReleaseSafe`, `zig build test`
+  and `zig fmt --check build.zig compiler build-system` pass; the integration
+  suite passes in all four profiles (`debug`, `safe`, `release`, `fast`) with
+  `165 passed, 0 failed`. The generated signatures of 31 probed shapes were
+  compared against Clang and match, and the new `cabi_nested_sse_widths`
+  fixture (exit 57) exercises the nested layouts in both directions.
+- Test changes: the negative fixtures `abi_sse_integer_param` and
+  `abi_sseup_pair` asserted a limitation that no longer exists, so they
+  became the positive fixture `cabi_nested_sse_widths`; the matching unit
+  expectations moved from `E0473` to accepted layouts. No other test changed.
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
+- No sanitizer run was performed; no sanitizer gate is configured. Interop
+  used the installed `clang` (v23.1.2).
+- Pending: this increment is not yet committed, pushed, or merged. The next
+  action is a branch, commit, PR, green CI, merge, and post-merge gates.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

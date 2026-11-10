@@ -1788,9 +1788,6 @@ pub const BoundaryClass = enum {
     sse_i64_f64,
     sse_f32x2_i32,
     sse_f32x2_i64,
-    sse_i64_f32x,
-    sse_i64_f64x,
-    sse_f64_i64x,
     sse_i64_v2f32,
     sse_f64_v2f32,
     sse_v2f32_f64,
@@ -1805,355 +1802,84 @@ pub const BoundaryClass = enum {
 pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     if (builtin.target.os.tag != .linux or builtin.target.cpu.arch != .x86_64) return null;
     const layout = aggregateLayoutGuess(ty) orelse return null;
-    if (layout.size <= 16) {
-        var eightbytes = [_]AggregateEightbyte{ .{}, .{} };
-        if (!classifyAggregateEightbytes(ty, 0, &eightbytes)) return null;
-        if (ty.* == .struct_type and layout.size == 16) {
-            const fields = ty.struct_type.fields;
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                fields[1].ty.* == .float and fields[1].ty.float == 64)
-            {
-                // The System V ABI assigns the two eightbytes to separate XMM
-                // registers; LLVM returns { double, double } and flattens the
-                // two argument registers to scalar double parameters.
-                return .sse_f64x2;
-            }
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                isIntLikeWithWidth(fields[1].ty, 32) and
-                eightbytes[0].has_sse and !eightbytes[0].has_integer and
-                eightbytes[1].has_integer and !eightbytes[1].has_sse)
-            {
-                // This exact natural layout merges to SSE in eightbyte 0 and
-                // INTEGER in eightbyte 1: LLVM uses double/i32 parameters and
-                // a { double, i32 } return coercion; signedness is irrelevant.
-                return .sse_f64_i32;
-            }
-            if (fields.len == 2 and
-                isIntLikeWithWidth(fields[0].ty, 32) and
-                fields[1].ty.* == .float and fields[1].ty.float == 64 and
-                eightbytes[0].has_integer and !eightbytes[0].has_sse and
-                eightbytes[1].has_sse and !eightbytes[1].has_integer)
-            {
-                // The reverse exact layout is INTEGER then SSE. LLVM uses
-                // i32/double parameters and a { i32, double } return value.
-                // Integer signedness does not affect the register class.
-                return .sse_i32_f64;
-            }
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 32 and
-                fields[1].ty.* == .float and fields[1].ty.float == 64 and
-                eightbytes[0].has_sse and !eightbytes[0].has_integer and
-                eightbytes[1].has_sse and !eightbytes[1].has_integer)
-            {
-                // Two SSE-only eightbytes: LLVM uses float/double parameters
-                // in field order and returns { float, double }.
-                return .sse_f32_f64;
-            }
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                fields[1].ty.* == .float and fields[1].ty.float == 32 and
-                eightbytes[0].has_sse and !eightbytes[0].has_integer and
-                eightbytes[1].has_sse and !eightbytes[1].has_integer)
-            {
-                // The reverse exact layout is SSE then SSE. LLVM uses
-                // double/float parameters in field order and returns
-                // { double, float }.
-                return .sse_f64_f32;
-            }
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 32 and
-                isIntLikeWithWidth(fields[1].ty, 64) and
-                eightbytes[0].has_sse and !eightbytes[0].has_integer and
-                eightbytes[1].has_integer and !eightbytes[1].has_sse)
-            {
-                // One SSE-only eightbyte then one INTEGER-only eightbyte.
-                // LLVM uses float/i64 parameters in field order and returns
-                // { float, i64 }; signedness is irrelevant.
-                return .sse_f32_i64;
-            }
-            if (fields.len == 2 and
-                isIntLikeWithWidth(fields[0].ty, 64) and
-                fields[1].ty.* == .float and fields[1].ty.float == 32 and
-                eightbytes[0].has_integer and !eightbytes[0].has_sse and
-                eightbytes[1].has_sse and !eightbytes[1].has_integer)
-            {
-                // The reverse exact layout is INTEGER then SSE. LLVM uses
-                // i64/float parameters in field order and returns
-                // { i64, float }.
-                return .sse_i64_f32;
-            }
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                isIntLikeWithWidth(fields[1].ty, 64) and
-                eightbytes[0].has_sse and !eightbytes[0].has_integer and
-                eightbytes[1].has_integer and !eightbytes[1].has_sse)
-            {
-                // One SSE-only eightbyte then one INTEGER-only eightbyte.
-                // LLVM uses double/i64 parameters in field order and returns
-                // { double, i64 }.
-                return .sse_f64_i64;
-            }
-            if (fields.len == 2 and
-                isIntLikeWithWidth(fields[0].ty, 64) and
-                fields[1].ty.* == .float and fields[1].ty.float == 64 and
-                eightbytes[0].has_integer and !eightbytes[0].has_sse and
-                eightbytes[1].has_sse and !eightbytes[1].has_integer)
-            {
-                // The reverse exact layout is INTEGER then SSE. LLVM uses
-                // i64/double parameters in field order and returns
-                // { i64, double }.
-                return .sse_i64_f64;
-            }
-            if (fields.len == 2 and
-                fields[1].ty.* == .float and fields[1].ty.float == 64 and
-                (fields[0].ty.* == .bool or
-                    isIntLikeWithWidth(fields[0].ty, 8) or
-                    isIntLikeWithWidth(fields[0].ty, 16)) and
-                eightbytes[0].has_integer and !eightbytes[0].has_sse and
-                eightbytes[1].has_sse and !eightbytes[1].has_integer)
-            {
-                // A single sub-32-bit-width member (or a bool, one byte) is
-                // passed at its own width.
-                // LLVM uses the member-width integer and a double, returning
-                // the pair; signedness is irrelevant.
-                if (fields[0].ty.* == .bool) return .sse_i8_f64;
-                if (isIntLikeWithWidth(fields[0].ty, 16)) return .sse_i16_f64;
-                return .sse_i8_f64;
-            }
-            if (fields.len == 2 and
-                fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                (fields[1].ty.* == .bool or
-                    isIntLikeWithWidth(fields[1].ty, 8) or
-                    isIntLikeWithWidth(fields[1].ty, 16)) and
-                eightbytes[0].has_sse and !eightbytes[0].has_integer and
-                eightbytes[1].has_integer and !eightbytes[1].has_sse)
-            {
-                // The reverse layout is double then a sub-32-bit-width member.
-                if (fields[1].ty.* == .bool) return .sse_f64_i8;
-                if (isIntLikeWithWidth(fields[1].ty, 16)) return .sse_f64_i16;
-                return .sse_f64_i8;
-            }
-        }
-        if (ty.* == .struct_type) {
-            if (classifyMixedRunAggregate(ty.struct_type.fields, &eightbytes)) |class| return class;
-        }
-        const count: usize = @intCast((layout.size + 7) / 8);
-        var sse_only_count: usize = 0;
-        for (eightbytes[0..count]) |class| {
-            if (class.has_sse and !class.has_integer) sse_only_count += 1;
-        }
-        if (sse_only_count != 0) {
-            // At least one SSE-only eightbyte: accept only exact single-register
-            // shapes (adjacent direct f32 runs, or one scalar float). Any other
-            // mixture of SSE-only and INTEGER eightbytes is rejected.
-            if (ty.* != .struct_type) return null;
-            const fields = ty.struct_type.fields;
-            var all_f32 = true;
-            for (fields) |field| {
-                if (field.ty.* != .float or field.ty.float != 32) {
-                    all_f32 = false;
-                    break;
-                }
-            }
-            const field_count: usize = @intCast(fields.len);
-            if (all_f32) {
-                const expected_size: usize = field_count * 4;
-                if (field_count == 1 and expected_size == 4 and sse_only_count == 1) return .sse_float;
-                if (field_count == 2 and expected_size == 8 and sse_only_count == 1) return .sse_f32x2;
-                if (field_count == 3 and expected_size == 12 and sse_only_count == 2) return .sse_f32x3;
-                if (field_count == 4 and expected_size == 16 and sse_only_count == 2) return .sse_f32x4;
-                return null;
-            }
-            if (fields.len == 1 and fields[0].ty.* == .float and sse_only_count == 1) {
-                return switch (fields[0].ty.float) {
-                    32 => .sse_float,
-                    64 => .sse_double,
-                    else => null,
-                };
-            }
-            return null;
-        }
+    if (layout.size > 16) return .memory;
+    if (ty.* != .struct_type) {
+        // A non-struct aggregate (a slice) travels as one packed INTEGER
+        // value, matching the C struct `{ T *ptr; size_t len; }`.
+        if (layout.size <= 8) return .small_1;
+        return .small_2;
     }
-    if (layout.size <= 8) return .small_1;
-    if (layout.size <= 16 and ty.* == .struct_type) {
-        // Two eightbytes that each carry exactly one integer leaf are
-        // lowered as (iM, iN) at the leaf widths, matching Clang: the narrow
-        // leaf travels in an 8/16/32-bit register and the wide one in an i64
-        // register. Two wide leaves keep the .small_2 signature.
+
+    var leaves = [_]EightbyteLeaf{ .{}, .{} };
+    if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
+    const first_sse_only = isFloatOnly(leaves[0]);
+    const second_sse_only = isFloatOnly(leaves[1]);
+
+    if (layout.size > 8) {
+        // The aggregate spans both eightbytes and travels in two registers.
+        if (first_sse_only or second_sse_only) {
+            const first = eightbyteRegister(leaves[0]) orelse return null;
+            const second = eightbyteRegister(leaves[1]) orelse return null;
+            return classifyRegisterPair(first, second) orelse null;
+        }
+        // Both eightbytes are INTEGER-only: a lone integer leaf per eightbyte
+        // travels at its own width, everything else is packed.
         if (smallPairLeaves(ty) != null) return .small_2s;
+        return .small_2;
     }
-    if (layout.size <= 16) return .small_2;
-    return .memory;
-}
 
-// Three- and four-member aggregates whose eightbytes split strictly into an
-// SSE-only slot and an INTEGER-or-merged slot. All accepted shapes are exact
-// and verified against Clang IR; `char`, `bool` and 8/16/32-bit enum backings
-// count as i32-like integer members, and 64-bit enum backings count as
-// i64-like members. Any other member falls through to the existing all-SSE /
-// INTEGER-only paths or `E0473`.
-fn classifyMixedRunAggregate(
-    fields: []const types.Field,
-    eightbytes: *const [2]AggregateEightbyte,
-) ?BoundaryClass {
-    var f32_count: usize = 0;
-    var f64_count: usize = 0;
-    var i32_count: usize = 0;
-    var i64_count: usize = 0;
-    for (fields) |field| {
-        switch (field.ty.*) {
-            .float => |bits| switch (bits) {
-                32 => f32_count += 1,
-                64 => f64_count += 1,
-                else => return null,
-            },
-            .int => |info| switch (info.bits) {
-                8, 16, 32 => i32_count += 1,
-                64 => i64_count += 1,
-                else => return null,
-            },
-            .enum_type => |info| switch (info.backing.intInfo().bits) {
-                1, 8, 16, 32 => i32_count += 1,
-                64 => i64_count += 1,
-                else => return null,
-            },
-            .char => i32_count += 1,
-            .bool => i32_count += 1,
-            else => return null,
+    // The aggregate travels in a single register.
+    if (first_sse_only) {
+        if (leaves[0].count == 1) {
+            const single = leaves[0].singleton orelse return null;
+            return switch (single.bits) {
+                32 => .sse_float,
+                64 => .sse_double,
+                else => null,
+            };
         }
-    }
-    // No float members: leave the aggregate to the all-INTEGER paths.
-    if (f32_count + f64_count == 0) return null;
-
-    const eb0_sse = eightbytes[0].has_sse and !eightbytes[0].has_integer;
-    const eb0_int = eightbytes[0].has_integer;
-    const eb1_sse = eightbytes[1].has_sse and !eightbytes[1].has_integer;
-    const eb1_int = eightbytes[1].has_integer;
-
-    // Integer-only EB0 (any smaller-width int/enum members totaling ≤ 8
-    // bytes, merged into one INTEGER eightbyte), then a single SSE-only
-    // f64/f32 in EB1. Clang passes the packed EB0 as one i64 register and
-    // the EB1 as its scalar SSE register, which is the .sse_i64_f64x /
-    // .sse_i64_f32x signature (two parameters, packed, ret { i64, double }
-    // or { i64, float }). EB1 must carry only the float; an INTEGER member
-    // in the same eightbyte merges the class to INTEGER and must remain
-    // rejected.
-    if (f64_count == 1 and f32_count == 0 and eb0_int and !eb0_sse and eb1_sse and !eb1_int and fields.len >= 3) {
-        return .sse_i64_f64x;
-    }
-    if (f32_count == 1 and f64_count == 0 and eb0_int and !eb0_sse and eb1_sse and !eb1_int and fields.len >= 3) {
-        return .sse_i64_f32x;
-    }
-    if (fields.len == 3) {
-        if (f32_count == 2 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_sse and eb1_int and !eightbytes[1].has_sse) {
-            // {f32, f32, i32/u32}: <2 x float> then i32.
-            return .sse_f32x2_i32;
-        }
-        if (f32_count == 2 and i64_count == 1 and f64_count == 0 and i32_count == 0 and eb0_sse and eb1_int and !eightbytes[1].has_sse) {
-            // {f32, f32, i64/u64}: <2 x float> then i64.
-            return .sse_f32x2_i64;
-        }
-        if (i32_count == 1 and f32_count == 2 and f64_count == 0 and i64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
-            // {i32/u32, f32, f32} / {f32, i32/u32, f32}: merged INTEGER then float.
-            return .sse_i64_f32x;
-        }
-        if (i32_count == 1 and f32_count == 1 and f64_count == 1 and i64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
-            // {i32/u32, f32, f64} / {f32, i32/u32, f64}: merged INTEGER then double.
-            return .sse_i64_f64x;
-        }
-        if (i64_count == 1 and f32_count == 2 and i32_count == 0 and f64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
-            // {i64/u64, f32, f32}: i64 then <2 x float>.
-            return .sse_i64_v2f32;
-        }
-        if (f64_count == 1 and i32_count == 2 and f32_count == 0 and i64_count == 0 and eb0_sse and eb1_int) {
-            // {f64, i32/u32, i32/u32}: double then merged INTEGER.
-            return .sse_f64_i64x;
-        }
-        if (f64_count == 1 and i32_count == 1 and f32_count == 1 and i64_count == 0 and eb0_sse and eb1_int) {
-            // {f64, i32/u32, f32}: double then merged INTEGER.
-            return .sse_f64_i64x;
-        }
-        // A/B: same member multiset, distinguished by field order.
-        if (f64_count == 1 and f32_count == 2 and i32_count == 0 and i64_count == 0 and eb0_sse and eb1_sse and fields[0].ty.* == .float and fields[0].ty.float == 64) {
-            // {f64, f32, f32}: double then <2 x float>.
-            return .sse_f64_v2f32;
-        }
-        if (f32_count == 2 and f64_count == 1 and i32_count == 0 and i64_count == 0 and eb0_sse and eb1_sse and fields[2].ty.* == .float and fields[2].ty.float == 64) {
-            // {f32, f32, f64}: <2 x float> then double.
-            return .sse_v2f32_f64;
-        }
+        if (leaves[0].count == 2) return .sse_f32x2;
         return null;
     }
-
-    if (fields.len == 4) {
-        // {f32, f32, i32/u32, f32}: SSE(2x f32) then merged INTEGER.
-        if (f32_count == 3 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_sse and eb1_int) {
-            return .sse_f32x2_i64;
-        }
-        // {i32/u32, f32, f32, f32} / {f32, i32/u32, f32, f32}:
-        // merged INTEGER then <2 x float>.
-        if (f32_count == 3 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_int and !eb0_sse and eb1_sse) {
-            return .sse_i64_v2f32;
-        }
-        return null;
-    }
-
-    return null;
+    return .small_1;
 }
 
-const AggregateEightbyte = struct {
-    has_integer: bool = false,
-    has_sse: bool = false,
-};
-
-fn classifyAggregateEightbytes(
-    ty: *Type,
-    base_offset: u64,
-    classes: *[2]AggregateEightbyte,
-) bool {
-    switch (ty.*) {
-        .struct_type => |info| {
-            var offset = base_offset;
-            for (info.fields) |field| {
-                const field_layout = aggregateLayoutGuess(field.ty) orelse return false;
-                offset = std.mem.alignForward(u64, offset, field_layout.align_);
-                if (!classifyAggregateEightbytes(field.ty, offset, classes)) return false;
-                offset += field_layout.size;
-            }
-            return true;
+/// Classifies the pair of registers a two-eightbyte aggregate travels in.
+/// Every accepted pair was verified against Clang IR probes.
+fn classifyRegisterPair(first: EightbyteRegister, second: EightbyteRegister) ?BoundaryClass {
+    return switch (first) {
+        .f32 => switch (second) {
+            .i64 => .sse_f32_i64,
+            .f64 => .sse_f32_f64,
+            else => null,
         },
-        .enum_type => |info| return classifyAggregateEightbytes(info.backing, base_offset, classes),
-        .slice => return markAggregateEightbytes(classes, base_offset, 16, false),
-        .float => |bits| return markAggregateEightbytes(classes, base_offset, bits / 8, true),
-        .bool => return markAggregateEightbytes(classes, base_offset, 1, false),
-        .char => return markAggregateEightbytes(classes, base_offset, 4, false),
-        .int => |info| return markAggregateEightbytes(classes, base_offset, info.bits / 8, false),
-        .pointer => return markAggregateEightbytes(classes, base_offset, 8, false),
-        else => return false,
-    }
-}
-
-fn markAggregateEightbytes(
-    classes: *[2]AggregateEightbyte,
-    offset: u64,
-    size: u64,
-    is_sse: bool,
-) bool {
-    if (size == 0) return true;
-    const last_byte = offset + size - 1;
-    if (last_byte >= 16) return false;
-    const first: usize = @intCast(offset / 8);
-    const last: usize = @intCast(last_byte / 8);
-    for (classes[first .. last + 1]) |*class| {
-        if (is_sse) {
-            class.has_sse = true;
-        } else {
-            class.has_integer = true;
-        }
-    }
-    return true;
+        .f64 => switch (second) {
+            .i64 => .sse_f64_i64,
+            .i8 => .sse_f64_i8,
+            .i16 => .sse_f64_i16,
+            .i32 => .sse_f64_i32,
+            .f32 => .sse_f64_f32,
+            .f64 => .sse_f64x2,
+            .f32x2 => .sse_f64_v2f32,
+        },
+        .i64 => switch (second) {
+            .f32 => .sse_i64_f32,
+            .f64 => .sse_i64_f64,
+            .f32x2 => .sse_i64_v2f32,
+            else => null,
+        },
+        .i8 => if (second == .f64) .sse_i8_f64 else null,
+        .i16 => if (second == .f64) .sse_i16_f64 else null,
+        .i32 => if (second == .f64) .sse_i32_f64 else null,
+        .f32x2 => switch (second) {
+            .f32 => .sse_f32x3,
+            .f32x2 => .sse_f32x4,
+            .i32 => .sse_f32x2_i32,
+            .i64 => .sse_f32x2_i64,
+            .f64 => .sse_v2f32_f64,
+            .i8, .i16 => null,
+        },
+    };
 }
 
 pub const AggregateLayout = struct {
@@ -2185,17 +1911,53 @@ pub fn memberBoundaryBits(ty: *Type) ?u16 {
 }
 
 /// The scalar leaves carried by one eightbyte of an aggregate.
+/// How a scalar leaf travels at the C ABI boundary.
+pub const LeafKind = enum {
+    /// An integer scalar, which travels in an INTEGER register.
+    integer,
+    /// A floating-point scalar, which travels in an SSE register.
+    float,
+    /// A pointer, which travels in an INTEGER register but is never coerced
+    /// to an integer member width.
+    pointer,
+};
+
+/// A single scalar leaf of an aggregate.
+pub const AggregateLeaf = struct {
+    /// How the leaf travels at the C ABI boundary.
+    kind: LeafKind = .integer,
+    /// Width in bits of the leaf at the C ABI boundary.
+    bits: u16 = 0,
+    /// Byte offset of the leaf inside the aggregate.
+    offset: u64 = 0,
+};
+
+/// The scalar leaves carried by one eightbyte of an aggregate.
 pub const EightbyteLeaf = struct {
     /// Number of scalar leaves in the eightbyte.
     count: u16 = 0,
-    /// Set when the eightbyte carries exactly one integer scalar leaf, the
-    /// only shape that travels in a register narrower than the eightbyte
-    /// itself.
-    integer_singleton: bool = false,
-    /// Width in bits of that single integer leaf at the C ABI boundary.
-    bits: u16 = 0,
-    /// Byte offset of that single integer leaf inside the aggregate.
-    offset: u64 = 0,
+    /// Number of floating-point leaves in the eightbyte.
+    float_count: u16 = 0,
+    /// The lone leaf of the eightbyte, when it carries exactly one.
+    singleton: ?AggregateLeaf = null,
+};
+
+/// The kind of register an eightbyte travels in at the C ABI boundary.
+pub const EightbyteRegister = enum {
+    /// An INTEGER register holding an 8-bit integer.
+    i8,
+    /// An INTEGER register holding a 16-bit integer.
+    i16,
+    /// An INTEGER register holding a 32-bit integer.
+    i32,
+    /// An INTEGER register holding a 64-bit integer.
+    i64,
+    /// An SSE register holding one `float` value.
+    f32,
+    /// An SSE register holding one `double` value.
+    f64,
+    /// An SSE register holding two `float` values.
+    f32x2,
 };
 
 /// Counts the scalar leaves of `ty` per eightbyte. Nested structs are walked
@@ -2217,10 +1979,8 @@ fn collectAggregateLeaves(ty: *Type, base_offset: u64, leaves: *[2]EightbyteLeaf
         .bool => return recordIntegerLeaf(ty, base_offset, 1, leaves),
         .char => return recordIntegerLeaf(ty, base_offset, 4, leaves),
         .int => |info| return recordIntegerLeaf(ty, base_offset, @as(u64, info.bits / 8), leaves),
-        // A floating-point leaf makes the eightbyte SSE, and a pointer leaf
-        // travels as a pointer, so neither can be narrowed to a member width.
-        .float => |bits| return recordAggregateLeaf(base_offset, bits / 8, bits, false, leaves),
-        .pointer => return recordAggregateLeaf(base_offset, 8, 64, false, leaves),
+        .float => |bits| return recordFloatLeaf(base_offset, bits / 8, bits, leaves),
+        .pointer => return recordPointerLeaf(base_offset, leaves),
         else => return false,
     }
 }
@@ -2229,31 +1989,69 @@ fn collectAggregateLeaves(ty: *Type, base_offset: u64, leaves: *[2]EightbyteLeaf
 /// member width table.
 fn recordIntegerLeaf(ty: *Type, offset: u64, size: u64, leaves: *[2]EightbyteLeaf) bool {
     const bits = memberBoundaryBits(ty) orelse return false;
-    return recordAggregateLeaf(offset, size, bits, true, leaves);
+    return recordAggregateLeaf(offset, size, .{ .kind = .integer, .bits = bits, .offset = offset }, leaves);
 }
 
-fn recordAggregateLeaf(
-    offset: u64,
-    size: u64,
-    bits: u16,
-    is_integer: bool,
-    leaves: *[2]EightbyteLeaf,
-) bool {
+fn recordFloatLeaf(offset: u64, size: u64, bits: u16, leaves: *[2]EightbyteLeaf) bool {
+    return recordAggregateLeaf(offset, size, .{ .kind = .float, .bits = bits, .offset = offset }, leaves);
+}
+
+fn recordPointerLeaf(offset: u64, leaves: *[2]EightbyteLeaf) bool {
+    return recordAggregateLeaf(offset, 8, .{ .kind = .pointer, .bits = 64, .offset = offset }, leaves);
+}
+
+fn recordAggregateLeaf(offset: u64, size: u64, leaf: AggregateLeaf, leaves: *[2]EightbyteLeaf) bool {
     if (size == 0) return true;
     const last_byte = offset + size - 1;
     if (last_byte >= 16) return false;
     const first: usize = @intCast(offset / 8);
     const last: usize = @intCast(last_byte / 8);
-    for (leaves[first .. last + 1]) |*leaf| {
-        leaf.count += 1;
+    for (leaves[first .. last + 1]) |*eightbyte| {
+        eightbyte.count += 1;
+        if (leaf.kind == .float) eightbyte.float_count += 1;
         // A leaf spanning two eightbytes never travels alone in a register.
-        if (leaf.count == 1 and is_integer and first == last) {
-            leaf.integer_singleton = true;
-            leaf.bits = bits;
-            leaf.offset = offset;
-        }
+        if (eightbyte.count == 1 and first == last) eightbyte.singleton = leaf;
     }
     return true;
+}
+
+/// True when the eightbyte carries only floating-point leaves, which is the
+/// SSE class of the System V ABI.
+fn isFloatOnly(leaf: EightbyteLeaf) bool {
+    return leaf.count > 0 and leaf.float_count == leaf.count;
+}
+
+/// Returns the register an eightbyte travels in, or null when the shape has no
+/// supported register.
+fn eightbyteRegister(leaf: EightbyteLeaf) ?EightbyteRegister {
+    if (leaf.count == 0) return null;
+    if (isFloatOnly(leaf)) {
+        if (leaf.count == 1) {
+            const single = leaf.singleton orelse return null;
+            return switch (single.bits) {
+                32 => .f32,
+                64 => .f64,
+                else => null,
+            };
+        }
+        // Two `float` leaves are the only pair that fits in one eightbyte.
+        if (leaf.count == 2) return .f32x2;
+        return null;
+    }
+    // The INTEGER class, possibly merged with a floating-point leaf.
+    if (leaf.count == 1) {
+        const single = leaf.singleton orelse return null;
+        if (single.kind != .integer) return null;
+        return switch (single.bits) {
+            8 => .i8,
+            16 => .i16,
+            32 => .i32,
+            64 => .i64,
+            else => null,
+        };
+    }
+    // A merged eightbyte always travels in a full 64-bit register.
+    return .i64;
 }
 
 /// Returns the two integer leaves of `ty` when each eightbyte carries exactly
@@ -2266,10 +2064,12 @@ pub fn smallPairLeaves(ty: *Type) ?[2]EightbyteLeaf {
     var leaves = [_]EightbyteLeaf{ .{}, .{} };
     if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
     if (leaves[0].count != 1 or leaves[1].count != 1) return null;
-    if (!leaves[0].integer_singleton or !leaves[1].integer_singleton) return null;
+    const first = leaves[0].singleton orelse return null;
+    const second = leaves[1].singleton orelse return null;
+    if (first.kind != .integer or second.kind != .integer) return null;
     // Exactly one leaf is narrower than a full register: two narrow leaves
     // have no transport type and two wide leaves keep the `.small_2` packing.
-    if ((leaves[0].bits < 64) == (leaves[1].bits < 64)) return null;
+    if ((first.bits < 64) == (second.bits < 64)) return null;
     return leaves;
 }
 
@@ -2559,12 +2359,13 @@ test "aggregate parameters and returns are supported within Kyn" {
 }
 
 test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
-    try expectSemanticError(
+    try expectClean(
         \\struct Inner { count: i32 }
         \\struct Nested { inner: Inner, amount: f64 }
-        \\extern fn c_take(value: Nested);
+        \\extern fn c_take(value: Nested) Nested;
+        \\export fn kyn_identity(value: Nested) Nested { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectClean(
         \\struct WideInt { amount: f64, count: i64 }
@@ -2579,12 +2380,12 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
         \\fn main() i32 { return 0; }
     );
 
-    try expectSemanticError(
+    try expectClean(
         \\struct Inner { count: i32 }
         \\struct Nested { inner: Inner, amount: f64 }
         \\export fn kyn_make() Nested { return Nested { inner: Inner { count: 1 }, amount: 2.0 }; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectClean(
         \\struct IntDouble { count: i32, amount: f64 }
@@ -2897,12 +2698,13 @@ test "C ABI multi-member eightbyte layouts accept exact runs" {
         \\fn main() i32 { return 0; }
     , "E0473");
 
-    try expectSemanticError(
+    try expectClean(
         \\struct FloatLeaf { value: f32 }
         \\struct NestedFloat { inner: FloatLeaf, amount: i64 }
         \\extern fn c_take_nested(value: NestedFloat) NestedFloat;
+        \\export fn kyn_identity_nested(value: NestedFloat) NestedFloat { return value; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 }
 
 test "unsupported C ABI aggregate parameters and returns use a dedicated diagnostic" {
@@ -2948,12 +2750,13 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
         \\fn main() i32 { return 0; }
     );
 
-    try expectSemanticError(
+    try expectClean(
         \\struct DoublePair { x: f64, y: f64 }
         \\struct NestedPair { pair: DoublePair }
-        \\extern fn c_take(pair: NestedPair);
+        \\extern fn c_take(pair: NestedPair) NestedPair;
+        \\export fn kyn_identity(pair: NestedPair) NestedPair { return pair; }
         \\fn main() i32 { return 0; }
-    , "E0473");
+    );
 
     try expectSemanticError(
         \\extern fn c_take(values: [2]i32);

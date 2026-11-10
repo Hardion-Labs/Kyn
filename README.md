@@ -310,7 +310,8 @@ build.zig            Builds the toolchain and wires test steps
 | Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Shipped in `v0.1.0-alpha.3` |
 | Relative-path imports, qualified aliases and module namespaces | ✅ Shipped in `v0.1.0-alpha.3` |
 | Integer-class mixed float/integer aggregate C ABI cases | ✅ Shipped in `v0.1.0-alpha.3` |
-| Integer-pair aggregate C ABI coercions (`{ i8, i64 }`, `{ i16, i64 }`, `{ i32, i64 }`, the reversed layouts and nested integer members) | 🟡 Partial |
+| Integer-pair aggregate C ABI coercions (`{ i8, i64 }`, `{ i16, i64 }`, `{ i32, i64 }`, the reversed layouts) | 🟡 Partial |
+| Nested-member C ABI coercions (leaf-flattened integer, `f32` and `f64` members) | 🟡 Partial |
 | SSE aggregate C ABI coercions (scalar, `f32`/`f64` pairs, `f32` triple/quad, mixed widths, `i8`/`i16`/`bool` members, layouts splitting SSE/INTEGER eightbytes) | 🟡 Partial |
 | Explicit all-check runtime policy across profiles | ✅ Implemented |
 
