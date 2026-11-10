@@ -1,0 +1,16 @@
+struct FloatLong { amount: f32, count: i64 }
+
+extern fn c_transform(value: FloatLong) FloatLong;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: FloatLong) FloatLong {
+    return FloatLong {
+        amount: value.amount + 1.0,
+        count: value.count + 3,
+    };
+}
+
+fn main() i32 {
+    let result: FloatLong = c_transform(FloatLong { amount: 1.5, count: 4 });
+    return (result.amount as i32) + (result.count as i32) + c_verify_kyn();
+}

@@ -212,7 +212,12 @@ fn log_message() {
   `{ double, double }` return coercion; a direct `{ f32, f64 }` struct with
   fields at offsets 0 and 8 uses `float, double` arguments and a
   `{ float, double }` return; the reverse `{ f64, f32 }` uses `double, float`
-  and `{ double, float }`; and a direct
+  and `{ double, float }`; a direct `{ f32, i64 }` or `{ f32, u64 }` uses
+  `float, i64` arguments and `{ float, i64 }` return; the reverse
+  `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and `{ i64, float }`;
+  `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and `{ double, i64 }`;
+  and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`;
+  and a direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with fields at offsets 0 and 8 uses
   `double, i32` arguments and `{ double, i32 }` return coercion; the reverse
   `{ i32, f64 }` or `{ u32, f64 }` uses `i32, double` and
@@ -463,7 +468,10 @@ let sum: i32 = add(1, 2);
   `<2 x float>, float`, four-adjacent-`f32` structs via `<2 x float>, <2 x float>`,
   two-direct-`f64` structs via two SSE argument
   registers, direct `{ f32, f64 }` and `{ f64, f32 }` structs via their two SSE
-  argument registers, direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
+  argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` /
+  `{ f64, u64 }` structs via one SSE and one INTEGER argument register, and the
+  reverse `{ i64, f32 }` / `{ i64, f64 }` layouts via INTEGER then SSE,
+  direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
   direct `{ i32, f64 }` structs via INTEGER `i32` plus SSE `double`, and larger
   aggregates passed via `byval`; fixed arrays and other unsupported small
   layouts are rejected with `E0473`.

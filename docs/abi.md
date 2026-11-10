@@ -35,6 +35,11 @@ extern fn free(ptr: *u8);
   `{ f32, f64 }` struct with natural fields at offsets 0 and 8 uses
   `float, double` arguments and returns as `{ float, double }`; the reverse
   `{ f64, f32 }` layout uses `double, float` and `{ double, float }`. A
+  direct `{ f32, i64 }` or `{ f32, u64 }` uses `float, i64` arguments and
+  returns as `{ float, i64 }`; the reverse `{ i64, f32 }` / `{ u64, f32 }`
+  uses `i64, float` and `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }`
+  use `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }`
+  use `i64, double` and `{ i64, double }`. A
   direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
   8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
@@ -110,7 +115,12 @@ Caveats:
   SSE/SSEUP, and a two-field direct `f64` struct uses two SSE registers.
   Exact direct layouts `{ f32, f64 }` use `float, double` parameters and
   `{ float, double }` returns; `{ f64, f32 }` use `double, float` and
-  `{ double, float }`. Exact direct layouts `{ f64, i32 }` / `{ f64, u32 }`
+  `{ double, float }`. Exact direct layouts `{ f32, i64 }` / `{ f32, u64 }` use
+  `float, i64` parameters and `{ float, i64 }` returns; `{ i64, f32 }` /
+  `{ u64, f32 }` use `i64, float` and `{ i64, float }`; `{ f64, i64 }` /
+  `{ f64, u64 }` use `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` /
+  `{ u64, f64 }` use `i64, double` and `{ i64, double }`. Exact direct
+  layouts `{ f64, i32 }` / `{ f64, u32 }`
   use `double, i32`
   parameters and `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use
   `i32, double` and `{ i32, double }`.
