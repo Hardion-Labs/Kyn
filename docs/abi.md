@@ -39,7 +39,15 @@ extern fn free(ptr: *u8);
   returns as `{ float, i64 }`; the reverse `{ i64, f32 }` / `{ u64, f32 }`
   uses `i64, float` and `{ i64, float }`; `{ f64, i64 }` / `{ f64, u64 }`
   use `double, i64` and `{ double, i64 }`; and `{ i64, f64 }` / `{ u64, f64 }`
-  use `i64, double` and `{ i64, double }`. Exact multi-member layouts
+  use `i64, double` and `{ i64, double }`. A direct `{ i8/u8, f64 }` or
+  `{ i16/u16, f64 }` uses the member-width integer and `double`, and returns
+  `{ i8, double }` / `{ i16, double }`; the reverse `{ f64, i8/u8 }` /
+  `{ f64, i16/u16 }` uses `double, i8` / `double, i16` and returns
+  `{ double, i8 }` / `{ double, i16 }`. Members smaller than 32 bits (`i8`,
+  `u8`, `i16`, `u16`) and `bool` are also accepted inside `INTEGER`-merged
+  eightbytes, where Clang passes the packed `i64` irrespective of member
+  widths; singleton small members are passed at their own width, and a
+  singleton `bool` member remains rejected (`E0473`). Exact multi-member layouts
   whose eightbytes split into an SSE-only slot and an INTEGER/merged slot
   are also supported with their probed Clang coercions: `{ f32, f32, i32 }`
   (`<2 x float>, i32` arguments and `{ <2 x float>, i32 }` returns),
@@ -136,7 +144,11 @@ Caveats:
   layouts `{ f64, i32 }` / `{ f64, u32 }`
   use `double, i32`
   parameters and `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use
-  `i32, double` and `{ i32, double }`. Exact multi-member layouts whose
+  `i32, double` and `{ i32, double }`. Exact direct layouts `{ i8/u8, f64 }`
+  pass the member at its width with `double`, returning `{ i8, double }`;
+  `{ i16/u16, f64 }` the same with `i16`; the reverse `{ f64, i8/u8 }` /
+  `{ f64, i16/u16 }` use `double, i8` / `double, i16` and `{ double, i8 }` /
+  `{ double, i16 }` returns. Exact multi-member layouts whose
   eightbytes split into an SSE-only slot and an INTEGER/merged slot use their
   probed Clang coercions (`{ f32, f32, i32 }`, `{ f32, f32, i64/u64 }`,
   `{ i32/u32/i64/u64, f32, f32 }`, `{ f32, i32/u32, f32 }`, `{ i32/u32, f32, f64 }`,
@@ -240,7 +252,7 @@ clang hello.o -o hello
 - fixed-size array parameters and returns by value, and aggregate layouts not
   supported by the selected target/classifier (including `SSE`-only forms
   outside the supported scalar/pair/triple/quad and multi-member run
-  shapes) (`E0473`);
+  shapes, and singleton-`bool`-member layouts) (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

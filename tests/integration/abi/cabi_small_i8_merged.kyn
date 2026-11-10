@@ -1,0 +1,17 @@
+struct TinyFloatPair { count: i8, low: f32, mid: f32 }
+
+extern fn c_transform(value: TinyFloatPair) TinyFloatPair;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: TinyFloatPair) TinyFloatPair {
+    return TinyFloatPair {
+        count: value.count + 3,
+        low: value.low + 2.0,
+        mid: value.mid + 3.0,
+    };
+}
+
+fn main() i32 {
+    let result: TinyFloatPair = c_transform(TinyFloatPair { count: 1, low: 1.5, mid: 2.5 });
+    return (result.count as i32) + (result.low as i32) + (result.mid as i32) + c_verify_kyn();
+}

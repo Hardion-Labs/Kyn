@@ -38,6 +38,21 @@ promised between alpha releases.
   `cabi_mixed_i64_f32`, `cabi_mixed_f64_i64` and `cabi_mixed_i64_f64` cover
   argument and return paths in both directions; other mixed-class layouts
   remain rejected with `E0473`.
+- C ABI support on `x86_64` Linux for exactly two direct small integer members
+  at natural offsets 0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }`
+  passes as `i8, double` with a `{ i8, double }` return; `{ i16/u16, f64 }`
+  uses `i16, double` and `{ i16, double }`; the reverse `{ f64, i8/u8 }` and
+  `{ f64, i16/u16 }` use `double, i8` / `double, i16` and the matching
+  `{ double, i8 }` / `{ double, i16 }` returns. Clang IR probes confirm
+  member-width lowerings. Integration fixtures `cabi_small_i8_f64`,
+  `cabi_small_f64_i16` and `cabi_small_i8_merged` cover argument and return
+  paths in both directions. Additionally, sub-32-bit integer members (`i8`,
+  `u8`, `i16`, `u16`) and `bool` are now accepted inside merged-INTEGER
+  eightbytes for the existing multi-member layouts (Clang passes the packed
+  `i64` irrespective of member widths); singleton-member small-integer
+  layouts use their member width, and singleton `bool` remains rejected with
+  `E0473`. Negative `E0473` fixtures moved from a now-supported `{ i16, f64 }`
+  to a rejected singleton-`bool` layout.
 - C ABI support on `x86_64` Linux for exact multi-member 12/16-byte layouts
   whose eightbytes split into an SSE-only slot and an INTEGER/merged slot,
   verified against Clang IR probes: `{ f32, f32, i32/u32 }`

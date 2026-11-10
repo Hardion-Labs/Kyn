@@ -1,0 +1,16 @@
+struct DoubleSmall { ratio: f64, count: i16 }
+
+extern fn c_transform(value: DoubleSmall) DoubleSmall;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: DoubleSmall) DoubleSmall {
+    return DoubleSmall {
+        ratio: value.ratio + 2.0,
+        count: value.count + 3,
+    };
+}
+
+fn main() i32 {
+    let result: DoubleSmall = c_transform(DoubleSmall { ratio: 1.5, count: 4 });
+    return (result.ratio as i32) + (result.count as i32) + c_verify_kyn();
+}

@@ -216,7 +216,14 @@ fn log_message() {
   `float, i64` arguments and `{ float, i64 }` return; the reverse
   `{ i64, f32 }` / `{ u64, f32 }` uses `i64, float` and `{ i64, float }`;
   `{ f64, i64 }` / `{ f64, u64 }` use `double, i64` and `{ double, i64 }`;
-  and `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`;
+  `{ i64, f64 }` / `{ u64, f64 }` use `i64, double` and `{ i64, double }`;
+  direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` use member-width `i8`/`i16`
+  parameters and `{ i8, double }` / `{ i16, double }` returns; the reverse
+  `{ f64, i8/u8 }` / `{ f64, i16/u16 }` uses `double, i8` / `double, i16`
+  and `{ double, i8 }` / `{ double, i16 }` returns; sub-32-bit integer
+  members and `bool` are also accepted inside `INTEGER`-merged eightbytes
+  (packed `i64` passed irrespective of member widths), while a singleton
+  `bool` member remains rejected (`E0473`);
   the exact multi-member layouts `{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,
   `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`, `{ f64, i32/u32, i32/u32 }`,
@@ -479,6 +486,10 @@ let sum: i32 = add(1, 2);
   argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` /
   `{ f64, u64 }` structs via one SSE and one INTEGER argument register, and the
   reverse `{ i64, f32 }` / `{ i64, f64 }` layouts via INTEGER then SSE,
+  direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` structs via exact-width INTEGER
+  plus SSE argument registers (the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }`
+  order is supported likewise), sub-32-bit integer members and `bool` inside
+  merged `INTEGER` eightbytes via a packed `i64` register,
   exact multi-member layouts with an SSE-only slot and an INTEGER/merged slot
   (`{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`,
   `{ f32, i32/u32, f32 }`, `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`,

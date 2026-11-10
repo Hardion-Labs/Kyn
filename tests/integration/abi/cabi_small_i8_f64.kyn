@@ -1,0 +1,16 @@
+struct TinyDouble { count: i8, ratio: f64 }
+
+extern fn c_transform(value: TinyDouble) TinyDouble;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: TinyDouble) TinyDouble {
+    return TinyDouble {
+        count: value.count + 3,
+        ratio: value.ratio + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: TinyDouble = c_transform(TinyDouble { count: 4, ratio: 1.5 });
+    return (result.count as i32) + (result.ratio as i32) + c_verify_kyn();
+}
