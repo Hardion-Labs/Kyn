@@ -21,12 +21,18 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
-- **ABI increment in progress (not yet committed):** the `.small_2s` boundary
-  class now follows Clang's leaf-flattening rule, so nested integer members
-  are classified by their leaves: `{ struct { short x; } a; long b; }` lowers
-  to `i16, i64` parameters and a `{ i16, i64 }` return instead of the packed
-  `.small_2` form. See §33 for the full scope, implementation map and
-  validation results.
+- **Latest ABI increment completed and merged (`48b2189`, PR #15):** the
+  `.small_2s` boundary class now follows Clang's leaf-flattening rule, so
+  nested integer members are classified by their leaves:
+  `{ struct { short x; } a; long b; }` lowers to `i16, i64` parameters and a
+  `{ i16, i64 }` return instead of the packed `.small_2` form. The semantic
+  analyzer owns the leaf model (`sema.smallPairLeaves`), so the
+  classification and the boundary lowering cannot drift apart.
+  `cabi_nested_pair_widths` covers the nested layouts in both directions.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/Safe/Release/Fast integration matrix
+  — all report `166 passed, 0 failed`. See §33 for the full scope,
+  implementation map and validation results.
 - **Latest ABI increment completed and merged (`1a76dbb`, PR #14):** two-member
   structs whose members occupy one eightbyte each and are both integer scalars
   now lower as `.small_2s` — each member passes in its own register at its own
@@ -1159,7 +1165,7 @@ branch history; this increment does not redo them.
   lowering; matching Clang's flattened form exactly requires leaf
   extraction across nested aggregates at the boundary.
 
-## 33. Nested integer-leaf flattening ABI increment (implemented, pending merge)
+## 33. Nested integer-leaf flattening ABI increment (completed and merged)
 
 - Scope: the `.small_2s` boundary class now follows Clang's leaf-flattening
   rule. Clang decides the register width of an eightbyte from the *leaves* it
@@ -1207,8 +1213,17 @@ branch history; this increment does not redo them.
   `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
 - No sanitizer run was performed; no sanitizer gate is configured. Interop
   used the installed `clang` (v23.1.2).
-- Pending: this increment is not yet committed, pushed, or merged. The next
-  action is a branch, commit, PR, green CI, merge, and post-merge gates.
+- Merged into `main` as PR #15 (merge commit `48b2189`); implementation
+  commit `441dea8` and documentation commit `36f2a16`. CI run for the PR
+  (`42780610552`, 2m6s) was green. Post-merge gates on `main` pass:
+  `zig fmt --check`, Debug/ReleaseSafe builds and unit tests, and the
+  Debug/Safe/Release/Fast integration matrix — all report
+  `166 passed, 0 failed`. Release artifacts and tags are untouched.
+- Next task: the SSE-side leaf flattening of nested members
+  (e.g. `{ struct { float f; } a; long b; }` → `(float, i64)`) is the
+  remaining leaf-flattening gap; it needs its own boundary classes because
+  the current SSE classes only recognise direct members, and until then the
+  nested SSE shapes stay rejected with `E0473`.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
