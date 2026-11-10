@@ -24,9 +24,14 @@ extern fn free(ptr: *u8);
   packing for partial eightbytes. This includes a float field when an integer
   field in the same eightbyte causes the merged class to be `INTEGER`. A struct
   containing one direct `f32`/`f64` field uses scalar SSE; exactly two
-  adjacent direct `f32` fields use one `<2 x float>` SSE/SSEUP value; and
-  exactly two direct `f64` fields use two SSE registers (LLVM arguments are
-  two `double`s and return coercion is `{ double, double }`). A direct
+  adjacent direct `f32` fields use one `<2 x float>` SSE/SSEUP value; exactly
+  three adjacent direct `f32` fields (12 bytes) use one `<2 x float>` SSE/SSEUP
+  value plus one `float` SSE value, and four adjacent direct `f32` fields
+  (16 bytes) use two `<2 x float>` values; and exactly two direct `f64`
+  fields use two SSE registers (LLVM arguments are two `double`s and return
+  coercion is `{ double, double }`). A three-field `f32` struct returns as
+  `{ <2 x float>, float }` and a four-field `f32` struct returns as
+  `{ <2 x float>, <2 x float> }` (both verified against Clang IR). A direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
   8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
   `{ i32, f64 }` / `{ u32, f64 }` layout uses `i32, double` and
@@ -93,11 +98,15 @@ Caveats:
 - `usize`/`isize` are currently fixed at 64 bits; see the type-system document.
 - Plain C-layout structs up to 16 bytes are passed by value when their classes
   are supported. INTEGER-class eightbytes include float+integer fields in the
-  same eightbyte; a one-field `f32`/`f64` struct uses scalar SSE, a two-field
-  direct `f32` struct uses `<2 x float>` for SSE/SSEUP, and a two-field direct
-  `f64` struct uses two SSE registers. Exact direct layouts `{ f64, i32 }` /
-  `{ f64, u32 }` use `double, i32` parameters and `{ double, i32 }` returns;
-  `{ i32, f64 }` / `{ u32, f64 }` use `i32, double` and `{ i32, double }`.
+  same eightbyte; a one-field `f32`/`f64` struct uses scalar SSE, a three-field
+  direct `f32` struct uses `<2 x float>, float` parameters and a
+  `{ <2 x float>, float }` return, a four-field direct `f32` struct uses
+  `<2 x float>, <2 x float>` parameters and a `{ <2 x float>, <2 x float> }`
+  return, and a two-field direct `f32` struct uses `<2 x float>` for
+  SSE/SSEUP, and a two-field direct `f64` struct uses two SSE registers.
+  Exact direct layouts `{ f64, i32 }` / `{ f64, u32 }` use `double, i32`
+  parameters and `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use
+  `i32, double` and `{ i32, double }`.
   Larger supported aggregates use the hidden-pointer `byval`/`sret` form.
   Fixed arrays, nested wrappers, and other unsupported SSE/INTEGER layouts
   remain unsupported (`E0473`); pass a pointer instead.
@@ -194,8 +203,8 @@ clang hello.o -o hello
 
 - variadic extern functions;
 - fixed-size array parameters and returns by value, and aggregate layouts not
-  supported by the selected target/classifier (including small `SSE`-only
-  eightbytes) (`E0473`);
+  supported by the selected target/classifier (including `SSE`-only forms
+  outside the supported scalar/pair/triple/quad shapes) (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

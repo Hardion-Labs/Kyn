@@ -1,3 +1,3 @@
-struct FloatTriple { x: f32, y: f32, z: f32 }
-extern fn c_take(pair: FloatTriple);
+struct FloatIntFloat { x: f32, count: i32, y: f32 }
+extern fn c_take(value: FloatIntFloat);
 fn main() i32 { return 0; }

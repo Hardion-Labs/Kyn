@@ -4,6 +4,22 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
+## [Unreleased]
+
+### Added
+
+- C ABI support on `x86_64` Linux for exactly three adjacent direct `f32`
+  fields (12-byte layout): arguments flatten to `<2 x float>, float` and the
+  return coerces to `{ <2 x float>, float }`, matching Clang's System V
+  `SSE`/`SSEUP` lowering as verified against Clang IR. Exactly four adjacent
+  direct `f32` fields (16 bytes) use two `<2 x float>` registers and a
+  `{ <2 x float>, <2 x float> }` return. Nested wrappers, mixed
+  float/integer runs, and other small mixed-class layouts remain rejected with
+  `E0473`. Integration fixtures `tests/integration/abi/cabi_sse_f32_triple`
+  and `cabi_sse_f32_quad` cover both directions; the negative
+  `E0473` fixtures (`abi_float_param`/`abi_float_return`) now exercise a
+  mixed float/integer aggregate instead of the newly supported triple layout.
+
 ## [0.1.0-alpha.3] - 2026-11-09
 
 Modules, slices ergonomics and expanded x86_64-linux C ABI coverage.

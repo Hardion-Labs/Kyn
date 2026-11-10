@@ -26,6 +26,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
+- **Latest ABI increment completed and locally validated:** exactly three
+  adjacent direct `f32` fields (12-byte layout, `<2 x float>, float`
+  arguments and a `{ <2 x float>, float }` return) and exactly four adjacent
+  direct `f32` fields (16-byte layout, `<2 x float>, <2 x float>` arguments
+  and a `{ <2 x float>, <2 x float> }` return). Clang IR probe confirms the
+  parameter and return coercions; class merging remains `E0473` outside the
+  supported shapes.
 - **Latest merged module-system increment:** Per-source top-level namespaces
   layered on deterministic relative imports and aliases. Unaliased imports open
   public names through their transitive unaliased dependency closure; local
@@ -65,6 +72,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     direct `{ i32, f64 }` / `{ u32, f64 }` use INTEGER `i32` then SSE `double`.
     Only these exact two-field mixed layouts are accepted; other unsupported
     small mixed-class layouts remain rejected with `E0473`.
+  - *Implemented & validated (current cycle):* Exactly three adjacent direct
+    `f32` fields (12 bytes) flatten as `<2 x float>, float` with a
+    `{ <2 x float>, float }` return; exactly four adjacent direct `f32` fields
+    (16 bytes) flatten as `<2 x float>, <2 x float>` with a
+    `{ <2 x float>, <2 x float> }` return. Shapes verified against Clang IR;
+    covered by `cabi_sse_f32_triple` and `cabi_sse_f32_quad` in both directions.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
     by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
     conventions, and function pointers/callbacks.
@@ -103,9 +116,10 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 1. **Explicit module re-exports** (if needed, specify a syntax and visibility
    model; current unaliased imports are transitively open, while aliased edges
    are not re-exported unqualified).
-2. **Extended C ABI classification** (remaining System V SSE/SSEUP coercions,
-   complete eightbyte-class merging, function pointers, and target ABI selection
-   instead of host-assumed `64`-bit `usize`).
+2. **Extended C ABI classification** (remaining System V SSE/SSEUP coercions
+   beyond the f32 run shapes and f64 pair, complete eightbyte-class merging,
+   function pointers, and target ABI selection instead of host-assumed
+   `64`-bit `usize`).
 3. **Tagged unions / explicit error-return types** (`Result`-style value flow
    without hidden exceptions or unwinding).
 4. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
@@ -173,9 +187,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   (`9..16B`), or `.memory` (`> 16B` `sret`/`byval`). The classifier tracks
   integer/SSE presence per eightbyte and accepts SSE+INTEGER merges into
   `INTEGER`. One direct `f32`/`f64` field maps to scalar SSE; exactly two
-  adjacent direct `f32` fields map to `<2 x float>` SSE/SSEUP; exactly two
-  direct `f64` fields map to the `{ double, double }` return pair and two scalar
-  `double` arguments. A direct `{ f64, i32 }` at offsets 0/8 maps to
+  adjacent direct `f32` fields map to `<2 x float>` SSE/SSEUP; exactly three
+  adjacent direct `f32` fields map to `<2 x float>, float` arguments and a
+  `{ <2 x float>, float }` return; exactly four adjacent direct `f32` fields
+  map to `<2 x float>, <2 x float>` arguments and a
+  `{ <2 x float>, <2 x float> }` return; exactly two direct `f64` fields map
+  to the `{ double, double }` return pair and two scalar `double` arguments.
+  A direct `{ f64, i32 }` at offsets 0/8 maps to
   `double, i32` parameters and `{ double, i32 }` returns. Other unsupported
   SSE/SSEUP and split-class layouts remain rejected.
 
@@ -430,6 +448,50 @@ branch history; this increment does not redo them.
   `docs/continuity.md` was updated after publication to remove the stale
   "no release exists" snapshot. No source/ABI stability is promised between
   alpha releases.
+
+## 22. Adjacent f32 runs ABI increment (completed, not yet committed)
+
+- Scope: only aggregates with exactly three adjacent direct `f32` fields
+  (12 bytes, natural layout) and exactly four adjacent direct `f32` fields
+  (16 bytes, natural layout). Nested wrappers, mixed float/integer runs, and
+  other small mixed-class layouts remain rejected with `E0473`. No other
+  behavior changed: internal Kyn aggregate calls, the internal Kyn ABI, the
+  module system, and the runtime-check policy are all untouched.
+- System V AMD64 eightbyte classification does not produce a single
+  `<3 x float>` or `<4 x float>` argument/return register for these shapes.
+  Clang 23 IR probes confirm and govern the lowering:
+  - `struct { f32, f32, f32 }`: parameters `<2 x float>, float`, return
+    `{ <2 x float>, float }`;
+  - `struct { f32, f32, f32, f32 }`: parameters `<2 x float>, <2 x float>`,
+    return `{ <2 x float>, <2 x float> }`.
+- Implementation: new transport types `.abi_v2f32_f32` and `.abi_v2f32_v2f32`
+  in `compiler/types.zig` (LLVM `{ <2 x float>, float }` and
+  `{ <2 x float>, <2 x float> }`), new `BoundaryClass` variants `sse_f32x3`
+  and `sse_f32x4` in both `compiler/sema.zig` and `compiler/backend/llvm.zig`.
+  The classifier scan now counts SSE-only eightbytes (`has_sse && !has_integer`)
+  instead of tracking a single index: zero SSE-only eightbytes keep the
+  existing `small_1`/`small_2` path unchanged, exactly one SSE-only eightbyte
+  at size 8 keeps `sse_f32x2`, two SSE-only eightbytes with 3 or 4 direct
+  `f32` fields return the new classes, and every other mixture is `E0473`.
+  Argument lowering and function-definition unpacking split the aggregate into
+  its vector half(s) and trailing scalar; returns and call results use the
+  new transport types with `align 4` load/store, matching Clang's alignment.
+- Validation: `zig build test` passes (74 tests, 1 updated expect-clean);
+  `zig fmt --check` is clean; integration suite passes in both `safe` and
+  `release` profiles with the new `cabi_sse_f32_triple` (exit 65) and
+  `cabi_sse_f32_quad` (exit 50) C↔Kyn fixtures, exercising argument and
+  return paths in both directions. Emitted Kyn IR signatures match Clang's
+  exactly. The previously-rejected `FloatTriple` unit fixtures now assert
+  acceptance, and negative `E0473` coverage moved to a mixed
+  `{ f32, i32, f32 }` aggregate (integration `abi_float_param.kyn` /
+  `abi_float_return.kyn` and the unit test both updated accordingly).
+  Total integration count: 139 passed, 0 failed.
+- No sanitizer run was performed; no sanitizer gate is configured. Zig 0.17.0
+  and its bundled Clang via `zig cc` are used for the toolchain; the
+  integration interop tests used the installed `clang` (v23.1.2).
+- Git state: working tree has uncommitted changes from this increment on
+  `main` (branch based on `origin/main` at `9b47e26`). No commit/push/merge
+  was performed; the release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
