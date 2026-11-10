@@ -26,15 +26,21 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`9f0affa`, PR #11):** singleton
+- **Latest ABI increment completed and locally validated:** aggregates with two
+  or more smaller-INTEGER members packed into one eightbyte (only INTEGER
+  members, size ≤ 8) followed by a single `f32` or `f64` in the next eightbyte
+  pass (only that scalar) now lower as `( i64, float )` or
+  `( i64, double )` parameters with `{ i64, float }` / `{ i64, double }`
+  returns, matching Clang's packed-`INTEGER` eightbyte then `SSE` scalar slot
+  exactly. Clang IR probes confirm all eight signatures (u3/u5/V1/V2/V4/V5/V6/
+  V7 probe). The lowering routes through the already-implemented
+  `.sse_i64_f32x` and `.sse_i64_f64x` classes (two parameters, packed transport),
+  so no new BoundaryClass variants or transport types are introduced.
+  Previously rejected with `E0473`; now accepted with exact-shape acceptance
+  checks inside `classifyMixedRunAggregate`.
+- **Previous ABI increment completed and merged (`9f0affa`, PR #11):** singleton
   `enum` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
-  at their backing integer width. `{ enum:u8, f64 }` lowers as
-  `i8, double` parameters and an `{ i8, double }` return; the reverse
-  `{ f64, enum:u8 }` lowers as `double, i8` and a `{ double, i8 }` return.
-  `{ enum:u16, f64 }` and `{ enum:u32, f64 }` and `{ enum:u64, f64 }`
-  lower analogously (`i16`, `i32`, `i64`). Clang IR probes confirm all
-  eight signatures. Negative `E0473` fixtures moved from singleton-`enum`
-  to singleton-array layouts. Integration matrix reports
+  at their backing integer width. Integration matrix reports
   `160 passed, 0 failed` in all four profiles.
 - **Previous ABI increment completed and merged (`2ba5000`, PR #10):** singleton
   `bool` members at natural offsets 0 or 8 (16 bytes) pass at the boundary
@@ -171,6 +177,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     IR probes; covered by `cabi_multi_f32x2_i32`, `cabi_multi_f32x2_i64`,
     `cabi_multi_i32_f32pair`, `cabi_multi_i64_f32pair`, `cabi_multi_f64_v2f32`
     and `cabi_multi_f32pair_f64`.
+    Aggregates with two or more smaller-INTEGER members packed into one
+    eightbyte followed by a single `f32` or `f64` (only the scalar in the
+    next eightbyte) now also lower as `( i64, float )` or `( i64, double )`
+    parameter pairs with `{ i64, float }` / `{ i64, double }` returns —
+    reusing the existing `.sse_i64_f32x` / `.sse_i64_f64x` lowering with the
+    multi-member acceptance checks; covered by `cabi_packed_i64_f64` and
+    `cabi_packed_i64_xs_i16_f64`.
     Exactly two direct small integer members (`i8`/`u8` or `i16`/`u16`) at
     natural offsets 0/8 (16 bytes) are accepted, signedness irrelevant:
     `{ i8/u8, f64 }` uses `i8, double` and `{ i8, double }`;
@@ -315,7 +328,9 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   slot, with the probed Clang signatures (`{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, merged-INTEGER-plus-single-f32/f64 runs,
   `{ i64/u64, f32, f32 }`, all-SSE `{ f32, f32, f64 }` / `{ f64, f32, f32 }`,
-  and the four-member runs); sub-32-bit integer members (`i8`, `u8`, `i16`,
+  the four-member runs, and the no-member-packed-integer-EB0 layouts where
+  EB0 comprises only smaller-INTEGER members and EB1 holds a single SSE
+  f32/f64 (scalarizing the EB1 register with the packed EB0 as one `i64`))); sub-32-bit integer members (`i8`, `u8`, `i16`,
   `u16`) and `bool` are admitted inside `INTEGER`-merged eightbytes (packed
   `i64` irrespective of member widths). A direct singleton small integer
   member (`i8`/`u8`/`i16`/`u16`) in an INTEGER-only eightbyte passes at its

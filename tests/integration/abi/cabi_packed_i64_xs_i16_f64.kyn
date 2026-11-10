@@ -1,0 +1,19 @@
+struct SparseShorts { a: i16, b: i16, c: i16, d: i16, ratio: f64 }
+
+extern fn c_transform(value: SparseShorts) SparseShorts;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: SparseShorts) SparseShorts {
+    return SparseShorts {
+        a: value.a + 1,
+        b: value.b + 1,
+        c: value.c + 1,
+        d: value.d + 1,
+        ratio: value.ratio + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: SparseShorts = c_transform(SparseShorts { a: 1, b: 2, c: 3, d: 4, ratio: 1.5 });
+    return (result.a as i32) + (result.b as i32) + (result.c as i32) + (result.d as i32) + (result.ratio as i32) + c_verify_kyn();
+}
