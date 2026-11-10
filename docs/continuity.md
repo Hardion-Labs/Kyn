@@ -760,7 +760,13 @@ branch history; this increment does not redo them.
 - Git state: merged into `main` (see the merge record at the top of this
   section). Release artifacts and tags are untouched.
 
-## 27. Boolean store zero-extension increment (completed, not yet committed)
+## 27. Boolean store zero-extension increment (completed and merged)
+
+- Merged into `main` as PR #9 (merge commit `f869fb1`); implementation
+  commit `2e36a02`. CI run for the PR (`42749585854`, 2m8s) was green.
+  Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
+  builds and unit tests, and the Debug/ReleaseSafe integration matrix —
+  all report `155 passed, 0 failed`. Release artifacts and tags are untouched.
 
 - Scope: fix the byte-level `bool` memory representation at every `store` in
   the backend. Previously a `bool` field/local was stored into memory as
@@ -786,8 +792,8 @@ branch history; this increment does not redo them.
   (changelog Unreleased and this continuity section) updated.
 - Regression coverage: `cabi_multi_merge_bool` exercises a `bool` member
   inside a merged-INTEGER eightbyte crossing the boundary in both directions.
-- Git state: implementation is on a session branch; push, PR, CI and merge
-  pending at the time of writing. Release artifacts and tags are untouched.
+- Git state: merged into `main` (see the merge record at the top of this
+  section). Release artifacts and tags are untouched.
 
 ## 26. Small integer member ABI increment (completed and merged)
 
