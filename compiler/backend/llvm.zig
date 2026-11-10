@@ -35,6 +35,8 @@ const BoundaryClass = enum {
     sse_f64x2,
     sse_f64_i32,
     sse_i32_f64,
+    sse_f32_f64,
+    sse_f64_f32,
     memory,
 };
 
@@ -219,7 +221,7 @@ pub const Lowering = struct {
                     try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = try self.simpleType(.abi_vec2_f32) });
                     hidden_id += 2;
                 },
-                .sse_f64x2, .sse_f64_i32, .sse_i32_f64 => {
+                .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32 => {
                     for (ty.struct_type.fields) |field| {
                         try params_list.append(self.allocator, .{ .local = hidden_id, .ty = field.ty });
                         hidden_id += 1;
@@ -246,6 +248,8 @@ pub const Lowering = struct {
             .sse_f64x2 => try self.simpleType(.abi_pair_f64),
             .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
             .sse_i32_f64 => try self.simpleType(.abi_i32_f64),
+            .sse_f32_f64 => try self.simpleType(.abi_f32_f64),
+            .sse_f64_f32 => try self.simpleType(.abi_f64_f32),
         };
 
         const function = try self.allocator.create(ir.Function);
@@ -285,6 +289,8 @@ pub const Lowering = struct {
             .sse_f64x2 => .sse_f64x2,
             .sse_f64_i32 => .sse_f64_i32,
             .sse_i32_f64 => .sse_i32_f64,
+            .sse_f32_f64 => .sse_f32_f64,
+            .sse_f64_f32 => .sse_f64_f32,
             .memory => .memory,
         };
     }
@@ -555,7 +561,7 @@ pub const Lowering = struct {
             const sym = param.sym orelse continue;
             const class = if (boundary) self.aggregateBoundaryParam(sym.ty) else BoundaryClass.none;
             const padding: ?u16 = switch (class) {
-                .small_1, .small_2, .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64 => @intCast(self.aggregateSize(sym.ty) orelse 8),
+                .small_1, .small_2, .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32 => @intCast(self.aggregateSize(sym.ty) orelse 8),
                 .memory => @intCast(self.aggregateSize(sym.ty) orelse 16),
                 .none => null,
             };
@@ -633,7 +639,7 @@ pub const Lowering = struct {
                         } });
                         visible_index += 2;
                     },
-                    .sse_f64x2, .sse_f64_i32, .sse_i32_f64 => {
+                    .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32 => {
                         const info = sym.ty.struct_type;
                         if (function.params.len < visible_index + info.fields.len) break;
                         for (0..info.fields.len) |field_index| {
@@ -767,7 +773,7 @@ pub const Lowering = struct {
                         if (!boundary) break :blk BoundaryClass.none;
                         break :blk self.aggregateBoundaryParam(ret_ty);
                     } else BoundaryClass.none;
-                    const sse_abi_return = ret_class == .sse_float or ret_class == .sse_double or ret_class == .sse_f32x2 or ret_class == .sse_f32x3 or ret_class == .sse_f32x4 or ret_class == .sse_f64x2 or ret_class == .sse_f64_i32 or ret_class == .sse_i32_f64;
+                    const sse_abi_return = ret_class == .sse_float or ret_class == .sse_double or ret_class == .sse_f32x2 or ret_class == .sse_f32x3 or ret_class == .sse_f32x4 or ret_class == .sse_f64x2 or ret_class == .sse_f64_i32 or ret_class == .sse_i32_f64 or ret_class == .sse_f32_f64 or ret_class == .sse_f64_f32;
                     const value: ir.Value = if (sse_abi_return) .none else try self.lowerExpr(expr);
                     const hidden_sret = boundary and ret_class == .memory;
                     if (hidden_sret) {
@@ -787,6 +793,8 @@ pub const Lowering = struct {
                                 .sse_f64x2 => try self.simpleType(.abi_pair_f64),
                                 .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
                                 .sse_i32_f64 => try self.simpleType(.abi_i32_f64),
+                                .sse_f32_f64 => try self.simpleType(.abi_f32_f64),
+                                .sse_f64_f32 => try self.simpleType(.abi_f64_f32),
                                 else => expr.ty.?.struct_type.fields[0].ty,
                             };
                             const field_value = try self.reg(abi_ty);
@@ -1369,7 +1377,7 @@ pub const Lowering = struct {
                     try types_list.append(self.allocator, vector_ty);
                     try byval_list.append(self.allocator, null);
                 },
-                .sse_f64x2, .sse_f64_i32, .sse_i32_f64 => {
+                .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
                     const info = ty.struct_type;
                     for (0..info.fields.len) |field_index| {
@@ -1441,6 +1449,8 @@ pub const Lowering = struct {
             .sse_f64x2 => try self.simpleType(.abi_pair_f64),
             .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
             .sse_i32_f64 => try self.simpleType(.abi_i32_f64),
+            .sse_f32_f64 => try self.simpleType(.abi_f32_f64),
+            .sse_f64_f32 => try self.simpleType(.abi_f64_f32),
             .memory, .none => void_ty,
         };
 
@@ -1465,7 +1475,7 @@ pub const Lowering = struct {
 
         switch (ret_class) {
             .none => return if (dst) |id| .{ .reg = id } else .none,
-            .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64 => {
+            .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32 => {
                 const temp = self.module.ephemeral();
                 try self.addLocal(temp, "tmp.aggregate", call_result, null);
                 const abi_ty = switch (ret_class) {
@@ -1475,6 +1485,8 @@ pub const Lowering = struct {
                     .sse_f64x2 => try self.simpleType(.abi_pair_f64),
                     .sse_f64_i32 => try self.simpleType(.abi_f64_i32),
                     .sse_i32_f64 => try self.simpleType(.abi_i32_f64),
+                    .sse_f32_f64 => try self.simpleType(.abi_f32_f64),
+                    .sse_f64_f32 => try self.simpleType(.abi_f64_f32),
                     else => call_result.struct_type.fields[0].ty,
                 };
                 try self.emit(.{ .store = .{
@@ -2314,6 +2326,8 @@ pub const Emitter = struct {
             .abi_pair_f64 => 8,
             .abi_f64_i32 => 8,
             .abi_i32_f64 => 8,
+            .abi_f32_f64 => 8,
+            .abi_f64_f32 => 8,
             .pointer => 8,
             .enum_type => |info| llvmAlignmentOfType(info.backing),
             .array => |array| llvmAlignmentOfType(array.elem),
@@ -2523,6 +2537,7 @@ pub const Emitter = struct {
                 try writer.print("  %t{d} = load {s}, ptr ", .{ load.dst, try self.typeString(load.ty) });
                 try self.emitValue(writer, load.ptr, null);
                 if (load.ty.* == .abi_vec2_f32 or load.ty.* == .abi_v2f32_f32 or load.ty.* == .abi_v2f32_v2f32) try writer.writeAll(", align 4");
+                if (load.ty.* == .abi_f32_f64 or load.ty.* == .abi_f64_f32) try writer.writeAll(", align 8");
                 try writer.writeByte('\n');
             },
             .store => |store| {
@@ -2531,6 +2546,7 @@ pub const Emitter = struct {
                 try writer.writeAll(", ptr ");
                 try self.emitValue(writer, store.ptr, null);
                 if (store.ty.* == .abi_vec2_f32 or store.ty.* == .abi_v2f32_f32 or store.ty.* == .abi_v2f32_v2f32) try writer.writeAll(", align 4");
+                if (store.ty.* == .abi_f32_f64 or store.ty.* == .abi_f64_f32) try writer.writeAll(", align 8");
                 try writer.writeByte('\n');
             },
             .br => |branch| {
@@ -2667,6 +2683,8 @@ pub const Emitter = struct {
             .abi_pair_f64 => "{ double, double }",
             .abi_f64_i32 => "{ double, i32 }",
             .abi_i32_f64 => "{ i32, double }",
+            .abi_f32_f64 => "{ float, double }",
+            .abi_f64_f32 => "{ double, float }",
             .pointer => "ptr",
             .array => |array| try std.fmt.allocPrint(self.allocator, "[{d} x {s}]", .{
                 array.len,

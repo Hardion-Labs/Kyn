@@ -19,6 +19,14 @@ promised between alpha releases.
   and `cabi_sse_f32_quad` cover both directions; the negative
   `E0473` fixtures (`abi_float_param`/`abi_float_return`) now exercise a
   mixed float/integer aggregate instead of the newly supported triple layout.
+- C ABI support on `x86_64` Linux for exactly two direct mixed-width `f32`/`f64`
+  fields at natural offsets 0/8 (16 bytes): `{ f32, f64 }` uses `float, double`
+  arguments and a `{ float, double }` return coercion; the reverse `{ f64, f32 }`
+  layout uses `double, float` and `{ double, float }`, matching Clang's
+  System V lowering as verified against Clang IR. Integration fixtures
+  `cabi_mixed_f32_f64` and `cabi_mixed_f64_f32` cover argument and return
+  paths in both directions; other mixed-class layouts remain rejected with
+  `E0473`.
 
 ## [0.1.0-alpha.3] - 2026-11-09
 

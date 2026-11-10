@@ -1,0 +1,16 @@
+struct FloatDouble { amount: f32, ratio: f64 }
+
+extern fn c_transform(value: FloatDouble) FloatDouble;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: FloatDouble) FloatDouble {
+    return FloatDouble {
+        amount: value.amount + 1.0,
+        ratio: value.ratio + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: FloatDouble = c_transform(FloatDouble { amount: 1.5, ratio: 2.5 });
+    return (result.amount as i32) + (result.ratio as i32) + c_verify_kyn();
+}

@@ -249,6 +249,9 @@ pointer regardless of how the pointer variable itself was declared.
   `f32` fields (16 bytes) use two `<2 x float>` values and a
   `{ <2 x float>, <2 x float> }` return; exactly two direct `f64` fields use
   two SSE registers and an LLVM `{ double, double }` return coercion. A direct
+  `{ f32, f64 }` struct at natural offsets 0/8 uses `float, double` arguments
+  and `{ float, double }` returns; the reverse `{ f64, f32 }` layout uses
+  `double, float` and `{ double, float }`. A direct
   `{ f64, i32 }` / `{ f64, u32 }` structs use `double, i32` arguments and
   `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use `i32, double`
   and `{ i32, double }`. These rules cover only adjacent direct fields with

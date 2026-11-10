@@ -209,7 +209,10 @@ fn log_message() {
   `{ <2 x float>, float }`; exactly four adjacent direct `f32` fields use
   two `<2 x float>` values, returning `{ <2 x float>, <2 x float> }`;
   exactly two direct `f64` fields use two SSE registers with LLVM
-  `{ double, double }` return coercion; and a direct
+  `{ double, double }` return coercion; a direct `{ f32, f64 }` struct with
+  fields at offsets 0 and 8 uses `float, double` arguments and a
+  `{ float, double }` return; the reverse `{ f64, f32 }` uses `double, float`
+  and `{ double, float }`; and a direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with fields at offsets 0 and 8 uses
   `double, i32` arguments and `{ double, i32 }` return coercion; the reverse
   `{ i32, f64 }` or `{ u32, f64 }` uses `i32, double` and
@@ -459,7 +462,8 @@ let sum: i32 = add(1, 2);
   `<2 x float>` SSE/SSEUP, three-adjacent-`f32` structs via
   `<2 x float>, float`, four-adjacent-`f32` structs via `<2 x float>, <2 x float>`,
   two-direct-`f64` structs via two SSE argument
-  registers, direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
+  registers, direct `{ f32, f64 }` and `{ f64, f32 }` structs via their two SSE
+  argument registers, direct `{ f64, i32 }` structs via SSE `double` plus INTEGER `i32`,
   direct `{ i32, f64 }` structs via INTEGER `i32` plus SSE `double`, and larger
   aggregates passed via `byval`; fixed arrays and other unsupported small
   layouts are rejected with `E0473`.

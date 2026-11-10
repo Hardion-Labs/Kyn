@@ -1709,6 +1709,8 @@ pub const Sema = struct {
             .abi_pair_f64 => "<internal ABI pair>",
             .abi_f64_i32 => "<internal ABI pair>",
             .abi_i32_f64 => "<internal ABI pair>",
+            .abi_f32_f64 => "<internal ABI pair>",
+            .abi_f64_f32 => "<internal ABI pair>",
             .pointer => |p| std.fmt.allocPrint(self.allocator, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 self.typeName(p.elem),
@@ -1759,6 +1761,8 @@ pub const BoundaryClass = enum {
     sse_f64x2,
     sse_f64_i32,
     sse_i32_f64,
+    sse_f32_f64,
+    sse_f64_f32,
     memory,
 };
 
@@ -1800,6 +1804,27 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 // i32/double parameters and a { i32, double } return value.
                 // Integer signedness does not affect the register class.
                 return .sse_i32_f64;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 32 and
+                fields[1].ty.* == .float and fields[1].ty.float == 64 and
+                eightbytes[0].has_sse and !eightbytes[0].has_integer and
+                eightbytes[1].has_sse and !eightbytes[1].has_integer)
+            {
+                // Two SSE-only eightbytes: LLVM uses float/double parameters
+                // in field order and returns { float, double }.
+                return .sse_f32_f64;
+            }
+            if (fields.len == 2 and
+                fields[0].ty.* == .float and fields[0].ty.float == 64 and
+                fields[1].ty.* == .float and fields[1].ty.float == 32 and
+                eightbytes[0].has_sse and !eightbytes[0].has_integer and
+                eightbytes[1].has_sse and !eightbytes[1].has_integer)
+            {
+                // The reverse exact layout is SSE then SSE. LLVM uses
+                // double/float parameters in field order and returns
+                // { double, float }.
+                return .sse_f64_f32;
             }
         }
         const count: usize = @intCast((layout.size + 7) / 8);
@@ -2245,6 +2270,20 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
         \\export fn kyn_make_if(count: i32, amount: f32) IntFloat {
         \\    return IntFloat { count: count, amount: amount };
         \\}
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct FloatDouble { amount: f32, ratio: f64 }
+        \\extern fn c_take(value: FloatDouble) FloatDouble;
+        \\export fn kyn_identity(value: FloatDouble) FloatDouble { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
+    try expectClean(
+        \\struct DoubleFloat { ratio: f64, amount: f32 }
+        \\extern fn c_take(value: DoubleFloat) DoubleFloat;
+        \\export fn kyn_identity(value: DoubleFloat) DoubleFloat { return value; }
         \\fn main() i32 { return 0; }
     );
 }
