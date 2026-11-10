@@ -93,6 +93,44 @@ pub const FnInfo = struct {
     ret: *Type,
 };
 
+/// One slot of a two-register aggregate transport at the C ABI boundary.
+/// `f32x2` is the SSE/SSEUP `<2 x float>` slot, which occupies an SSE
+/// register and its continuation rather than a single scalar.
+pub const AbiSlot = enum {
+    i8,
+    i16,
+    i32,
+    i64,
+    f32,
+    f64,
+    /// A pointer, which is never widened or narrowed by the classification.
+    pointer,
+    /// Two `float` values in one MMX-width SSE slot.
+    f32x2,
+
+    /// The slot's width in bits on `x86_64`.
+    pub fn bits(self: AbiSlot) u16 {
+        return switch (self) {
+            .i8 => 8,
+            .i16 => 16,
+            .i32, .f32 => 32,
+            .i64, .f64, .pointer, .f32x2 => 64,
+        };
+    }
+
+    pub fn isFloat(self: AbiSlot) bool {
+        return self == .f32 or self == .f64;
+    }
+};
+
+/// The two registers a two-register aggregate travels in at the C ABI
+/// boundary. The classification and the lowering share this value, so the
+/// emitted transport type cannot drift from the boundary class.
+pub const AbiPair = struct {
+    first: AbiSlot,
+    second: AbiSlot,
+};
+
 pub const Type = union(enum) {
     invalid,
     void,
@@ -100,34 +138,27 @@ pub const Type = union(enum) {
     char,
     int: IntInfo,
     float: u16,
-    /// Backend-only transport types for System V SSE aggregate coercions.
+    /// Backend-only transport types for System V aggregate coercions.
     abi_vec2_f32,
     abi_v2f32_f32,
     abi_v2f32_v2f32,
     abi_pair_f64,
-    abi_f64_i32,
-    abi_i32_f64,
-    abi_f32_f64,
-    abi_f64_f32,
-    abi_f32_i64,
-    abi_i64_f32,
-    abi_f64_i64,
-    abi_i64_f64,
+    /// `{ <2 x float>, i32 }`, `{ <2 x float>, i64 }`, `{ i64, <2 x float> }`,
+    /// `{ double, <2 x float> }` and `{ <2 x float>, double }`: the shapes
+    /// where an SSE/SSEUP vector slot shares the aggregate with an INTEGER or
+    /// scalar SSE register. They stay distinct from `abi_pair` because one
+    /// slot is a vector, not a scalar.
     abi_v2f32_i32,
     abi_v2f32_i64,
     abi_i64_v2f32,
     abi_f64_v2f32,
     abi_v2f32_f64,
-    abi_i8_f64,
-    abi_i16_f64,
-    abi_f64_i8,
-    abi_f64_i16,
-    abi_pair_i8_i64,
-    abi_pair_i16_i64,
-    abi_pair_i32_i64,
-    abi_pair_i64_i8,
-    abi_pair_i64_i16,
-    abi_pair_i64_i32,
+    /// Return transport of a two-register aggregate whose eightbytes travel
+    /// as the two given scalar classes: `{ <2 x float>, i32 }` for a vector
+    /// followed by a 32-bit integer, `{ ptr, double }` for a pointer followed
+    /// by a double. One representation covers every register pair, including
+    /// pairs that only occur in parameters and pointer-bearing eightbytes.
+    abi_pair: AbiPair,
     pointer: PointerInfo,
     array: ArrayInfo,
     slice: SliceInfo,
@@ -195,29 +226,15 @@ pub const Type = union(enum) {
             .abi_v2f32_f32 => b.* == .abi_v2f32_f32,
             .abi_v2f32_v2f32 => b.* == .abi_v2f32_v2f32,
             .abi_pair_f64 => b.* == .abi_pair_f64,
-            .abi_f64_i32 => b.* == .abi_f64_i32,
-            .abi_i32_f64 => b.* == .abi_i32_f64,
-            .abi_f32_f64 => b.* == .abi_f32_f64,
-            .abi_f64_f32 => b.* == .abi_f64_f32,
-            .abi_f32_i64 => b.* == .abi_f32_i64,
-            .abi_i64_f32 => b.* == .abi_i64_f32,
-            .abi_f64_i64 => b.* == .abi_f64_i64,
-            .abi_i64_f64 => b.* == .abi_i64_f64,
             .abi_v2f32_i32 => b.* == .abi_v2f32_i32,
             .abi_v2f32_i64 => b.* == .abi_v2f32_i64,
             .abi_i64_v2f32 => b.* == .abi_i64_v2f32,
             .abi_f64_v2f32 => b.* == .abi_f64_v2f32,
             .abi_v2f32_f64 => b.* == .abi_v2f32_f64,
-            .abi_i8_f64 => b.* == .abi_i8_f64,
-            .abi_i16_f64 => b.* == .abi_i16_f64,
-            .abi_f64_i8 => b.* == .abi_f64_i8,
-            .abi_f64_i16 => b.* == .abi_f64_i16,
-            .abi_pair_i8_i64 => b.* == .abi_pair_i8_i64,
-            .abi_pair_i16_i64 => b.* == .abi_pair_i16_i64,
-            .abi_pair_i32_i64 => b.* == .abi_pair_i32_i64,
-            .abi_pair_i64_i8 => b.* == .abi_pair_i64_i8,
-            .abi_pair_i64_i16 => b.* == .abi_pair_i64_i16,
-            .abi_pair_i64_i32 => b.* == .abi_pair_i64_i32,
+            .abi_pair => |ap| switch (b.*) {
+                .abi_pair => |bp| ap.first == bp.first and ap.second == bp.second,
+                else => false,
+            },
             .pointer => |ap| switch (b.*) {
                 .pointer => |bp| ap.is_const == bp.is_const and eql(ap.elem, bp.elem),
                 else => false,
@@ -264,29 +281,15 @@ pub const Type = union(enum) {
             .abi_v2f32_f32 => "<f32x2, f32 ABI value>",
             .abi_v2f32_v2f32 => "<f32x2, f32x2 ABI value>",
             .abi_pair_f64 => "<f64, f64 ABI value>",
-            .abi_f64_i32 => "<f64, i32 ABI value>",
-            .abi_i32_f64 => "<i32, f64 ABI value>",
-            .abi_f32_f64 => "<f32, f64 ABI value>",
-            .abi_f64_f32 => "<f64, f32 ABI value>",
-            .abi_f32_i64 => "<f32, i64 ABI value>",
-            .abi_i64_f32 => "<i64, f32 ABI value>",
-            .abi_f64_i64 => "<f64, i64 ABI value>",
-            .abi_i64_f64 => "<i64, f64 ABI value>",
             .abi_v2f32_i32 => "<f32x2, i32 ABI value>",
             .abi_v2f32_i64 => "<f32x2, i64 ABI value>",
             .abi_i64_v2f32 => "<i64, f32x2 ABI value>",
             .abi_f64_v2f32 => "<f64, f32x2 ABI value>",
             .abi_v2f32_f64 => "<f32x2, f64 ABI value>",
-            .abi_i8_f64 => "<i8, f64 ABI value>",
-            .abi_i16_f64 => "<i16, f64 ABI value>",
-            .abi_f64_i8 => "<f64, i8 ABI value>",
-            .abi_f64_i16 => "<f64, i16 ABI value>",
-            .abi_pair_i8_i64 => "<i8, i64 ABI value>",
-            .abi_pair_i16_i64 => "<i16, i64 ABI value>",
-            .abi_pair_i32_i64 => "<i32, i64 ABI value>",
-            .abi_pair_i64_i8 => "<i64, i8 ABI value>",
-            .abi_pair_i64_i16 => "<i64, i16 ABI value>",
-            .abi_pair_i64_i32 => "<i64, i32 ABI value>",
+            .abi_pair => |pair| std.fmt.bufPrint(buffer, "<{s}, {s} ABI value>", .{
+                @tagName(pair.first),
+                @tagName(pair.second),
+            }) catch "<ABI pair>",
             .pointer => |p| std.fmt.bufPrint(buffer, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 p.elem.displayName(buffer[@min(buffer.len, 8)..]),
