@@ -1,0 +1,13 @@
+struct TinyI32 { x: i32 }
+
+extern fn c_take(value: TinyI32) i32;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_add(value: TinyI32) TinyI32 {
+    return TinyI32 { x: value.x + 1 };
+}
+
+fn main() i32 {
+    let v: TinyI32 = kyn_add(TinyI32 { x: 4 });
+    return c_take(v) + c_verify_kyn();
+}

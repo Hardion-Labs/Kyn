@@ -265,7 +265,7 @@ pointer regardless of how the pointer variable itself was declared.
   returns. Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass
-  at their own width; and a singleton `enum` member or singleton `bool` passes as an `i8`/`i16`/`i32`/`i64` at its backing width.
+  at their own width; and a singleton `enum` member or singleton `bool` passes as an `i8`/`i16`/`i32`/`i64` at its backing width. Singleton `i8`/`i16`/`i32`/`i64` aggregates are passed in a single exact-width INTEGER argument register (1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`), matching Clang's IR exact-size registers.
   Additionally, aggregates with two or more smaller-INTEGER members packed
   into one eightbyte followed by a single `f32` or `f64` (only the scalar in
   the next eightbyte) pass as `( i64, float )` or `( i64, double )`, verified

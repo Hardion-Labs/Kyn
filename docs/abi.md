@@ -46,7 +46,7 @@ extern fn free(ptr: *u8);
   `{ double, i8 }` / `{ double, i16 }`. Members smaller than 32 bits (`i8`,
   `u8`, `i16`, `u16`) and `bool` are also accepted inside `INTEGER`-merged
   eightbytes, where Clang passes the packed `i64` irrespective of member
-  widths; singleton small members are passed at their own width, singleton `bool` members pass as a full `i8`, and singleton `enum` members pass at their backing integer width (`i8`/`i16`/`i32`/`i64`), like their backing integral type. Aggregates with two or more smaller-INTEGER members packed into one eightbyte followed by a single `f32` or `f64` (only the scalar in the next eightbyte) pass as `( i64, float )` or `( i64, double )`, verified against Clang probes. Exact multi-member layouts
+  widths; singleton small members are passed at their own width, singleton `bool` members pass as a full `i8`, and singleton `enum` members pass at their backing integer width (`i8`/`i16`/`i32`/`i64`), like their backing integral type. Singleton `i8`/`i16`/`i32`/`i64` aggregates pass in one exact-width INTEGER argument register (size 1→`i8`, 2→`i16`, ≤4→`i32`, otherwise `i64`). Aggregates with two or more smaller-INTEGER members packed into one eightbyte followed by a single `f32` or `f64` (only the scalar in the next eightbyte) pass as `( i64, float )` or `( i64, double )`, verified against Clang probes. Exact multi-member layouts
   whose eightbytes split into an SSE-only slot and an INTEGER/merged slot
   are also supported with their probed Clang coercions: `{ f32, f32, i32 }`
   (`<2 x float>, i32` arguments and `{ <2 x float>, i32 }` returns),

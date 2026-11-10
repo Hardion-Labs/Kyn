@@ -212,7 +212,8 @@ pub const Lowering = struct {
                     hidden_id += 1;
                 },
                 .small_1 => {
-                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = i64_ty });
+                    const bits = sema_mod.smallRegisterBits(self.aggregateSize(ty) orelse 8);
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .int = .{ .bits = bits, .signed = true } }) });
                     hidden_id += 1;
                 },
                 .sse_float => {
@@ -286,7 +287,7 @@ pub const Lowering = struct {
         const ret_ty = switch (ret_class) {
             .memory => void_ty,
             .none => if (fd.ret_expr == null) void_ty else info.ret,
-            .small_1 => i64_ty,
+            .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(fd.ret_expr.?.resolved.?) orelse 8), .signed = true } }),
             .small_2 => i128_ty,
             .sse_float => try self.simpleType(.{ .float = 32 }),
             .sse_double => try self.simpleType(.{ .float = 64 }),
@@ -679,15 +680,15 @@ pub const Lowering = struct {
                     .small_1 => {
                         if (function.params.len <= visible_index) break;
                         const base = function.params[visible_index].local;
-                        try self.lowerPackedAggregate(.{ .local = sym.id }, class_size, .{ .param = base }, 0);
+                        try self.lowerPackedAggregate(.{ .local = sym.id }, class_size, .{ .param = base }, 0, function.params[visible_index].ty);
                         visible_index += 1;
                     },
                     .small_2 => {
                         if (function.params.len <= visible_index + 1) break;
                         const lo = function.params[visible_index].local;
                         const hi = function.params[visible_index + 1].local;
-                        try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 8, .{ .param = lo }, 0);
-                        try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 16, .{ .param = hi }, 8);
+                        try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 8, .{ .param = lo }, 0, function.params[visible_index].ty);
+                        try self.lowerPackedAggregate(.{ .local = sym.id }, self.aggregateSize(sym.ty) orelse 16, .{ .param = hi }, 8, function.params[visible_index + 1].ty);
                         visible_index += 2;
                     },
                     .sse_float, .sse_double => {
@@ -841,6 +842,7 @@ pub const Lowering = struct {
         size: usize,
         source: ir.Value,
         offset: usize,
+        source_ty: *types.Type,
     ) Error!void {
         if (size <= offset) return;
         const i64_ty = try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } });
@@ -849,7 +851,7 @@ pub const Lowering = struct {
         try self.emitValueStore(.{
             .ptr = .{ .local = temp },
             .value = source,
-            .ty = i64_ty,
+            .ty = source_ty,
         });
 
         var destination_value = destination;
@@ -946,7 +948,7 @@ pub const Lowering = struct {
                             try self.emit(.{ .ret = .{ .value = .{ .reg = field_value } } });
                         } else if (ret_class == .small_1 or ret_class == .small_2) {
                             const storage_ty = if (ret_class == .small_1)
-                                try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } })
+                                try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(expr.ty orelse try self.simpleType(.invalid)) orelse 8), .signed = true } })
                             else
                                 try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
                             const temp = self.module.ephemeral();
@@ -1425,21 +1427,23 @@ pub const Lowering = struct {
                 },
                 .small_1 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
-                    const size = self.aggregateSize(ty) orelse 8;
+                    const size: u64 = @intCast(self.aggregateSize(ty) orelse 8);
+                    const bits: u16 = sema_mod.smallRegisterBits(size);
+                    const sized_ty = try self.simpleType(.{ .int = .{ .bits = bits, .signed = true } });
                     var pack_ptr = slot;
-                    if (size < 8) {
+                    if (size < bits / 8) {
                         const pack_id = self.module.ephemeral();
-                        try self.addLocal(pack_id, "tmp.pack1", i64_ty, null);
-                        try self.emitValueStore(.{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i64_ty });
+                        try self.addLocal(pack_id, "tmp.pack1", sized_ty, null);
+                        try self.emitValueStore(.{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = sized_ty });
                         if (size > 0) {
                             try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(size) } });
                         }
                         pack_ptr = .{ .local = pack_id };
                     }
-                    const loaded = try self.reg(i64_ty);
-                    try self.emit(.{ .load = .{ .dst = loaded, .ptr = pack_ptr, .ty = i64_ty } });
+                    const loaded = try self.reg(sized_ty);
+                    try self.emit(.{ .load = .{ .dst = loaded, .ptr = pack_ptr, .ty = sized_ty } });
                     try args_list.append(self.allocator, .{ .reg = loaded });
-                    try types_list.append(self.allocator, i64_ty);
+                    try types_list.append(self.allocator, sized_ty);
                     try byval_list.append(self.allocator, null);
                 },
                 .sse_float, .sse_double => {
@@ -1610,7 +1614,7 @@ pub const Lowering = struct {
         const args = try args_list.toOwnedSlice(self.allocator);
         const byval_types = try byval_list.toOwnedSlice(self.allocator);
         const value_ty = switch (ret_class) {
-            .small_1 => i64_ty,
+            .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(call_result) orelse 8), .signed = true } }),
             .small_2 => i128_ty,
             .sse_float => try self.simpleType(.{ .float = 32 }),
             .sse_double => try self.simpleType(.{ .float = 64 }),
@@ -3102,5 +3106,5 @@ test "lowering open-ended slices, slice.ptr and C ABI small global aggregates" {
 
     try testing.expect(std.mem.indexOf(u8, ll, ", align 8") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "@llvm.memcpy.p0.p0.i64") != null);
-    try testing.expect(std.mem.indexOf(u8, ll, "call i32 @take_small(i64 ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "call i32 @take_small(i32 ") != null);
 }

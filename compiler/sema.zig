@@ -2147,6 +2147,16 @@ pub const AggregateLayout = struct {
     align_: u64,
 };
 
+/// Width in bits of the INTEGER register that carries an eightbyte whose
+/// occupied size fits `size` bytes. Matches Clang's choice of the smallest
+/// register covering the eightbyte.
+pub fn smallRegisterBits(size: u64) u16 {
+    if (size <= 1) return 8;
+    if (size <= 2) return 16;
+    if (size <= 4) return 32;
+    return 64;
+}
+
 /// Returns true when `ty` carries an integer register of exactly `bits`
 /// bits, treating `char` as 32-bit, `enum` members by their backing integer,
 /// and plain `.int`s by their own width. Signedness never affects the class.
@@ -2539,6 +2549,31 @@ test "C ABI mixed INTEGER and SSE eightbytes accept exact direct layouts" {
 }
 
 test "C ABI small integer members accept exact layouts" {
+    try expectClean(
+        \\struct TinyI64 { count: i64 }
+        \\struct TinyI32 { count: i32 }
+        \\struct TinyU32 { count: u32 }
+        \\struct TinyI16 { count: i16 }
+        \\struct TinyU16 { count: u16 }
+        \\struct TinyI8 { count: i8 }
+        \\struct TinyU8 { count: u8 }
+        \\extern fn c_take_i64(value: TinyI64) TinyI64;
+        \\extern fn c_take_i32(value: TinyI32) TinyI32;
+        \\extern fn c_take_u32(value: TinyU32) TinyU32;
+        \\extern fn c_take_i16(value: TinyI16) TinyI16;
+        \\extern fn c_take_u16(value: TinyU16) TinyU16;
+        \\extern fn c_take_i8(value: TinyI8) TinyI8;
+        \\extern fn c_take_u8(value: TinyU8) TinyU8;
+        \\export fn kyn_id_i64(value: TinyI64) TinyI64 { return value; }
+        \\export fn kyn_id_i32(value: TinyI32) TinyI32 { return value; }
+        \\export fn kyn_id_u32(value: TinyU32) TinyU32 { return value; }
+        \\export fn kyn_id_i16(value: TinyI16) TinyI16 { return value; }
+        \\export fn kyn_id_u16(value: TinyU16) TinyU16 { return value; }
+        \\export fn kyn_id_i8(value: TinyI8) TinyI8 { return value; }
+        \\export fn kyn_id_u8(value: TinyU8) TinyU8 { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
     try expectClean(
         \\struct TinyDouble { count: i8, amount: f64 }
         \\struct TinyUDouble { count: u8, amount: f64 }

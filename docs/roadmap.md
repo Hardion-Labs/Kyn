@@ -83,7 +83,8 @@ Milestones below are directions, not release promises.
   backings) via a member-width INTEGER and an SSE register, aggregates
   with two or more smaller-INTEGER members packed into one eightbyte
   followed by a single `f32` or `f64` (only scalar in the next eightbyte)
-  passed as `( i64, float )` or `( i64, double )`, sub-32-bit integer members and `bool` inside merged
+  passed as `( i64, float )` or `( i64, double )`, singleton
+  `i8`/`i16`/`i32`/`i64` aggregates in a single exact-width INTEGER argument register, sub-32-bit integer members and `bool` inside merged
   `INTEGER` eightbytes (packed `i64`), exact multi-member layouts with an
   SSE-only slot and an INTEGER/merged slot (`{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,
