@@ -57,6 +57,18 @@ promised between alpha releases.
   and unannotated defaults), like their backing integral; verified with
   Clang IR probes for all eight signatures. Coverage fixtures
   `cabi_enum_e8_f64`, `cabi_enum_e64_f64` and `cabi_enum_e8_f32f32` cover
+  argument and return paths in both directions.
+- C ABI support on `x86_64` Linux for aggregates with two or more
+  smaller-INTEGER members packed into one eightbyte followed by a single
+  `f32` or `f64` in the next eightbyte, with no other member in that slot.
+  Such layouts lower as `( i64, float )` parameters with a
+  `{ i64, float }` return or `( i64, double )` parameters with a
+  `{ i64, double }` return, matching Clang's packed-`INTEGER` eightbyte
+  then `SSE` scalar slot. Clang IR probes confirm the signatures for three-
+  and four-member runs (`{ i32, i32, f64 }`, `{ i16, i16, f64 }`,
+  `{ i8, i8, f64 }`, `{ i32, i32, f32 }`, `{ i16, i16, i16, i16, f64 }`,
+  `{ i16, i16, i16, i16, f32 }` and the reverse). Integration fixtures
+  `cabi_packed_i64_f64` and `cabi_packed_i64_xs_i16_f64` cover
   argument and return paths in both directions. Negative `E0473` fixtures
   moved to singleton-arrays to preserve rejection coverage.
 - C ABI support on `x86_64` Linux for exactly two direct small integer members

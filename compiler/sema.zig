@@ -2018,6 +2018,20 @@ fn classifyMixedRunAggregate(
     const eb1_sse = eightbytes[1].has_sse and !eightbytes[1].has_integer;
     const eb1_int = eightbytes[1].has_integer;
 
+    // Integer-only EB0 (any smaller-width int/enum members totaling ≤ 8
+    // bytes, merged into one INTEGER eightbyte), then a single SSE-only
+    // f64/f32 in EB1. Clang passes the packed EB0 as one i64 register and
+    // the EB1 as its scalar SSE register, which is the .sse_i64_f64x /
+    // .sse_i64_f32x signature (two parameters, packed, ret { i64, double }
+    // or { i64, float }). EB1 must carry only the float; an INTEGER member
+    // in the same eightbyte merges the class to INTEGER and must remain
+    // rejected.
+    if (f64_count == 1 and f32_count == 0 and eb0_int and !eb0_sse and eb1_sse and !eb1_int and fields.len >= 3) {
+        return .sse_i64_f64x;
+    }
+    if (f32_count == 1 and f64_count == 0 and eb0_int and !eb0_sse and eb1_sse and !eb1_int and fields.len >= 3) {
+        return .sse_i64_f32x;
+    }
     if (fields.len == 3) {
         if (f32_count == 2 and i32_count == 1 and f64_count == 0 and i64_count == 0 and eb0_sse and eb1_int and !eightbytes[1].has_sse) {
             // {f32, f32, i32/u32}: <2 x float> then i32.
@@ -2610,6 +2624,40 @@ test "C ABI enum members accept exact layouts" {
 }
 
 test "C ABI multi-member eightbyte layouts accept exact runs" {
+    try expectClean(
+        \\struct IntPackedDouble { low: i32, mid: i32, high: f64 }
+        \\struct CharPackedDouble { a: i8, b: i16, high: f64 }
+        \\struct ShortPackedFloat { a: i16, b: i16, face: f32 }
+        \\struct SparseShorts { a: i16, b: i16, c: i16, d: i16, ratio: f64 }
+        \\struct ShortIntFloatPack { l: i16, m: i16, h: i16, f: f32 }
+        \\struct LongPairFloat2 { low: i64, mid: i32, high: f64 }
+        \\struct UIntPairDouble { a: u32, b: u32, high: f64 }
+        \\struct UIntPackedFloat { a: u16, b: u16, c: f32 }
+        \\struct PackedIntFloat { l: i32, m: i32, f: f32 }
+        \\struct TwoEnumShort { tag: u8, mid: u16, face: f32 }
+        \\extern fn c_take_ipd(value: IntPackedDouble) IntPackedDouble;
+        \\extern fn c_take_cpd(value: CharPackedDouble) CharPackedDouble;
+        \\extern fn c_take_spf(value: ShortPackedFloat) ShortPackedFloat;
+        \\extern fn c_take_sp(value: SparseShorts) SparseShorts;
+        \\extern fn c_take_sip(value: ShortIntFloatPack) ShortIntFloatPack;
+        \\extern fn c_take_lpd(value: LongPairFloat2) LongPairFloat2;
+        \\extern fn c_take_upd(value: UIntPairDouble) UIntPairDouble;
+        \\extern fn c_take_upf(value: UIntPackedFloat) UIntPackedFloat;
+        \\extern fn c_take_pif(value: PackedIntFloat) PackedIntFloat;
+        \\extern fn c_take_tes(value: TwoEnumShort) TwoEnumShort;
+        \\export fn kyn_id_ipd(value: IntPackedDouble) IntPackedDouble { return value; }
+        \\export fn kyn_id_cpd(value: CharPackedDouble) CharPackedDouble { return value; }
+        \\export fn kyn_id_spf(value: ShortPackedFloat) ShortPackedFloat { return value; }
+        \\export fn kyn_id_sp(value: SparseShorts) SparseShorts { return value; }
+        \\export fn kyn_id_sip(value: ShortIntFloatPack) ShortIntFloatPack { return value; }
+        \\export fn kyn_id_lpd(value: LongPairFloat2) LongPairFloat2 { return value; }
+        \\export fn kyn_id_upd(value: UIntPairDouble) UIntPairDouble { return value; }
+        \\export fn kyn_id_upf(value: UIntPackedFloat) UIntPackedFloat { return value; }
+        \\export fn kyn_id_pif(value: PackedIntFloat) PackedIntFloat { return value; }
+        \\export fn kyn_id_tes(value: TwoEnumShort) TwoEnumShort { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
     try expectClean(
         \\struct FloatPairInt { low: f32, mid: f32, high: i32 }
         \\struct FloatPairUInt { low: f32, mid: f32, high: u32 }

@@ -1,0 +1,17 @@
+struct Packed { low: i32, mid: i32, high: f64 }
+
+extern fn c_transform(value: Packed) Packed;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: Packed) Packed {
+    return Packed {
+        low: value.low + 3,
+        mid: value.mid + 4,
+        high: value.high + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: Packed = c_transform(Packed { low: 1, mid: 2, high: 1.5 });
+    return (result.low as i32) + (result.mid as i32) + (result.high as i32) + c_verify_kyn();
+}

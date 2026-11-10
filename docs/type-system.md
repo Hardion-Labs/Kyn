@@ -266,6 +266,10 @@ pointer regardless of how the pointer variable itself was declared.
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass
   at their own width; and a singleton `enum` member or singleton `bool` passes as an `i8`/`i16`/`i32`/`i64` at its backing width.
+  Additionally, aggregates with two or more smaller-INTEGER members packed
+  into one eightbyte followed by a single `f32` or `f64` (only the scalar in
+  the next eightbyte) pass as `( i64, float )` or `( i64, double )`, verified
+  against Clang probes.
   Exact multi-member layouts whose eightbytes split
   into an SSE-only slot and an INTEGER/merged slot use their probed Clang
   coercions: `{ f32, f32, i32 }` (`<2 x float>, i32` and `{ <2 x float>, i32 }`),

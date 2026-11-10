@@ -220,7 +220,10 @@ fn log_message() {
   direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` use member-width `i8`/`i16`
   parameters and `{ i8, double }` / `{ i16, double }` returns; the reverse
   `{ f64, i8/u8 }` / `{ f64, i16/u16 }` uses `double, i8` / `double, i16`
-  `{ double, i8 }` / `{ double, i16 }` returns; sub-32-bit integer
+  `{ double, i8 }` / `{ double, i16 }` returns; aggregates with two or
+  more smaller-INTEGER members packed into one eightbyte followed by a
+  single `f32` or `f64` (only the scalar in the next eightbyte) pass as
+  `( i64, float )` or `( i64, double )`; sub-32-bit integer
   members and `bool` are also accepted inside `INTEGER`-merged eightbytes
   (packed `i64` passed irrespective of member widths), direct
   `{ bool, f64 }` / `{ f64, bool }` use a full `i8` parameter and
@@ -491,7 +494,10 @@ let sum: i32 = add(1, 2);
   direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` structs via exact-width INTEGER
   plus SSE argument registers (the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }`
   order is supported likewise), direct `{ bool, f64 }` / `{ f64, bool }`
-  via an `i8` argument register, sub-32-bit integer members and `bool` inside
+  via an `i8` argument register, aggregates with two or more smaller-INTEGER
+  members packed into one eightbyte followed by a single `f32` or `f64`
+  (only the scalar in the next eightbyte) via one `i64` and one SSE argument
+  register, sub-32-bit integer members and `bool` inside
   merged `INTEGER` eightbytes via a packed `i64` register,
   exact multi-member layouts with an SSE-only slot and an INTEGER/merged slot
   (`{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`,
