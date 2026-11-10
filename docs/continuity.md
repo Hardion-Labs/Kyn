@@ -26,7 +26,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and locally validated:** exactly three
+- **Latest ABI increment completed and locally validated:** exactly two
+  direct mixed-width `f32`/`f64` fields at natural offsets 0/8 (16 bytes).
+  `{ f32, f64 }` lowers as `float, double` parameters and a
+  `{ float, double }` return; the reverse `{ f64, f32 }` uses `double, float`
+  and `{ double, float }`. Clang IR probe confirms the coercions; other
+  mixed-class layouts remain `E0473`.
+- **Previous ABI increment (merged, `2869235`):** exactly three
   adjacent direct `f32` fields (12-byte layout, `<2 x float>, float`
   arguments and a `{ <2 x float>, float }` return) and exactly four adjacent
   direct `f32` fields (16-byte layout, `<2 x float>, <2 x float>` arguments
@@ -78,6 +84,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
     (16 bytes) flatten as `<2 x float>, <2 x float>` with a
     `{ <2 x float>, <2 x float> }` return. Shapes verified against Clang IR;
     covered by `cabi_sse_f32_triple` and `cabi_sse_f32_quad` in both directions.
+    Exactly two direct mixed-width `f32`/`f64` fields at natural offsets 0/8
+    (16 bytes) are also accepted: `{ f32, f64 }` uses `float, double`
+    arguments and a `{ float, double }` return; the reverse `{ f64, f32 }`
+    uses `double, float` and `{ double, float }`. Clang IR probe confirms the
+    coercions; covered by `cabi_mixed_f32_f64` and `cabi_mixed_f64_f32`.
   - *Not yet implemented:* Remaining System V `SSE`/`SSEUP` coercions,
     by-value fixed arrays, variadic `extern fn`, non-`x86_64-linux` calling
     conventions, and function pointers/callbacks.
@@ -194,7 +205,10 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   `{ <2 x float>, <2 x float> }` return; exactly two direct `f64` fields map
   to the `{ double, double }` return pair and two scalar `double` arguments.
   A direct `{ f64, i32 }` at offsets 0/8 maps to
-  `double, i32` parameters and `{ double, i32 }` returns. Other unsupported
+  `double, i32` parameters and `{ double, i32 }` returns. A direct
+  `{ f32, f64 }` at offsets 0/8 maps to `float, double` parameters and a
+  `{ float, double }` return; the reverse `{ f64, f32 }` maps to
+  `double, float` and `{ double, float }`. Other unsupported
   SSE/SSEUP and split-class layouts remain rejected.
 
 ## 7. Files modified / added in the current increment
@@ -496,6 +510,45 @@ branch history; this increment does not redo them.
   Post-merge gates on `main` pass: `zig fmt --check`, Debug/ReleaseSafe
   builds and unit tests, Debug/ReleaseSafe integration matrix — all report
   `139 passed, 0 failed`. Release artifacts and tags are untouched.
+
+## 23. Mixed-width f32/f64 aggregate ABI increment (completed, not yet committed)
+
+- Scope: only aggregates with exactly two direct fields of mixed float
+  widths at natural offsets 0/8 with 16-byte layout: `{ f32, f64 }` and
+  `{ f64, f32 }`. No other behavior changed: internal Kyn aggregate calls,
+  the module system, and the runtime-check policy are untouched, and all
+  previously supported shapes are bit-identical (the new exact-shape checks
+  return before the shared SSE-only scan).
+- System V AMD64 eightbyte classification does not merge these two eightbytes
+  into one register pair for the struct; Clang 23 IR probes show Clang lowers
+  them directly as scalar parameters in field order and returns the struct
+  pair. Clang IR evidence:
+  - `struct { float a; double b; }`: parameters `(float, double)`, return
+    `{ float, double }`;
+  - `struct { double a; float b; }`: parameters `(double, float)`, return
+    `{ double, float }`.
+- Implementation: transport types `.abi_f32_f64` and `.abi_f64_f32`
+  (`{ float, double }` and `{ double, float }`) added to `compiler/types.zig`
+  and `compiler/backend/llvm.zig`; new `BoundaryClass` variants `sse_f32_f64`
+  and `sse_f64_f32` in both sema and backend. The size-16 exact-shape block
+  now runs the two new checks after the existing `{ f64, i32 }` / `{ i32, f64 }`
+  checks. Parameters flatten in field order (matching the existing
+  per-field flatten arm), definition-side unpacking and call-side argument
+  lowering reuse the same per-field store/load path, and returns use the new
+  transport types with `align 8` loads/stores and an LLVM-alloca-friendly
+  natural alignment, matching Clang.
+- Validation: `zig build test` passes (74 tests, two new expect-clean blocks);
+  `zig fmt --check` is clean; integration suite passes in all four profiles
+  with the new `cabi_mixed_f32_f64` (exit 38) and `cabi_mixed_f64_f32`
+  (exit 36) C↔Kyn fixtures, covering argument and return paths in both
+  directions. Emitted Kyn IR signatures match Clang's exactly. Unit coverage
+  extended with two mirror blocks in the `C ABI mixed INTEGER and SSE
+  eightbytes accept exact direct layouts` test. Total integration count:
+  141 passed, 0 failed.
+- No sanitizer run was performed; no sanitizer gate is configured. The
+  interop tests used the installed `clang` (v23.1.2).
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

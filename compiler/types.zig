@@ -107,6 +107,8 @@ pub const Type = union(enum) {
     abi_pair_f64,
     abi_f64_i32,
     abi_i32_f64,
+    abi_f32_f64,
+    abi_f64_f32,
     pointer: PointerInfo,
     array: ArrayInfo,
     slice: SliceInfo,
@@ -176,6 +178,8 @@ pub const Type = union(enum) {
             .abi_pair_f64 => b.* == .abi_pair_f64,
             .abi_f64_i32 => b.* == .abi_f64_i32,
             .abi_i32_f64 => b.* == .abi_i32_f64,
+            .abi_f32_f64 => b.* == .abi_f32_f64,
+            .abi_f64_f32 => b.* == .abi_f64_f32,
             .pointer => |ap| switch (b.*) {
                 .pointer => |bp| ap.is_const == bp.is_const and eql(ap.elem, bp.elem),
                 else => false,
@@ -224,6 +228,8 @@ pub const Type = union(enum) {
             .abi_pair_f64 => "<f64, f64 ABI value>",
             .abi_f64_i32 => "<f64, i32 ABI value>",
             .abi_i32_f64 => "<i32, f64 ABI value>",
+            .abi_f32_f64 => "<f32, f64 ABI value>",
+            .abi_f64_f32 => "<f64, f32 ABI value>",
             .pointer => |p| std.fmt.bufPrint(buffer, "*{s}{s}", .{
                 if (p.is_const) "const " else "",
                 p.elem.displayName(buffer[@min(buffer.len, 8)..]),

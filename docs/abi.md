@@ -32,6 +32,10 @@ extern fn free(ptr: *u8);
   coercion is `{ double, double }`). A three-field `f32` struct returns as
   `{ <2 x float>, float }` and a four-field `f32` struct returns as
   `{ <2 x float>, <2 x float> }` (both verified against Clang IR). A direct
+  `{ f32, f64 }` struct with natural fields at offsets 0 and 8 uses
+  `float, double` arguments and returns as `{ float, double }`; the reverse
+  `{ f64, f32 }` layout uses `double, float` and `{ double, float }`. A
+  direct
   `{ f64, i32 }` or `{ f64, u32 }` struct with natural fields at offsets 0 and
   8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
   `{ i32, f64 }` / `{ u32, f64 }` layout uses `i32, double` and
@@ -104,7 +108,10 @@ Caveats:
   `<2 x float>, <2 x float>` parameters and a `{ <2 x float>, <2 x float> }`
   return, and a two-field direct `f32` struct uses `<2 x float>` for
   SSE/SSEUP, and a two-field direct `f64` struct uses two SSE registers.
-  Exact direct layouts `{ f64, i32 }` / `{ f64, u32 }` use `double, i32`
+  Exact direct layouts `{ f32, f64 }` use `float, double` parameters and
+  `{ float, double }` returns; `{ f64, f32 }` use `double, float` and
+  `{ double, float }`. Exact direct layouts `{ f64, i32 }` / `{ f64, u32 }`
+  use `double, i32`
   parameters and `{ double, i32 }` returns; `{ i32, f64 }` / `{ u32, f64 }` use
   `i32, double` and `{ i32, double }`.
   Larger supported aggregates use the hidden-pointer `byval`/`sret` form.

@@ -73,8 +73,9 @@ Milestones below are directions, not release promises.
   `{ <2 x float>, float }` return, exactly four adjacent direct `f32` fields
   via `<2 x float>, <2 x float>` with a `{ <2 x float>, <2 x float> }` return,
   exactly two direct `f64` fields via two SSE parameter registers and an LLVM
-  pair return, and direct `{ f64, i32 }` / `{ i32, f64 }` layouts at offsets
-  0/8 via their corresponding SSE+INTEGER register order.
+  pair return, direct `{ f32, f64 }` / `{ f64, f32 }` layouts at offsets 0/8
+  via two SSE registers, and direct `{ f64, i32 }` / `{ i32, f64 }` layouts at
+  offsets 0/8 via their corresponding SSE+INTEGER register order.
 - Keep the all-checks-enabled runtime policy stable across profiles unless a
   separate language-level decision explicitly specifies observable profile
   differences and adds profile-specific regressions.
