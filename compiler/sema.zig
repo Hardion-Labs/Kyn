@@ -1978,16 +1978,11 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     }
     if (layout.size <= 8) return .small_1;
     if (layout.size <= 16 and ty.* == .struct_type) {
-        // Two eightbytes that each carry exactly one integer member are
-        // lowered as (iM, iN) at the member widths, matching Clang: the
-        // narrow member travels in an 8/16/32-bit register and the wide one in
-        // an i64 register. Two i64-width members keep the .small_2 signature.
-        if (smallPairWidths(ty)) |widths| {
-            const narrow = widths[0] == 8 or widths[0] == 16 or widths[0] == 32;
-            const narrow_second = widths[1] == 8 or widths[1] == 16 or widths[1] == 32;
-            if (narrow and widths[1] == 64) return .small_2s;
-            if (widths[0] == 64 and narrow_second) return .small_2s;
-        }
+        // Two eightbytes that each carry exactly one integer leaf are
+        // lowered as (iM, iN) at the leaf widths, matching Clang: the narrow
+        // leaf travels in an 8/16/32-bit register and the wide one in an i64
+        // register. Two wide leaves keep the .small_2 signature.
+        if (smallPairLeaves(ty) != null) return .small_2s;
     }
     if (layout.size <= 16) return .small_2;
     return .memory;
@@ -2189,25 +2184,93 @@ pub fn memberBoundaryBits(ty: *Type) ?u16 {
     };
 }
 
-/// Classifies a two-member struct for the `.small_2s` boundary class and
-/// returns the two register widths. The struct is eligible when each member
-/// is an integer scalar living alone in its own eightbyte: Clang then passes
-/// the aggregate in two registers at the member widths, for example
-/// `struct { char a; long b; }` becomes `(i8, i64)`.
-fn smallPairWidths(ty: *Type) ?[2]u16 {
-    const info = ty.struct_type;
-    if (info.fields.len != 2) return null;
-    const first = memberBoundaryBits(info.fields[0].ty) orelse return null;
-    const second = memberBoundaryBits(info.fields[1].ty) orelse return null;
-    const first_layout = aggregateLayoutGuess(info.fields[0].ty) orelse return null;
-    const second_layout = aggregateLayoutGuess(info.fields[1].ty) orelse return null;
-    // Each member must fit in a single eightbyte and the second one must
-    // start in the second eightbyte, so every eightbyte carries exactly one
-    // member.
-    if (first_layout.size > 8 or second_layout.size > 8) return null;
-    const second_offset = std.mem.alignForward(u64, first_layout.size, second_layout.align_);
-    if (second_offset < 8 or second_offset + second_layout.size > 16) return null;
-    return .{ first, second };
+/// The scalar leaves carried by one eightbyte of an aggregate.
+pub const EightbyteLeaf = struct {
+    /// Number of scalar leaves in the eightbyte.
+    count: u16 = 0,
+    /// Set when the eightbyte carries exactly one integer scalar leaf, the
+    /// only shape that travels in a register narrower than the eightbyte
+    /// itself.
+    integer_singleton: bool = false,
+    /// Width in bits of that single integer leaf at the C ABI boundary.
+    bits: u16 = 0,
+    /// Byte offset of that single integer leaf inside the aggregate.
+    offset: u64 = 0,
+};
+
+/// Counts the scalar leaves of `ty` per eightbyte. Nested structs are walked
+/// through, because Clang flattens them into their leaves when it decides the
+/// register width of an eightbyte.
+fn collectAggregateLeaves(ty: *Type, base_offset: u64, leaves: *[2]EightbyteLeaf) bool {
+    switch (ty.*) {
+        .struct_type => |info| {
+            var offset = base_offset;
+            for (info.fields) |field| {
+                const layout = aggregateLayoutGuess(field.ty) orelse return false;
+                offset = std.mem.alignForward(u64, offset, layout.align_);
+                if (!collectAggregateLeaves(field.ty, offset, leaves)) return false;
+                offset += layout.size;
+            }
+            return true;
+        },
+        .enum_type => |info| return collectAggregateLeaves(info.backing, base_offset, leaves),
+        .bool => return recordIntegerLeaf(ty, base_offset, 1, leaves),
+        .char => return recordIntegerLeaf(ty, base_offset, 4, leaves),
+        .int => |info| return recordIntegerLeaf(ty, base_offset, @as(u64, info.bits / 8), leaves),
+        // A floating-point leaf makes the eightbyte SSE, and a pointer leaf
+        // travels as a pointer, so neither can be narrowed to a member width.
+        .float => |bits| return recordAggregateLeaf(base_offset, bits / 8, bits, false, leaves),
+        .pointer => return recordAggregateLeaf(base_offset, 8, 64, false, leaves),
+        else => return false,
+    }
+}
+
+/// Records an integer scalar leaf, whose boundary width comes from the shared
+/// member width table.
+fn recordIntegerLeaf(ty: *Type, offset: u64, size: u64, leaves: *[2]EightbyteLeaf) bool {
+    const bits = memberBoundaryBits(ty) orelse return false;
+    return recordAggregateLeaf(offset, size, bits, true, leaves);
+}
+
+fn recordAggregateLeaf(
+    offset: u64,
+    size: u64,
+    bits: u16,
+    is_integer: bool,
+    leaves: *[2]EightbyteLeaf,
+) bool {
+    if (size == 0) return true;
+    const last_byte = offset + size - 1;
+    if (last_byte >= 16) return false;
+    const first: usize = @intCast(offset / 8);
+    const last: usize = @intCast(last_byte / 8);
+    for (leaves[first .. last + 1]) |*leaf| {
+        leaf.count += 1;
+        // A leaf spanning two eightbytes never travels alone in a register.
+        if (leaf.count == 1 and is_integer and first == last) {
+            leaf.integer_singleton = true;
+            leaf.bits = bits;
+            leaf.offset = offset;
+        }
+    }
+    return true;
+}
+
+/// Returns the two integer leaves of `ty` when each eightbyte carries exactly
+/// one integer scalar leaf and one of them is narrower than 64 bits. This is
+/// the `.small_2s` boundary class: Clang passes such aggregates in two
+/// registers at the leaf widths, for example
+/// `struct { struct { short x; } a; long b; }` becomes `(i16, i64)`.
+pub fn smallPairLeaves(ty: *Type) ?[2]EightbyteLeaf {
+    if (ty.* != .struct_type) return null;
+    var leaves = [_]EightbyteLeaf{ .{}, .{} };
+    if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
+    if (leaves[0].count != 1 or leaves[1].count != 1) return null;
+    if (!leaves[0].integer_singleton or !leaves[1].integer_singleton) return null;
+    // Exactly one leaf is narrower than a full register: two narrow leaves
+    // have no transport type and two wide leaves keep the `.small_2` packing.
+    if ((leaves[0].bits < 64) == (leaves[1].bits < 64)) return null;
+    return leaves;
 }
 
 /// Returns true when `ty` carries an integer register of exactly `bits`
@@ -2688,6 +2751,24 @@ test "C ABI small integer members accept exact layouts" {
         \\fn main() i32 { return 0; }
     );
 
+    try expectClean(
+        \\struct Narrow { value: i16 }
+        \\struct Wide { value: i32 }
+        \\struct NestedNarrow { narrow: Narrow, amount: i64 }
+        \\struct NestedWide { wide: Wide, amount: i64 }
+        \\struct ReversedNested { amount: i64, narrow: Narrow }
+        \\struct DoubledNarrow { narrow: Narrow, count: i16 }
+        \\extern fn c_take_nn(value: NestedNarrow) NestedNarrow;
+        \\extern fn c_take_nw(value: NestedWide) NestedWide;
+        \\extern fn c_take_rn(value: ReversedNested) ReversedNested;
+        \\extern fn c_take_dn(value: DoubledNarrow) DoubledNarrow;
+        \\export fn kyn_id_nn(value: NestedNarrow) NestedNarrow { return value; }
+        \\export fn kyn_id_nw(value: NestedWide) NestedWide { return value; }
+        \\export fn kyn_id_rn(value: ReversedNested) ReversedNested { return value; }
+        \\export fn kyn_id_dn(value: DoubledNarrow) DoubledNarrow { return value; }
+        \\fn main() i32 { return 0; }
+    );
+
     try expectSemanticError(
         \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
         \\extern fn c_take(value: SmallArrayDouble);
@@ -2813,6 +2894,13 @@ test "C ABI multi-member eightbyte layouts accept exact runs" {
     try expectSemanticError(
         \\struct SmallArrayDouble { count: [2]i8, amount: f64 }
         \\extern fn c_take(value: SmallArrayDouble);
+        \\fn main() i32 { return 0; }
+    , "E0473");
+
+    try expectSemanticError(
+        \\struct FloatLeaf { value: f32 }
+        \\struct NestedFloat { inner: FloatLeaf, amount: i64 }
+        \\extern fn c_take_nested(value: NestedFloat) NestedFloat;
         \\fn main() i32 { return 0; }
     , "E0473");
 }

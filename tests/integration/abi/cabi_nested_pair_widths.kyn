@@ -1,0 +1,40 @@
+struct Narrow { value: i16 }
+struct Wide { value: i32 }
+struct NestedNarrow { narrow: Narrow, amount: i64 }
+struct NestedWide { wide: Wide, amount: i64 }
+struct ReversedNested { amount: i64, narrow: Narrow }
+struct DoubledNarrow { narrow: Narrow, count: i16 }
+
+extern fn c_take_nested_narrow(value: NestedNarrow) NestedNarrow;
+extern fn c_take_nested_wide(value: NestedWide) NestedWide;
+extern fn c_take_reversed_nested(value: ReversedNested) ReversedNested;
+extern fn c_take_doubled_narrow(value: DoubledNarrow) DoubledNarrow;
+extern fn c_check_kyn() i32;
+
+export fn kyn_take_nested_narrow(value: NestedNarrow) NestedNarrow {
+    return NestedNarrow { narrow: Narrow { value: value.narrow.value + 1 }, amount: value.amount + 2 };
+}
+
+export fn kyn_take_nested_wide(value: NestedWide) NestedWide {
+    return NestedWide { wide: Wide { value: value.wide.value + 1 }, amount: value.amount + 2 };
+}
+
+export fn kyn_take_reversed_nested(value: ReversedNested) ReversedNested {
+    return ReversedNested { amount: value.amount + 2, narrow: Narrow { value: value.narrow.value + 1 } };
+}
+
+export fn kyn_take_doubled_narrow(value: DoubledNarrow) DoubledNarrow {
+    return DoubledNarrow { narrow: Narrow { value: value.narrow.value + 1 }, count: value.count + 1 };
+}
+
+fn main() i32 {
+    let nested_narrow = c_take_nested_narrow(NestedNarrow { narrow: Narrow { value: 3 }, amount: 10 });
+    let nested_wide = c_take_nested_wide(NestedWide { wide: Wide { value: 4 }, amount: 20 });
+    let reversed_nested = c_take_reversed_nested(ReversedNested { amount: 30, narrow: Narrow { value: 5 } });
+    let doubled_narrow = c_take_doubled_narrow(DoubledNarrow { narrow: Narrow { value: 6 }, count: 7 });
+    return (nested_narrow.narrow.value as i32) + (nested_narrow.amount as i32) +
+        (nested_wide.wide.value as i32) + (nested_wide.amount as i32) +
+        (reversed_nested.amount as i32) + (reversed_nested.narrow.value as i32) +
+        (doubled_narrow.narrow.value as i32) + (doubled_narrow.count as i32) +
+        c_check_kyn();
+}

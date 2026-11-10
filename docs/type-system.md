@@ -262,14 +262,17 @@ pointer regardless of how the pointer variable itself was declared.
   uses `double, i8` / `double, i16` and `{ double, i8 }` / `{ double, i16 }`
   returns. A direct `{ bool, f64 }` or `{ double, bool }` passes the singleton
   `bool` as a full `i8` parameter, with `{ i8, double }` / `{ double, i8 }`
-  returns. Two-member structs whose members occupy one eightbyte each and are
-  both integer scalars pass each member at its own width in its own register,
-  returning the matching pair: `{ i8/u8, i64 }` / `{ u8/u8, i64 }` uses
-  `i8, i64` and `{ i8, i64 }`; `{ i16/u16, i64 }` / `{ u16/u16, i64 }` uses
-  `i16, i64` and `{ i16, i64 }`; `{ i32, i64 }` / `{ u32, u64 }` uses
-  `i32, i64` and `{ i32, i64 }`; and the reversed layouts `{ i64, i8/u8 }`,
+  returns. A struct whose two eightbytes each carry exactly one integer leaf
+  passes each leaf at its own width in its own register, returning the
+  matching pair: `{ i8/u8, i64 }` / `{ u8/u8, i64 }` uses `i8, i64` and
+  `{ i8, i64 }`; `{ i16/u16, i64 }` / `{ u16/u16, i64 }` uses `i16, i64` and
+  `{ i16, i64 }`; `{ i32, i64 }` / `{ u32, u64 }` uses `i32, i64` and
+  `{ i32, i64 }`; and the reversed layouts `{ i64, i8/u8 }`,
   `{ i64, i16/u16 }` and `{ i64, i32/u32 }` use `i64, i8` / `i64, i16` /
-  `i64, i32` with the matching pair returns.
+  `i64, i32` with the matching pair returns. Nested integer members are
+  flattened into their leaves like Clang does, so
+  `{ struct { short x; } a; long b; }` uses `i16, i64` and `{ i16, i64 }`,
+  while a nested member with more than one leaf merges its eightbyte.
   Sub-32-bit integer members (`i8`, `u8`, `i16`, `u16`) and `bool`
   are also accepted inside `INTEGER`-merged eightbytes, where the packed
   `i64` is passed irrespective of member widths; singleton small members pass

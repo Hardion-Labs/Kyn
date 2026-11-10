@@ -21,6 +21,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   default enum backing), pointer arithmetic fixes, static/runtime slice null
   and bounds safety, `< 8`-byte / `< 16`-byte C ABI aggregate packing hardening,
   executable slice C ABI verification, and specification reconciliation.
+- **ABI increment in progress (not yet committed):** the `.small_2s` boundary
+  class now follows Clang's leaf-flattening rule, so nested integer members
+  are classified by their leaves: `{ struct { short x; } a; long b; }` lowers
+  to `i16, i64` parameters and a `{ i16, i64 }` return instead of the packed
+  `.small_2` form. See §33 for the full scope, implementation map and
+  validation results.
 - **Latest ABI increment completed and merged (`1a76dbb`, PR #14):** two-member
   structs whose members occupy one eightbyte each and are both integer scalars
   now lower as `.small_2s` — each member passes in its own register at its own
@@ -262,10 +268,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
    beyond the f32 run shapes and f64 pair, complete eightbyte-class merging,
    function pointers, and target ABI selection instead of host-assumed
    `64`-bit `usize`). Within the INTEGER class, the two-member
-   narrow-plus-wide pair shapes are now covered (§32); the remaining
-   INTEGER-class gap is Clang's leaf-flattening of nested-struct members
-   (e.g. `{ struct { short x; } a; long b; }` → `(i16, i64)`), which today
-   stays on the ABI-compatible `.small_2` lowering.
+   narrow-plus-wide pair shapes are now covered (§32) and the leaf-flattening
+   of nested integer members follows Clang as well (§33); the remaining
+   INTEGER-class gap is the SSE-side leaf flattening of nested members
+   (e.g. `{ struct { float f; } a; long b; }` → `(float, i64)`), which stays
+   rejected with `E0473` because the current SSE classes only recognise
+   direct members.
 3. **Tagged unions / explicit error-return types** (`Result`-style value flow
    without hidden exceptions or unwinding).
 4. **Freestanding `std` core (`std/`) and optional runtime (`runtime/`)** built
@@ -1150,6 +1158,57 @@ branch history; this increment does not redo them.
   `(i16, i64)`), which today stays on the ABI-compatible `.small_2`
   lowering; matching Clang's flattened form exactly requires leaf
   extraction across nested aggregates at the boundary.
+
+## 33. Nested integer-leaf flattening ABI increment (implemented, pending merge)
+
+- Scope: the `.small_2s` boundary class now follows Clang's leaf-flattening
+  rule. Clang decides the register width of an eightbyte from the *leaves* it
+  carries, flattening nested structs into their scalar members, so a nested
+  integer member is passed at its own width instead of the packed form. The
+  rule was probed with Clang 23.1.2 before implementing:
+  - `{ struct { short x; } a; long b; }` → `(i16, i64)`, `{ i16, i64 }`
+  - `{ struct { int x; } a; long b; }` → `(i32, i64)`, `{ i32, i64 }`
+  - `{ long a; struct { short x; } b; }` → `(i64, i16)`, `{ i64, i16 }`
+  - `{ struct { struct { short x; } i; } a; long b; }` → `(i16, i64)`
+  - `{ struct { char p; char q; } a; long b; }` → `(i64, i64)` (two leaves
+    merge the eightbyte, so the packed `.small_2` form is kept)
+  - `{ char c; struct { short x; } a; long b; }` → `(i64, i64)` (same merge)
+  - `{ struct { short x; } a; struct { short y; } b; }` → `(i32)` (4 bytes,
+    whole-aggregate rule)
+- Implementation:
+  - `compiler/sema.zig`: new `pub const EightbyteLeaf` and the leaf walker
+    `collectAggregateLeaves`, which counts the scalar leaves per eightbyte
+    (nested structs are walked through) and records the width and byte offset
+    of a lone integer leaf. `pub fn smallPairLeaves` returns the two leaves
+    when each eightbyte carries exactly one integer scalar leaf and exactly
+    one of them is narrower than 64 bits; `aggregateBoundaryClass` maps that
+    shape to `.small_2s`. Floating-point and pointer leaves are never
+    narrowable, so they keep the existing SSE/INTEGER behaviour.
+  - `compiler/backend/llvm.zig`: the four `.small_2s` sites now read the
+    widths and offsets from `sema.smallPairLeaves` instead of re-deriving
+    them from the direct members, so the classification and the lowering
+    cannot drift apart. The callee stores each incoming register into the
+    byte slot that holds its leaf and the caller loads each leaf from that
+    slot, which works for direct and nested leaves alike. The backend's
+    duplicated member-width helper was removed and the vestigial element
+    type parameter of `byteOffset` was dropped.
+- Validation: `zig build`, `zig build -Doptimize=ReleaseSafe`, `zig build test`
+  and `zig fmt --check build.zig compiler build-system` pass; the integration
+  suite passes in all four profiles (`debug`, `safe`, `release`, `fast`) with
+  `166 passed, 0 failed`, including the new `cabi_nested_pair_widths` fixture
+  (exit 96) that exercises the nested layouts in both directions. The
+  generated IR for the nested shapes was compared against the Clang probes and
+  matches, and an ad-hoc C↔Kyn program confirmed both directions still
+  interoperate.
+- Compatibility: the previous packed `.small_2` lowering of the nested shapes
+  was already ABI-compatible (the register pair carries the same bytes), so
+  this increment changes the IR shape, not the machine-level contract.
+- Docs: `abi.md`, `type-system.md`, `language-reference.md`, `roadmap.md`,
+  `README.md`, `CHANGELOG.md` (`[Unreleased]`) and this record updated.
+- No sanitizer run was performed; no sanitizer gate is configured. Interop
+  used the installed `clang` (v23.1.2).
+- Pending: this increment is not yet committed, pushed, or merged. The next
+  action is a branch, commit, PR, green CI, merge, and post-merge gates.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

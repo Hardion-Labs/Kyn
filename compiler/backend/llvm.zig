@@ -203,11 +203,9 @@ pub const Lowering = struct {
             const class = self.aggregateBoundaryParam(ty);
             switch (class) {
                 .small_2s => {
-                    const members = ty.struct_type;
-                    const first_bits = self.boundaryMemberBits(members.fields[0].ty);
-                    const second_bits = self.boundaryMemberBits(members.fields[1].ty);
-                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .int = .{ .bits = first_bits, .signed = true } }) });
-                    try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = try self.simpleType(.{ .int = .{ .bits = second_bits, .signed = true } }) });
+                    const leaves = sema_mod.smallPairLeaves(ty) orelse unreachable;
+                    try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .int = .{ .bits = leaves[0].bits, .signed = true } }) });
+                    try params_list.append(self.allocator, .{ .local = hidden_id + 1, .ty = try self.simpleType(.{ .int = .{ .bits = leaves[1].bits, .signed = true } }) });
                     hidden_id += 2;
                 },
                 .small_2 => {
@@ -299,11 +297,8 @@ pub const Lowering = struct {
             .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(fd.ret_expr.?.resolved.?) orelse 8), .signed = true } }),
             .small_2 => i128_ty,
             .small_2s => blk: {
-                const members = fd.ret_expr.?.resolved.?.struct_type;
-                break :blk try self.pairTransportType(
-                    self.boundaryMemberBits(members.fields[0].ty),
-                    self.boundaryMemberBits(members.fields[1].ty),
-                );
+                const leaves = sema_mod.smallPairLeaves(fd.ret_expr.?.resolved.?) orelse unreachable;
+                break :blk try self.pairTransportType(leaves[0].bits, leaves[1].bits);
             },
             .sse_float => try self.simpleType(.{ .float = 32 }),
             .sse_double => try self.simpleType(.{ .float = 64 }),
@@ -407,14 +402,6 @@ pub const Lowering = struct {
         const expr = ret_expr orelse return .none;
         const ty = expr.resolved orelse return .none;
         return self.aggregateBoundaryParam(ty);
-    }
-
-    /// Width in bits of an integer member at the C ABI boundary. The
-    /// classification lives in the semantic analyzer so the boundary
-    /// lowering and the class decision always agree.
-    fn boundaryMemberBits(self: *Lowering, member_ty: *types.Type) u16 {
-        _ = self;
-        return sema_mod.memberBoundaryBits(member_ty) orelse 64;
     }
 
     /// Returns the pair transport type for two boundary member widths. Used
@@ -746,16 +733,16 @@ pub const Lowering = struct {
                         visible_index += 2;
                     },
                     .small_2s => {
-                        // Two singleton-INTEGER eightbytes: each member arrives in
-                        // its own register at the member width.
+                        // Each eightbyte carries exactly one integer leaf, which
+                        // arrives in its own register at the leaf width.
                         if (function.params.len <= visible_index + 1) break;
-                        const info = sym.ty.struct_type;
-                        for (0..2) |field_index| {
-                            const field_ptr = try self.aggregateFieldPointer(.{ .local = sym.id }, info, @intCast(field_index));
+                        const leaves = sema_mod.smallPairLeaves(sym.ty) orelse break;
+                        for (0..2) |index| {
+                            const leaf_ptr = try self.leafSlotPointer(.{ .local = sym.id }, leaves[index]);
                             try self.emitValueStore(.{
-                                .ptr = field_ptr,
-                                .value = .{ .param = function.params[visible_index + field_index].local },
-                                .ty = function.params[visible_index + field_index].ty,
+                                .ptr = leaf_ptr,
+                                .value = .{ .param = function.params[visible_index + index].local },
+                                .ty = function.params[visible_index + index].ty,
                             });
                         }
                         visible_index += 2;
@@ -788,8 +775,7 @@ pub const Lowering = struct {
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = vector_ty,
                         });
-                        const elem_i8 = try self.simpleType(.char);
-                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
+                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8);
                         const float_ty = try self.simpleType(.{ .float = 32 });
                         try self.emitValueStore(.{
                             .ptr = tail_ptr,
@@ -806,8 +792,7 @@ pub const Lowering = struct {
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = vector_ty,
                         });
-                        const elem_i8 = try self.simpleType(.char);
-                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
+                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8);
                         try self.emitValueStore(.{
                             .ptr = tail_ptr,
                             .value = .{ .param = function.params[visible_index + 1].local },
@@ -837,8 +822,7 @@ pub const Lowering = struct {
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = first_ty,
                         });
-                        const elem_i8 = try self.simpleType(.char);
-                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
+                        const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8);
                         const second_ty = function.params[visible_index + 1].ty;
                         try self.emitValueStore(.{
                             .ptr = tail_ptr,
@@ -940,6 +924,13 @@ pub const Lowering = struct {
         } });
     }
 
+    /// Returns a pointer to the byte slot that holds a boundary leaf inside
+    /// an aggregate.
+    fn leafSlotPointer(self: *Lowering, base: ir.Value, leaf: sema_mod.EightbyteLeaf) Error!ir.Value {
+        if (leaf.offset == 0) return base;
+        return self.byteOffset(base, @intCast(leaf.offset));
+    }
+
     // ------------------------------------------------------------------
     // Statements
     // ------------------------------------------------------------------
@@ -1021,11 +1012,8 @@ pub const Lowering = struct {
                             // the returned value is loaded with that type from
                             // the aggregate storage.
                             const aggregate_ptr = try self.lowerAggregateBase(expr, expr.ty.?);
-                            const members = expr.ty.?.struct_type;
-                            const transport_ty = try self.pairTransportType(
-                                self.boundaryMemberBits(members.fields[0].ty),
-                                self.boundaryMemberBits(members.fields[1].ty),
-                            );
+                            const leaves = sema_mod.smallPairLeaves(expr.ty.?) orelse unreachable;
+                            const transport_ty = try self.pairTransportType(leaves[0].bits, leaves[1].bits);
                             const pair_value = try self.reg(transport_ty);
                             try self.emit(.{ .load = .{ .dst = pair_value, .ptr = aggregate_ptr, .ty = transport_ty } });
                             try self.emit(.{ .ret = .{ .value = .{ .reg = pair_value } } });
@@ -1567,8 +1555,7 @@ pub const Lowering = struct {
                     try args_list.append(self.allocator, .{ .reg = vector_value });
                     try types_list.append(self.allocator, vector_ty);
                     try byval_list.append(self.allocator, null);
-                    const elem_i8 = try self.simpleType(.char);
-                    const tail_ptr = try self.byteOffset(slot, 8, elem_i8);
+                    const tail_ptr = try self.byteOffset(slot, 8);
                     const float_ty = try self.simpleType(.{ .float = 32 });
                     const tail_value = try self.reg(float_ty);
                     try self.emit(.{ .load = .{
@@ -1592,8 +1579,7 @@ pub const Lowering = struct {
                     try args_list.append(self.allocator, .{ .reg = first });
                     try types_list.append(self.allocator, vector_ty);
                     try byval_list.append(self.allocator, null);
-                    const elem_i8 = try self.simpleType(.char);
-                    const tail_ptr = try self.byteOffset(slot, 8, elem_i8);
+                    const tail_ptr = try self.byteOffset(slot, 8);
                     const second = try self.reg(vector_ty);
                     try self.emit(.{ .load = .{
                         .dst = second,
@@ -1618,8 +1604,7 @@ pub const Lowering = struct {
                     try args_list.append(self.allocator, .{ .reg = slot0_value });
                     try types_list.append(self.allocator, slot0_ty);
                     try byval_list.append(self.allocator, null);
-                    const elem_i8 = try self.simpleType(.char);
-                    const tail_ptr = try self.byteOffset(slot, 8, elem_i8);
+                    const tail_ptr = try self.byteOffset(slot, 8);
                     const slot1_ty = switch (class_tag) {
                         .sse_f32x2_i32 => try self.simpleType(.{ .int = .{ .bits = 32, .signed = true } }),
                         .sse_f32x2_i64, .sse_f64_i64x => i64_ty,
@@ -1653,22 +1638,21 @@ pub const Lowering = struct {
                     }
                 },
                 .small_2s => {
-                    // Two singleton-INTEGER eightbytes: each member is passed in
-                    // its own register at the member width.
+                    // Each eightbyte carries exactly one integer leaf, which is
+                    // passed in its own register at the leaf width.
                     const slot = try self.lowerAggregateBase(arg, ty);
-                    const info = ty.struct_type;
-                    for (0..2) |field_index| {
-                        const member_ty = info.fields[field_index].ty;
-                        const boundary_ty = try self.boundaryMemberType(member_ty);
-                        const field_ptr = try self.aggregateFieldPointer(slot, info, @intCast(field_index));
-                        const member_value = try self.reg(boundary_ty);
+                    const leaves = sema_mod.smallPairLeaves(ty) orelse break;
+                    for (0..2) |index| {
+                        const leaf_ty = try self.simpleType(.{ .int = .{ .bits = leaves[index].bits, .signed = true } });
+                        const leaf_ptr = try self.leafSlotPointer(slot, leaves[index]);
+                        const leaf_value = try self.reg(leaf_ty);
                         try self.emit(.{ .load = .{
-                            .dst = member_value,
-                            .ptr = field_ptr,
-                            .ty = boundary_ty,
+                            .dst = leaf_value,
+                            .ptr = leaf_ptr,
+                            .ty = leaf_ty,
                         } });
-                        try args_list.append(self.allocator, .{ .reg = member_value });
-                        try types_list.append(self.allocator, boundary_ty);
+                        try args_list.append(self.allocator, .{ .reg = leaf_value });
+                        try types_list.append(self.allocator, leaf_ty);
                         try byval_list.append(self.allocator, null);
                     }
                 },
@@ -1685,9 +1669,8 @@ pub const Lowering = struct {
                         }
                         pack_ptr = .{ .local = pack_id };
                     }
-                    const elem_i8 = try self.simpleType(.char);
-                    const p0 = try self.byteOffset(pack_ptr, 0, elem_i8);
-                    const p8 = try self.byteOffset(pack_ptr, 8, elem_i8);
+                    const p0 = try self.byteOffset(pack_ptr, 0);
+                    const p8 = try self.byteOffset(pack_ptr, 8);
                     const lo = try self.reg(i64_ty);
                     const hi = try self.reg(i64_ty);
                     try self.emit(.{ .load = .{ .dst = lo, .ptr = p0, .ty = i64_ty } });
@@ -1719,10 +1702,10 @@ pub const Lowering = struct {
         const value_ty = switch (ret_class) {
             .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(call_result) orelse 8), .signed = true } }),
             .small_2 => i128_ty,
-            .small_2s => try self.pairTransportType(
-                self.boundaryMemberBits(call_result.struct_type.fields[0].ty),
-                self.boundaryMemberBits(call_result.struct_type.fields[1].ty),
-            ),
+            .small_2s => blk: {
+                const leaves = sema_mod.smallPairLeaves(call_result) orelse unreachable;
+                break :blk try self.pairTransportType(leaves[0].bits, leaves[1].bits);
+            },
             .sse_float => try self.simpleType(.{ .float = 32 }),
             .sse_double => try self.simpleType(.{ .float = 64 }),
             .sse_f32x2 => try self.simpleType(.abi_vec2_f32),
@@ -1833,8 +1816,7 @@ pub const Lowering = struct {
         }
     }
 
-    fn byteOffset(self: *Lowering, base: ir.Value, offset: usize, elem_i8: *types.Type) Error!ir.Value {
-        _ = elem_i8;
+    fn byteOffset(self: *Lowering, base: ir.Value, offset: usize) Error!ir.Value {
         const id = self.module.temp();
         try self.emit(.{ .byte_offset = .{ .dst = id, .base = base, .offset = @intCast(offset) } });
         return .{ .reg = id };
