@@ -220,10 +220,12 @@ fn log_message() {
   direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` use member-width `i8`/`i16`
   parameters and `{ i8, double }` / `{ i16, double }` returns; the reverse
   `{ f64, i8/u8 }` / `{ f64, i16/u16 }` uses `double, i8` / `double, i16`
-  and `{ double, i8 }` / `{ double, i16 }` returns; sub-32-bit integer
+  `{ double, i8 }` / `{ double, i16 }` returns; sub-32-bit integer
   members and `bool` are also accepted inside `INTEGER`-merged eightbytes
-  (packed `i64` passed irrespective of member widths), while a singleton
-  `bool` member remains rejected (`E0473`);
+  (packed `i64` passed irrespective of member widths), direct
+  `{ bool, f64 }` / `{ f64, bool }` use a full `i8` parameter and
+  `{ i8, double }` / `{ double, i8 }` returns, while a singleton
+  `enum` member with sub-32-bit backings remains rejected (`E0473`);
   the exact multi-member layouts `{ f32, f32, i32 }`,
   `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`, `{ f32, i32/u32, f32 }`,
   `{ i32/u32, f32, f64 }`, `{ f32, i32/u32, f64 }`, `{ f64, i32/u32, i32/u32 }`,
@@ -488,7 +490,8 @@ let sum: i32 = add(1, 2);
   reverse `{ i64, f32 }` / `{ i64, f64 }` layouts via INTEGER then SSE,
   direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` structs via exact-width INTEGER
   plus SSE argument registers (the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }`
-  order is supported likewise), sub-32-bit integer members and `bool` inside
+  order is supported likewise), direct `{ bool, f64 }` / `{ f64, bool }`
+  via an `i8` argument register, sub-32-bit integer members and `bool` inside
   merged `INTEGER` eightbytes via a packed `i64` register,
   exact multi-member layouts with an SSE-only slot and an INTEGER/merged slot
   (`{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32/u32, f32, f32 }`,

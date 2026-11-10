@@ -1,0 +1,22 @@
+struct BoolDouble { count: bool, ratio: f64 }
+
+extern fn c_transform(value: BoolDouble) BoolDouble;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: BoolDouble) BoolDouble {
+    return BoolDouble {
+        count: !value.count,
+        ratio: value.ratio + 2.0,
+    };
+}
+
+fn main() i32 {
+    let result: BoolDouble = c_transform(BoolDouble { count: false, ratio: 1.5 });
+    var accumulator: i32 = 0;
+    if (result.count) {
+        accumulator = 1;
+    } else {
+        accumulator = 0;
+    }
+    return accumulator + (result.ratio as i32) + c_verify_kyn();
+}

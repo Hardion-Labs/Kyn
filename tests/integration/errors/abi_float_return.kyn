@@ -1,3 +1,4 @@
-struct SmallBoolDouble { count: bool, amount: f64 }
-export fn kyn_make() SmallBoolDouble { return SmallBoolDouble { count: true, amount: 3.0 }; }
+enum Color: u8 { Red = 2 }
+struct SmallEnumDouble { count: Color, amount: f64 }
+export fn kyn_make() SmallEnumDouble { return SmallEnumDouble { count: Color.Red, amount: 3.0 }; }
 fn main() i32 { return 0; }

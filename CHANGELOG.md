@@ -47,6 +47,16 @@ promised between alpha releases.
   full byte. Every bool memory store now emits `zext i1 -> i8` followed by an
   `i8` store, restoring the full-byte definition Clang requires at the C ABI,
   verified by generated IR and by the `cabi_multi_merge_bool` fixture.
+- C ABI support on `x86_64` Linux for exactly two direct small members at
+  natural offsets 0/8 (16 bytes), signedness irrelevant, now including a
+  singleton `bool` member: `{ bool, f64 }` lowers to `i8, double` parameters
+  and a `{ i8, double }` return; the reverse `{ f64, bool }` uses
+  `double, i8` and `{ double, i8 }`. Clang IR probes confirm both signatures.
+  Only singleton `bool` members on the INTEGER slot are admitted; singleton
+  `enum` members with sub-32-bit backings remain rejected with `E0473`.
+  Integration fixtures `cabi_small_bool_f64` and `cabi_small_f64_bool` cover
+  argument and return paths in both directions. Negative fixtures updated
+  from singleton-`bool` to singleton-`enum` layouts.
 - C ABI support on `x86_64` Linux for exactly two direct small integer members
   at natural offsets 0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }`
   passes as `i8, double` with a `{ i8, double }` return; `{ i16/u16, f64 }`
@@ -59,9 +69,11 @@ promised between alpha releases.
   `u8`, `i16`, `u16`) and `bool` are now accepted inside merged-INTEGER
   eightbytes for the existing multi-member layouts (Clang passes the packed
   `i64` irrespective of member widths); singleton-member small-integer
-  layouts use their member width, and singleton `bool` remains rejected with
-  `E0473`. Negative `E0473` fixtures moved from a now-supported `{ i16, f64 }`
-  to a rejected singleton-`bool` layout.
+  layouts use their member width, and a singleton `bool` member is now
+  accepted as a full `i8` at the boundary (see the bullet below). Negative
+  `E0473` fixtures moved from a now-supported `{ i16, f64 }` first to a
+  singleton-`bool` layout, then to a singleton-`enum` layout when singleton
+  `bool` became supported as well.
 - C ABI support on `x86_64` Linux for exact multi-member 12/16-byte layouts
   whose eightbytes split into an SSE-only slot and an INTEGER/merged slot,
   verified against Clang IR probes: `{ f32, f32, i32/u32 }`

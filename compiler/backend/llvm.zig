@@ -239,7 +239,7 @@ pub const Lowering = struct {
                 },
                 .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64, .sse_i8_f64, .sse_i16_f64, .sse_f64_i8, .sse_f64_i16 => {
                     for (ty.struct_type.fields) |field| {
-                        try params_list.append(self.allocator, .{ .local = hidden_id, .ty = field.ty });
+                        try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.boundaryMemberType(field.ty) });
                         hidden_id += 1;
                     }
                 },
@@ -336,6 +336,16 @@ pub const Lowering = struct {
         const ty = try self.allocator.create(types.Type);
         ty.* = value;
         return ty;
+    }
+
+    /// Replaces a boundary-passing `bool` scalar with an unsigned byte: C ABI
+    /// `_Bool` is a full `i8`, and Kyn's bit-level `bool` cannot be emitted as
+    /// an `i1` parameter or load at the boundary.
+    fn boundaryMemberType(self: *Lowering, field_ty: *types.Type) Error!*types.Type {
+        if (field_ty.* != .bool) return field_ty;
+        const i8_ty = try self.allocator.create(types.Type);
+        i8_ty.* = .{ .int = .{ .bits = 8, .signed = false } };
+        return i8_ty;
     }
 
     fn aggregateBoundaryParam(self: *Lowering, ty: *types.Type) BoundaryClass {
@@ -739,12 +749,11 @@ pub const Lowering = struct {
                         const info = sym.ty.struct_type;
                         if (function.params.len < visible_index + info.fields.len) break;
                         for (0..info.fields.len) |field_index| {
-                            const field_ty = info.fields[field_index].ty;
                             const field_ptr = try self.aggregateFieldPointer(.{ .local = sym.id }, info, @intCast(field_index));
                             try self.emitValueStore(.{
                                 .ptr = field_ptr,
                                 .value = .{ .param = function.params[visible_index + field_index].local },
-                                .ty = field_ty,
+                                .ty = function.params[visible_index + field_index].ty,
                             });
                         }
                         visible_index += info.fields.len;
@@ -1543,15 +1552,16 @@ pub const Lowering = struct {
                     const info = ty.struct_type;
                     for (0..info.fields.len) |field_index| {
                         const field_ty = info.fields[field_index].ty;
+                        const member_ty = try self.boundaryMemberType(field_ty);
                         const field_ptr = try self.aggregateFieldPointer(slot, info, @intCast(field_index));
-                        const field_value = try self.reg(field_ty);
+                        const field_value = try self.reg(member_ty);
                         try self.emit(.{ .load = .{
                             .dst = field_value,
                             .ptr = field_ptr,
-                            .ty = field_ty,
+                            .ty = member_ty,
                         } });
                         try args_list.append(self.allocator, .{ .reg = field_value });
-                        try types_list.append(self.allocator, field_ty);
+                        try types_list.append(self.allocator, member_ty);
                         try byval_list.append(self.allocator, null);
                     }
                 },

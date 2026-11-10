@@ -1900,14 +1900,17 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
                 return .sse_i64_f64;
             }
             if (fields.len == 2 and
-                fields[0].ty.* == .int and (fields[0].ty.int.bits == 8 or fields[0].ty.int.bits == 16) and
                 fields[1].ty.* == .float and fields[1].ty.float == 64 and
+                (fields[0].ty.* == .bool or
+                    (fields[0].ty.* == .int and (fields[0].ty.int.bits == 8 or fields[0].ty.int.bits == 16))) and
                 eightbytes[0].has_integer and !eightbytes[0].has_sse and
                 eightbytes[1].has_sse and !eightbytes[1].has_integer)
             {
-                // A single sub-32-bit-width integer member is passed at its
-                // own width. LLVM uses the member-width integer and a double,
-                // returning the pair; signedness is irrelevant.
+                // A single sub-32-bit-width member (or a bool, one byte) is
+                // passed at its own width.
+                // LLVM uses the member-width integer and a double, returning
+                // the pair; signedness is irrelevant.
+                if (fields[0].ty.* == .bool) return .sse_i8_f64;
                 return switch (fields[0].ty.int.bits) {
                     8 => .sse_i8_f64,
                     16 => .sse_i16_f64,
@@ -1916,11 +1919,13 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
             }
             if (fields.len == 2 and
                 fields[0].ty.* == .float and fields[0].ty.float == 64 and
-                fields[1].ty.* == .int and (fields[1].ty.int.bits == 8 or fields[1].ty.int.bits == 16) and
+                (fields[1].ty.* == .bool or
+                    (fields[1].ty.* == .int and (fields[1].ty.int.bits == 8 or fields[1].ty.int.bits == 16))) and
                 eightbytes[0].has_sse and !eightbytes[0].has_integer and
                 eightbytes[1].has_integer and !eightbytes[1].has_sse)
             {
-                // The reverse layout is double then a sub-32-bit-width integer.
+                // The reverse layout is double then a sub-32-bit-width member.
+                if (fields[1].ty.* == .bool) return .sse_f64_i8;
                 return switch (fields[1].ty.int.bits) {
                     8 => .sse_f64_i8,
                     16 => .sse_f64_i16,
@@ -2519,18 +2524,24 @@ test "C ABI small integer members accept exact layouts" {
         \\struct SmallUDouble { count: u16, amount: f64 }
         \\struct DoubleTiny { amount: f64, count: i8 }
         \\struct DoubleSmall { amount: f64, count: i16 }
+        \\struct BoolDouble { count: bool, amount: f64 }
+        \\struct DoubleBool { amount: f64, count: bool }
         \\extern fn c_take_td(value: TinyDouble) TinyDouble;
         \\extern fn c_take_tu(value: TinyUDouble) TinyUDouble;
         \\extern fn c_take_sd(value: SmallDouble) SmallDouble;
         \\extern fn c_take_su(value: SmallUDouble) SmallUDouble;
         \\extern fn c_take_dt(value: DoubleTiny) DoubleTiny;
         \\extern fn c_take_ds(value: DoubleSmall) DoubleSmall;
+        \\extern fn c_take_bd(value: BoolDouble) BoolDouble;
+        \\extern fn c_take_db(value: DoubleBool) DoubleBool;
         \\export fn kyn_id_td(value: TinyDouble) TinyDouble { return value; }
         \\export fn kyn_id_tu(value: TinyUDouble) TinyUDouble { return value; }
         \\export fn kyn_id_sd(value: SmallDouble) SmallDouble { return value; }
         \\export fn kyn_id_su(value: SmallUDouble) SmallUDouble { return value; }
         \\export fn kyn_id_dt(value: DoubleTiny) DoubleTiny { return value; }
         \\export fn kyn_id_ds(value: DoubleSmall) DoubleSmall { return value; }
+        \\export fn kyn_id_bd(value: BoolDouble) BoolDouble { return value; }
+        \\export fn kyn_id_db(value: DoubleBool) DoubleBool { return value; }
         \\fn main() i32 { return 0; }
     );
 
@@ -2551,8 +2562,9 @@ test "C ABI small integer members accept exact layouts" {
     );
 
     try expectSemanticError(
-        \\struct SmallBoolDouble { count: bool, amount: f64 }
-        \\extern fn c_take(value: SmallBoolDouble);
+        \\enum Color: u8 { Red = 2 }
+        \\struct SmallEnumDouble { count: Color, amount: f64 }
+        \\extern fn c_take(value: SmallEnumDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 }
@@ -2606,8 +2618,9 @@ test "C ABI multi-member eightbyte layouts accept exact runs" {
     );
 
     try expectSemanticError(
-        \\struct SmallBoolDouble { count: bool, amount: f64 }
-        \\extern fn c_take(value: SmallBoolDouble);
+        \\enum Color: u8 { Red = 2 }
+        \\struct SmallEnumDouble { count: Color, amount: f64 }
+        \\extern fn c_take(value: SmallEnumDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 }
@@ -2629,8 +2642,9 @@ test "unsupported C ABI aggregate parameters and returns use a dedicated diagnos
     );
 
     try expectSemanticError(
-        \\struct SmallBoolDouble { count: bool, amount: f64 }
-        \\extern fn c_take(value: SmallBoolDouble);
+        \\enum Color: u8 { Red = 2 }
+        \\struct SmallEnumDouble { count: Color, amount: f64 }
+        \\extern fn c_take(value: SmallEnumDouble);
         \\fn main() i32 { return 0; }
     , "E0473");
 
