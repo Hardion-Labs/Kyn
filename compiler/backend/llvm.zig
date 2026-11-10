@@ -408,6 +408,22 @@ pub const Lowering = struct {
         return function.block(self.ctx.?.current).terminated;
     }
 
+    /// Stores `value` at `ptr` with type `ty`. Boolean stores are widened to a
+    /// zero-extended `i8`: Kyn's bit-level `bool` (`i1`) would otherwise leak
+    /// untouched upper byte bits into memory, and the C ABI requires the full
+    /// byte to be defined for aggregate eightbytes (Clang's `_Bool` is a
+    /// full `i8`).
+    fn emitValueStore(self: *Lowering, args: struct { ptr: ir.Value, value: ir.Value, ty: *types.Type }) Error!void {
+        if (args.ty.* != .bool) {
+            try self.emit(.{ .store = .{ .ptr = args.ptr, .value = args.value, .ty = args.ty } });
+            return;
+        }
+        const i8_ty = try self.simpleType(.{ .int = .{ .bits = 8, .signed = false } });
+        const dst = try self.reg(i8_ty);
+        try self.emit(.{ .cast = .{ .dst = dst, .kind = .bool_to_int, .from = args.ty, .to = i8_ty, .value = args.value } });
+        try self.emit(.{ .store = .{ .ptr = args.ptr, .value = .{ .reg = dst }, .ty = i8_ty } });
+    }
+
     fn emit(self: *Lowering, inst: ir.Inst) Error!void {
         const function = self.currentFunction();
         const block = function.block(self.ctx.?.current);
@@ -667,56 +683,56 @@ pub const Lowering = struct {
                     .sse_float, .sse_double => {
                         if (function.params.len <= visible_index) break;
                         const field_ty = sym.ty.struct_type.fields[0].ty;
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = .{ .local = sym.id },
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = field_ty,
-                        } });
+                        });
                         visible_index += 1;
                     },
                     .sse_f32x2 => {
                         if (function.params.len <= visible_index) break;
                         const vector_ty = try self.simpleType(.abi_vec2_f32);
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = .{ .local = sym.id },
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = vector_ty,
-                        } });
+                        });
                         visible_index += 1;
                     },
                     .sse_f32x3 => {
                         if (function.params.len <= visible_index + 1) break;
                         const vector_ty = try self.simpleType(.abi_vec2_f32);
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = .{ .local = sym.id },
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = vector_ty,
-                        } });
+                        });
                         const elem_i8 = try self.simpleType(.char);
                         const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
                         const float_ty = try self.simpleType(.{ .float = 32 });
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = tail_ptr,
                             .value = .{ .param = function.params[visible_index + 1].local },
                             .ty = float_ty,
-                        } });
+                        });
                         visible_index += 2;
                     },
                     .sse_f32x4 => {
                         if (function.params.len <= visible_index + 1) break;
                         const vector_ty = try self.simpleType(.abi_vec2_f32);
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = .{ .local = sym.id },
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = vector_ty,
-                        } });
+                        });
                         const elem_i8 = try self.simpleType(.char);
                         const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = tail_ptr,
                             .value = .{ .param = function.params[visible_index + 1].local },
                             .ty = vector_ty,
-                        } });
+                        });
                         visible_index += 2;
                     },
                     .sse_f64x2, .sse_f64_i32, .sse_i32_f64, .sse_f32_f64, .sse_f64_f32, .sse_f32_i64, .sse_i64_f32, .sse_f64_i64, .sse_i64_f64, .sse_i8_f64, .sse_i16_f64, .sse_f64_i8, .sse_f64_i16 => {
@@ -725,11 +741,11 @@ pub const Lowering = struct {
                         for (0..info.fields.len) |field_index| {
                             const field_ty = info.fields[field_index].ty;
                             const field_ptr = try self.aggregateFieldPointer(.{ .local = sym.id }, info, @intCast(field_index));
-                            try self.emit(.{ .store = .{
+                            try self.emitValueStore(.{
                                 .ptr = field_ptr,
                                 .value = .{ .param = function.params[visible_index + field_index].local },
                                 .ty = field_ty,
-                            } });
+                            });
                         }
                         visible_index += info.fields.len;
                     },
@@ -737,19 +753,19 @@ pub const Lowering = struct {
                         // Two-slot transport: bytes 0-7 then bytes 8-15 in field order.
                         if (function.params.len <= visible_index + 1) break;
                         const first_ty = function.params[visible_index].ty;
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = .{ .local = sym.id },
                             .value = .{ .param = function.params[visible_index].local },
                             .ty = first_ty,
-                        } });
+                        });
                         const elem_i8 = try self.simpleType(.char);
                         const tail_ptr = try self.byteOffset(.{ .local = sym.id }, 8, elem_i8);
                         const second_ty = function.params[visible_index + 1].ty;
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = tail_ptr,
                             .value = .{ .param = function.params[visible_index + 1].local },
                             .ty = second_ty,
-                        } });
+                        });
                         visible_index += 2;
                     },
                     .memory => {
@@ -766,11 +782,11 @@ pub const Lowering = struct {
                 }
             } else {
                 if (function.params.len <= visible_index) break;
-                try self.emit(.{ .store = .{
+                try self.emitValueStore(.{
                     .ptr = .{ .local = sym.id },
                     .value = .{ .param = function.params[visible_index].local },
                     .ty = function.params[visible_index].ty,
-                } });
+                });
                 visible_index += 1;
             }
         }
@@ -821,11 +837,11 @@ pub const Lowering = struct {
         const i64_ty = try self.simpleType(.{ .int = .{ .bits = 64, .signed = true } });
         const temp = self.module.ephemeral();
         try self.addLocal(temp, "pack", i64_ty, null);
-        try self.emit(.{ .store = .{
+        try self.emitValueStore(.{
             .ptr = .{ .local = temp },
             .value = source,
             .ty = i64_ty,
-        } });
+        });
 
         var destination_value = destination;
         if (offset > 0) {
@@ -876,11 +892,11 @@ pub const Lowering = struct {
                     const value: ir.Value = if (sse_abi_return) .none else try self.lowerExpr(expr);
                     const hidden_sret = boundary and ret_class == .memory;
                     if (hidden_sret) {
-                        try self.emit(.{ .store = .{
+                        try self.emitValueStore(.{
                             .ptr = .{ .param = function.params[0].local },
                             .value = value,
                             .ty = expr.ty.?,
-                        } });
+                        });
                         try self.emit(.{ .ret = .{ .value = null } });
                     } else {
                         if (sse_abi_return) {
@@ -926,17 +942,17 @@ pub const Lowering = struct {
                                 try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
                             const temp = self.module.ephemeral();
                             try self.addLocal(temp, "pack", storage_ty, null);
-                            try self.emit(.{ .store = .{
+                            try self.emitValueStore(.{
                                 .ptr = .{ .local = temp },
                                 .value = .{ .int = 0 },
                                 .ty = storage_ty,
-                            } });
+                            });
                             const storage_value_ty = expr.ty orelse try self.simpleType(.invalid);
-                            try self.emit(.{ .store = .{
+                            try self.emitValueStore(.{
                                 .ptr = .{ .local = temp },
                                 .value = value,
                                 .ty = storage_value_ty,
-                            } });
+                            });
                             const loaded = try self.reg(storage_ty);
                             try self.emit(.{ .load = .{
                                 .dst = loaded,
@@ -974,7 +990,7 @@ pub const Lowering = struct {
             try self.lowerAggregateInto(.{ .local = sym.id }, ty, init_value);
         } else {
             const value = try self.lowerExpr(init_value);
-            try self.emit(.{ .store = .{ .ptr = .{ .local = sym.id }, .value = value, .ty = ty } });
+            try self.emitValueStore(.{ .ptr = .{ .local = sym.id }, .value = value, .ty = ty });
         }
     }
 
@@ -1237,7 +1253,7 @@ pub const Lowering = struct {
         const slot = self.module.ephemeral();
         try self.addLocal(slot, "tmp.cond", bool_ty, null);
         const default_value: ir.Value = .{ .boolean = binary.op == .logical_or };
-        try self.emit(.{ .store = .{ .ptr = .{ .local = slot }, .value = default_value, .ty = bool_ty } });
+        try self.emitValueStore(.{ .ptr = .{ .local = slot }, .value = default_value, .ty = bool_ty });
 
         const lhs = try self.lowerExpr(binary.lhs);
         const rhs_block = try self.newBlock();
@@ -1250,7 +1266,7 @@ pub const Lowering = struct {
 
         try self.switchBlock(rhs_block);
         const rhs = try self.lowerExpr(binary.rhs);
-        try self.emit(.{ .store = .{ .ptr = .{ .local = slot }, .value = rhs, .ty = bool_ty } });
+        try self.emitValueStore(.{ .ptr = .{ .local = slot }, .value = rhs, .ty = bool_ty });
         try self.emit(.{ .br = .{ .target = end_block } });
 
         try self.switchBlock(end_block);
@@ -1304,7 +1320,7 @@ pub const Lowering = struct {
                 try self.lowerAggregateInto(ptr, target_ty, assign.value);
             } else {
                 const value = try self.lowerExpr(assign.value);
-                try self.emit(.{ .store = .{ .ptr = ptr, .value = value, .ty = target_ty } });
+                try self.emitValueStore(.{ .ptr = ptr, .value = value, .ty = target_ty });
             }
             const dst = try self.reg(target_ty);
             try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = target_ty } });
@@ -1334,7 +1350,7 @@ pub const Lowering = struct {
             try self.emitShiftBoundsCheck(target_ty, rhs, rhs_ty);
         }
         const result = try self.lowerCheckedBinary(op, .{ .reg = current }, target_ty, rhs, rhs_ty, target_ty);
-        try self.emit(.{ .store = .{ .ptr = ptr, .value = result, .ty = target_ty } });
+        try self.emitValueStore(.{ .ptr = ptr, .value = result, .ty = target_ty });
         return result;
     }
 
@@ -1405,7 +1421,7 @@ pub const Lowering = struct {
                     if (size < 8) {
                         const pack_id = self.module.ephemeral();
                         try self.addLocal(pack_id, "tmp.pack1", i64_ty, null);
-                        try self.emit(.{ .store = .{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i64_ty } });
+                        try self.emitValueStore(.{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i64_ty });
                         if (size > 0) {
                             try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(size) } });
                         }
@@ -1546,7 +1562,7 @@ pub const Lowering = struct {
                     if (size < 16) {
                         const pack_id = self.module.ephemeral();
                         try self.addLocal(pack_id, "tmp.pack2", i128_ty, null);
-                        try self.emit(.{ .store = .{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i128_ty } });
+                        try self.emitValueStore(.{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i128_ty });
                         if (size > 0) {
                             try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(size) } });
                         }
@@ -1666,11 +1682,11 @@ pub const Lowering = struct {
                     .sse_f64_i16 => try self.simpleType(.abi_f64_i16),
                     else => call_result.struct_type.fields[0].ty,
                 };
-                try self.emit(.{ .store = .{
+                try self.emitValueStore(.{
                     .ptr = .{ .local = temp },
                     .value = .{ .reg = dst.? },
                     .ty = abi_ty,
-                } });
+                });
                 const result = try self.reg(call_result);
                 try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = temp }, .ty = call_result } });
                 return .{ .reg = result };
@@ -1678,11 +1694,11 @@ pub const Lowering = struct {
             .small_1, .small_2 => {
                 const temp = self.module.ephemeral();
                 try self.addLocal(temp, "tmp.aggregate", call_result, null);
-                try self.emit(.{ .store = .{
+                try self.emitValueStore(.{
                     .ptr = .{ .local = temp },
                     .value = .{ .reg = dst.? },
                     .ty = value_ty,
-                } });
+                });
                 const result = try self.reg(call_result);
                 try self.emit(.{ .load = .{ .dst = result, .ptr = .{ .local = temp }, .ty = call_result } });
                 return .{ .reg = result };
@@ -1713,13 +1729,13 @@ pub const Lowering = struct {
         const pointer_slot_ty = try self.makePointer(elem_ty, false);
         const field0 = try self.reg(pointer_slot_ty);
         try self.emit(.{ .slice_field_ptr = .{ .dst = field0, .base = .{ .local = id }, .field = 0 } });
-        try self.emit(.{ .store = .{ .ptr = .{ .reg = field0 }, .value = value, .ty = pointer_slot_ty } });
+        try self.emitValueStore(.{ .ptr = .{ .reg = field0 }, .value = value, .ty = pointer_slot_ty });
 
         const usize_ty = try self.allocator.create(types.Type);
         usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
         const field1 = try self.reg(usize_ty);
         try self.emit(.{ .slice_field_ptr = .{ .dst = field1, .base = .{ .local = id }, .field = 1 } });
-        try self.emit(.{ .store = .{ .ptr = .{ .reg = field1 }, .value = .{ .int = @intCast(array.len) }, .ty = usize_ty } });
+        try self.emitValueStore(.{ .ptr = .{ .reg = field1 }, .value = .{ .int = @intCast(array.len) }, .ty = usize_ty });
 
         const dst = try self.reg(target);
         try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = id }, .ty = target } });
@@ -1735,7 +1751,7 @@ pub const Lowering = struct {
         const value = try self.lowerExpr(expr);
         const id = self.module.ephemeral();
         try self.addLocal(id, "tmp.agg", ty, null);
-        try self.emit(.{ .store = .{ .ptr = .{ .local = id }, .value = value, .ty = ty } });
+        try self.emitValueStore(.{ .ptr = .{ .local = id }, .value = value, .ty = ty });
         return .{ .local = id };
     }
 
@@ -1958,14 +1974,14 @@ pub const Lowering = struct {
         const element_slot = try self.makePointer(elem_ty, false);
         const field0 = try self.reg(element_slot);
         try self.emit(.{ .slice_field_ptr = .{ .dst = field0, .base = .{ .local = id }, .field = 0 } });
-        try self.emit(.{ .store = .{ .ptr = .{ .reg = field0 }, .value = pointer, .ty = element_slot } });
+        try self.emitValueStore(.{ .ptr = .{ .reg = field0 }, .value = pointer, .ty = element_slot });
 
         const usize_ty = try self.allocator.create(types.Type);
         usize_ty.* = .{ .int = .{ .bits = 64, .signed = false } };
         const slot_ty = try self.makePointer(usize_ty, false);
         const field1 = try self.reg(slot_ty);
         try self.emit(.{ .slice_field_ptr = .{ .dst = field1, .base = .{ .local = id }, .field = 1 } });
-        try self.emit(.{ .store = .{ .ptr = .{ .reg = field1 }, .value = length, .ty = usize_ty } });
+        try self.emitValueStore(.{ .ptr = .{ .reg = field1 }, .value = length, .ty = usize_ty });
 
         const dst = try self.reg(target);
         try self.emit(.{ .load = .{ .dst = dst, .ptr = .{ .local = id }, .ty = target } });
@@ -2100,7 +2116,7 @@ pub const Lowering = struct {
                         try self.lowerAggregateInto(.{ .reg = dst }, field_ty, field.value);
                     } else {
                         const value = try self.lowerExpr(field.value);
-                        try self.emit(.{ .store = .{ .ptr = .{ .reg = dst }, .value = value, .ty = field_ty } });
+                        try self.emitValueStore(.{ .ptr = .{ .reg = dst }, .value = value, .ty = field_ty });
                     }
                 }
             },
@@ -2122,7 +2138,7 @@ pub const Lowering = struct {
                         try self.lowerAggregateInto(.{ .reg = dst }, array_ty.elem, element);
                     } else {
                         const value = try self.lowerExpr(element);
-                        try self.emit(.{ .store = .{ .ptr = .{ .reg = dst }, .value = value, .ty = array_ty.elem } });
+                        try self.emitValueStore(.{ .ptr = .{ .reg = dst }, .value = value, .ty = array_ty.elem });
                     }
                 }
             },

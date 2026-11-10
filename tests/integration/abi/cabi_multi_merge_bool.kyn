@@ -1,0 +1,23 @@
+struct BoolFloatPair { count: bool, low: f32, mid: f32 }
+
+extern fn c_transform(value: BoolFloatPair) BoolFloatPair;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_transform(value: BoolFloatPair) BoolFloatPair {
+    return BoolFloatPair {
+        count: !value.count,
+        low: value.low + 2.0,
+        mid: value.mid + 3.0,
+    };
+}
+
+fn main() i32 {
+    let result: BoolFloatPair = c_transform(BoolFloatPair { count: false, low: 1.5, mid: 2.5 });
+    var accumulator: i32 = 0;
+    if (result.count) {
+        accumulator = 1;
+    } else {
+        accumulator = 0;
+    }
+    return accumulator + (result.low as i32) + (result.mid as i32) + c_verify_kyn();
+}

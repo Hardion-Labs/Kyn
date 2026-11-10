@@ -26,7 +26,18 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   0/8, size 16. Clang and Kyn both use `i32, double` parameters and
   `{ i32, double }` returns. Nested, wider-integer, and other mixed layouts
   remain `E0473` unless separately specified.
-- **Latest ABI increment completed and merged (`b0a149f`, PR #8):** exactly two
+- **Latest increment (this cycle): bool zero-extension fix.** Previously
+  `bool` fields/locals were stored into memory as raw `i1`, leaving the upper
+  seven bits of their byte undefined. Passed across an `extern`/`export`
+  C ABI boundary as part of a packed `i64` (current lowering for
+  merged-INTEGER eightbytes) those garbage bits made the byte
+  indistinguishable from a full `i8` to the C side, which reads `_Bool` as a
+  full byte. Every bool memory store now emits `zext i1 -> i8` followed by an
+  `i8` store, restoring the full-byte definition Clang requires at the C
+  ABI; verified by generated IR (`zext i1 -> i8` + `store i8`) and by the new
+  `cabi_multi_merge_bool` fixture. No behavior change for non-bool stores;
+  integration matrix reports `155 passed, 0 failed` in all four profiles.
+- **Previous ABI increment completed and merged (`b0a149f`, PR #8):** exactly two
   direct small integer members (`i8`/`u8` or `i16`/`u16`) at natural offsets
   0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }` lowers as
   `i8, double` parameters and a `{ i8, double }` return; `{ i16/u16, f64 }`
@@ -748,6 +759,35 @@ branch history; this increment does not redo them.
   `clang` (v23.1.2).
 - Git state: merged into `main` (see the merge record at the top of this
   section). Release artifacts and tags are untouched.
+
+## 27. Boolean store zero-extension increment (completed, not yet committed)
+
+- Scope: fix the byte-level `bool` memory representation at every `store` in
+  the backend. Previously a `bool` field/local was stored into memory as
+  `i1`, leaving the upper seven bits of its byte undefined; passed across an
+  `extern`/`export` C ABI boundary as part of a packed `i64` (current lowering
+  for merged-INTEGER eightbytes) those garbage bits made the byte
+  indistinguishable from a full `i8` to the C side, which reads `_Bool` as a
+  full byte. The bug was latent: no existing fixture read the high bits of a
+  merged-INTEGER bool byte, so the integration suite still passed before the
+  fix — the defect only surfaced under direct IR inspection of the emitted
+  bool stores.
+- Implementation: `Lowering` now owns `emitValueStore(args)` which, for
+  `ty.* == .bool`, emits `zext i1 %v to i8` + `store i8` with the same
+  pointer; otherwise it emits the unchanged `.store` instruction. All
+  32 store emission sites in the backend were routed through this helper.
+  Alloca choice is unchanged (`alloca i1`); loads of i1 from the now-defined
+  byte are bit-compatible.
+- Validation: `zig build test` and `zig build test -Doptimize=ReleaseSafe`
+  pass; `zig fmt --check` clean; integration suite passes in all four
+  profiles with the new `cabi_multi_merge_bool` fixture (exit 53), for a
+  total of 155. Every bool store in generated IR now shows `zext i1 -> i8`
+  + `store i8`, matching Clang's full-byte `_Bool` representation. Docs
+  (changelog Unreleased and this continuity section) updated.
+- Regression coverage: `cabi_multi_merge_bool` exercises a `bool` member
+  inside a merged-INTEGER eightbyte crossing the boundary in both directions.
+- Git state: implementation is on a session branch; push, PR, CI and merge
+  pending at the time of writing. Release artifacts and tags are untouched.
 
 ## 26. Small integer member ABI increment (completed and merged)
 

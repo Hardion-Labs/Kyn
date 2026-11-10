@@ -38,6 +38,15 @@ promised between alpha releases.
   `cabi_mixed_i64_f32`, `cabi_mixed_f64_i64` and `cabi_mixed_i64_f64` cover
   argument and return paths in both directions; other mixed-class layouts
   remain rejected with `E0473`.
+- Boolean values stored into memory are zero-extended to a full `i8` at every
+  `store` now. Previously a `bool` field or local was stored as a raw `i1`,
+  leaving the upper seven bits of its byte undefined; passed across an
+  `extern`/`export` C ABI boundary as part of a packed `i64` (the current
+  lowering for merged-INTEGER eightbytes) those garbage bits made the byte
+  indistinguishable from a full `i8` to the C side, which reads `_Bool` as a
+  full byte. Every bool memory store now emits `zext i1 -> i8` followed by an
+  `i8` store, restoring the full-byte definition Clang requires at the C ABI,
+  verified by generated IR and by the `cabi_multi_merge_bool` fixture.
 - C ABI support on `x86_64` Linux for exactly two direct small integer members
   at natural offsets 0/8 (16 bytes), signedness irrelevant: `{ i8/u8, f64 }`
   passes as `i8, double` with a `{ i8, double }` return; `{ i16/u16, f64 }`
