@@ -75,6 +75,27 @@ cd Kyn
 zig build
 ```
 
+### Install from a release archive
+
+Prebuilt toolchain archives are produced by [`packaging/make-dist.sh`](packaging/README.md):
+
+```bash
+# Linux
+tar -xzf kyn-0.1.0-alpha.3-linux-x86_64.tar.gz
+cd kyn-0.1.0-alpha.3-linux-x86_64 && ./install.sh   # /usr/local as root, else ~/.local
+
+# Windows (PowerShell)
+Expand-Archive kyn-0.1.0-alpha.3-windows-x86_64.zip -DestinationPath .
+cd kyn-0.1.0-alpha.3-windows-x86_64; .\install.ps1
+```
+
+Both installers copy `kync` and `kyn-build` to a `bin` directory, put it on
+your `PATH` (Windows, user scope), verify the installed binaries with
+`--version`, and support uninstalling. See
+[`packaging/INSTALL.md`](packaging/INSTALL.md) for requirements (Linux: clang
+for `kync build`/`run`; Windows: native build path is not part of the tested
+release surface) and manual installation.
+
 ### Try It
 
 ```bash
