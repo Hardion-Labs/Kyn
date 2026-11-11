@@ -1580,5 +1580,53 @@ branch history; this increment does not redo them.
   widening the seed vocabulary (unsigned widths, enums with unusual backings,
   slices of slices) is likely to pay off again.
 
+## 38. Release increment: v0.1.0-alpha.4 (in progress on `arena/4ec0f017-kyn`)
+
+- Trigger: `v0.1.0-alpha.3` was tagged at `84093a2`. **Eighteen** pull requests
+  have merged since, spanning the whole `Unreleased` section: the pointer-leaf
+  increment (§35), fixed-array members (§36), the 16-byte integer and the two
+  128-bit crashes (§37), plus the earlier leaf-based classification series
+  (PRs #4–#16) and `packaging/` (PR #17). `dist/` archive tooling therefore had
+  no published artifact, and the toolchain reported a version older than its
+  content.
+- Scope decision: this increment is the *release*, not new compiler work. The
+  classifier space is exhausted per §37 (13 370 shapes, zero rejections), so a
+  feature increment here would have been speculative.
+- Version sources, all four updated together: `compiler/main.zig` and
+  `build-system/main.zig` (`const version`), `build.zig.zon` (`.version`), and
+  the `README.md` badge/status/archive-name/release-check example. Verified by
+  `check_versions.py` (reports `versions consistent at 0.1.0-alpha.4`) and by
+  both binaries printing `0.1.0-alpha.4`.
+- `CHANGELOG.md`: `[Unreleased]` promoted to `[0.1.0-alpha.4] - 2026-11-10`
+  with its 15 Added and 3 Fixed entries intact; the `alpha.3` section is
+  unchanged (verified: the diff against the tag only inserts).
+- Docs updated with the release boundary: `docs/release-checklist.md`
+  (command examples plus the "current alpha status" paragraph now names
+  `alpha.4` and keeps `alpha.3` as published and untouched),
+  `docs/roadmap.md` (new `alpha.4` section listing leaf-based classification,
+  pointer leaves, fixed arrays, 16-byte integers, `packaging/` and 128-bit
+  constants; `alpha.3` section retained below it), `README.md` roadmap table
+  (two rows moved from 🟡 Partial to ✅ shipped, three new ones added),
+  `tools/release-check.sh` usage examples.
+- Packaging validated, not assumed: `packaging/make-dist.sh` produced
+  `dist/kyn-0.1.0-alpha.4-linux-x86_64.tar.gz` and
+  `dist/kyn-0.1.0-alpha.4-windows-x86_64.zip`, verified the Linux archive
+  end-to-end (extract → `install.sh` → run), and validated the Windows archive
+  structurally (9 entries, PE magic). `dist/` is gitignored, so no artifact is
+  committed.
+- Environment note: the sandbox clone was **shallow**, which fails gate item 4
+  of the release checklist. `git fetch --unshallow --tags` fixed it; the clone
+  now reports `is-shallow-repository: false` and the three existing tags are
+  local.
+- Validation at preparation time: `zig build` OK; `zig build test` **79/79**;
+  integration **169 passed / 0 failed** in Debug and ReleaseSafe;
+  `zig fmt --check build.zig compiler build-system` clean; `check_docs_links.py`
+  21 files; `check_diagnostic_docs.py` 127 codes; `check_versions.py` consistent.
+- Next: run `tools/release-check.sh 0.1.0-alpha.4 <sha>` against the validated
+  `main` commit (it needs a clean `main` checkout and a green CI run for that
+  exact SHA), then tag and publish per the checklist's *Creating the release*
+  section. The gate does not authorize the release; the user's standing
+  instruction is that releases should be published once warranted.
+
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

@@ -15,14 +15,14 @@
 
 [![License](https://img.shields.io/badge/license-MIT-3DA639?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-critical?style=for-the-badge)](#-current-limitations)
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha.3-blue?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha.4-blue?style=for-the-badge)](#)
 [![Zig](https://img.shields.io/badge/Zig-0.17.0-F7A41D?style=for-the-badge&logo=zig&logoColor=white)](https://ziglang.org)
 [![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge)](https://github.com/Hardion-Labs/Kyn/pulls)
 
 ---
 
-> 🧪 **Status:** `v0.1.0-alpha.3` — *published preview, actively developed.*  
-> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.3).  
+> 🧪 **Status:** `v0.1.0-alpha.4` — *published preview, actively developed.*  
+> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4).  
 > Features listed under [Current Limitations](#-current-limitations) are **not implemented**.
 
 </div>
@@ -81,12 +81,12 @@ Prebuilt toolchain archives are produced by [`packaging/make-dist.sh`](packaging
 
 ```bash
 # Linux
-tar -xzf kyn-0.1.0-alpha.3-linux-x86_64.tar.gz
-cd kyn-0.1.0-alpha.3-linux-x86_64 && ./install.sh   # /usr/local as root, else ~/.local
+tar -xzf kyn-0.1.0-alpha.4-linux-x86_64.tar.gz
+cd kyn-0.1.0-alpha.4-linux-x86_64 && ./install.sh   # /usr/local as root, else ~/.local
 
 # Windows (PowerShell)
-Expand-Archive kyn-0.1.0-alpha.3-windows-x86_64.zip -DestinationPath .
-cd kyn-0.1.0-alpha.3-windows-x86_64; .\install.ps1
+Expand-Archive kyn-0.1.0-alpha.4-windows-x86_64.zip -DestinationPath .
+cd kyn-0.1.0-alpha.4-windows-x86_64; .\install.ps1
 ```
 
 Both installers copy `kync` and `kyn-build` to a `bin` directory, put it on
@@ -304,7 +304,7 @@ The integration suite covers:
 Release readiness can be audited without creating a tag or release:
 
 ```sh
-tools/release-check.sh 0.1.0-alpha.3 "$(git rev-parse HEAD)"
+tools/release-check.sh 0.1.0-alpha.4 "$(git rev-parse HEAD)"
 ```
 
 ---
@@ -329,13 +329,15 @@ build.zig            Builds the toolchain and wires test steps
 
 | Milestone | Status |
 |:---|:---|
-| `v0.1.0-alpha.3` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.3) |
+| `v0.1.0-alpha.4` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4) |
+| Leaf-based System V classification (nested, pointer, narrow-slot, fixed-array and 16-byte integer members) | ✅ Shipped in `v0.1.0-alpha.4` |
+| Prebuilt release archives and installers (`packaging/`) | ✅ Shipped in `v0.1.0-alpha.4` |
+| 128-bit integer constants in the type checker and back end | ✅ Shipped in `v0.1.0-alpha.4` |
 | C ABI lowering (scalar SSE, `<2 x float>`, `{ f64, i32 }`/`{ i32, f64 }`, slices) | ✅ Shipped in `v0.1.0-alpha.3` |
 | Const-polymorphic slicing and subslice syntax (`[..]`, `[start..]`, `[..end]`, `.ptr`, `.len`) | ✅ Shipped in `v0.1.0-alpha.3` |
 | Relative-path imports, qualified aliases and module namespaces | ✅ Shipped in `v0.1.0-alpha.3` |
 | Integer-class mixed float/integer aggregate C ABI cases | ✅ Shipped in `v0.1.0-alpha.3` |
-| Integer-pair aggregate C ABI coercions (`{ i8, i64 }`, `{ i16, i64 }`, `{ i32, i64 }`, the reversed layouts) | 🟡 Partial |
-| Nested-member C ABI coercions (leaf-flattened integer, `f32` and `f64` members) | 🟡 Partial |
+| Integer-pair and nested-member aggregate C ABI coercions | ✅ Shipped in `v0.1.0-alpha.4` |
 | SSE aggregate C ABI coercions (scalar, `f32`/`f64` pairs, `f32` triple/quad, mixed widths, `i8`/`i16`/`bool` members, layouts splitting SSE/INTEGER eightbytes) | 🟡 Partial |
 | Explicit all-check runtime policy across profiles | ✅ Implemented |
 

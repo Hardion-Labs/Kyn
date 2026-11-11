@@ -1,9 +1,9 @@
 # Kyn roadmap
 
-`v0.1.0-alpha.3` is the current principal release:
-https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.3
+`v0.1.0-alpha.4` is the current principal release:
+https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4
 
-Subsequent work builds from that published toolchain. No `alpha.4` or
+Subsequent work builds from that published toolchain. No `alpha.5` or
 `beta.1` pre-release artifacts exist and no next version number is selected.
 Milestones below are directions, not release promises.
 
@@ -24,6 +24,23 @@ Milestones below are directions, not release promises.
 - Diagnostics with stable codes and documented coverage.
 - Fuzzing/robustness corpus and clean-room release gate.
 - Documented limitations and no hidden runtime.
+
+## v0.1.0-alpha.4 — published preview
+
+- Leaf-based System V classification: the register of each eightbyte follows
+  the scalar leaves it carries, with nested structs, fixed arrays and singleton
+  enums flattened the way Clang flattens them.
+- Pointer leaves travel at pointer width and are never narrowed to a
+  neighbouring integer member width; narrow second slots write only their own
+  bytes.
+- Fixed-array struct members contribute one leaf per element, expanding
+  recursively for nested arrays and arrays of aggregates, with overflow-checked
+  sizing rather than an arbitrary size cap.
+- A struct whose only member is a 16-byte integer travels as one `i128`,
+  matching Clang's `struct { __int128 a; }` classification.
+- `packaging/`: release-archive tooling plus Linux and Windows installers.
+- 128-bit integer constants are representable end to end: the type-checker
+  bounds no longer overflow, and a `u128` maximum survives to the back end.
 
 ## v0.1.0-alpha.3 — published preview
 

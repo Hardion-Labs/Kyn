@@ -15,7 +15,7 @@ tools/release-check.sh <version> [expected-sha]
 Example:
 
 ```sh
-tools/release-check.sh 0.1.0-alpha.3 <approved-sha>
+tools/release-check.sh 0.1.0-alpha.4 <approved-sha>
 ```
 
 If `expected-sha` is omitted, the script uses the current `HEAD`.
@@ -51,8 +51,8 @@ The gate cannot authorize a release. A human still decides:
 After the gate passes and the decision is made:
 
 ```sh
-git tag -a v0.1.0-alpha.3 <approved-sha> -m "Kyn v0.1.0-alpha.3"
-git push origin v0.1.0-alpha.3
+git tag -a v0.1.0-alpha.4 <approved-sha> -m "Kyn v0.1.0-alpha.4"
+git push origin v0.1.0-alpha.4
 ```
 
 Then create the GitHub Release from the tag with notes that state:
@@ -70,9 +70,9 @@ the blocker explicitly.
 
 ## Current alpha status
 
-`v0.1.0-alpha.3` is implemented, CI-validated and published as the current
-principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.3
+`v0.1.0-alpha.4` is implemented, CI-validated and published as the current
+principal release: https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4
 
-New work builds from that release. No `alpha.4` or `beta.1` pre-release
-exists. The release-readiness gate remains enforced by `tools/release-check.sh`
-for any future release.
+`v0.1.0-alpha.3` remains published and untouched. New work builds from
+`alpha.4`. No `alpha.5` or `beta.1` pre-release exists. The release-readiness
+gate remains enforced by `tools/release-check.sh` for any future release.

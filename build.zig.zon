@@ -1,6 +1,6 @@
 .{
     .name = .kyn,
-    .version = "0.1.0-alpha.3",
+    .version = "0.1.0-alpha.4",
     .fingerprint = 0xef3473331e5eaa63,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},
