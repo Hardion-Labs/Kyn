@@ -8,6 +8,15 @@ promised between alpha releases.
 
 ### Added
 
+- C ABI support on `x86_64` Linux for a struct whose only member is a
+  sixteen-byte integer. `{ a: i128 }` fills both eightbytes, so the System V
+  leaves make it one 16-byte INTEGER and it now travels as `i128`, matching
+  Clang's classification of `struct { __int128 a; }` instead of being rejected.
+  Integration fixture `cabi_wide_integer` passes values in both directions,
+  including one built entirely by the C side, and calls back into Kyn to check
+  the arithmetic; the `u128` extremes cross the boundary both inside a struct
+  and as a plain scalar. Its guards are mutation-checked on each side.
+
 - C ABI support on `x86_64` Linux for fixed-array struct members. An array
   field contributes one scalar leaf per element, exactly as that many
   consecutive members would, so `{ [2]i8, f64 }` is a packed INTEGER eightbyte
@@ -26,8 +35,8 @@ promised between alpha releases.
   change. A `sret` call now returns `void` in the emitted IR instead of naming
   the aggregate result type, which had produced invalid IR and silently zeroed
   results.
- and narrow second slots
-  in two-eightbyte aggregates. The eightbyte classification now records a
+- C ABI support on `x86_64` Linux for pointer registers and narrow second
+  slots in two-eightbyte aggregates. The eightbyte classification now records a
   pointer leaf as its own register kind, so a pointer is never narrowed to a
   neighbouring integer member width: `{ *u8, i64 }` lowers to `ptr, i64`,
   `{ i8, *u8 }` to `i8, ptr`, `{ *u8, *u8 }` to `ptr, ptr`, `{ *u8, f64 }` to
@@ -197,6 +206,23 @@ promised between alpha releases.
   `cabi_multi_i32_f32pair`, `cabi_multi_i64_f32pair`, `cabi_multi_f64_v2f32`
   and `cabi_multi_f32pair_f64` cover argument and return paths in both
   directions; layouts outside these exact shapes remain rejected with `E0473`.
+
+### Fixed
+
+- The compiler crashed on any 128-bit integer literal. `IntInfo.max()` shifted
+  `1 << 128` and `IntInfo.min()` negated the minimum of `i128`, both of which
+  overflow, so `let x: i128 = 1;` aborted with an integer-overflow panic. The
+  bounds are now computed in the unsigned domain (`max` returns `u128`), and a
+  `minMagnitude` accessor supplies the most negative literal without negating.
+- A `u128` literal above `i128`'s maximum aborted the back end, because the
+  value was truncated into the signed representation on the way to the IR. The
+  bit pattern is now carried intact and rendered back in the unsigned domain
+  for an unsigned 128-bit type, so `let x: u128 = 340282366920938463463374607431768211455;`
+  compiles and compares correctly.
+- The robustness corpus could not have found either crash: its seed program
+  mentioned no 128-bit type. It now carries a second seed built from `i128` and
+  `u128` extremes, mutated in alternating slices and also checked verbatim, so
+  a regression in the bound arithmetic reports as a crash rather than passing.
 
 ## [0.1.0-alpha.3] - 2026-11-09
 

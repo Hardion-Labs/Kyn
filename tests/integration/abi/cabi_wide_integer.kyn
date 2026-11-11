@@ -1,0 +1,68 @@
+// A sixteen-byte integer member fills both eightbytes, which the System V ABI
+// classifies as one 16-byte INTEGER. Clang spells `struct { __int128 a; }` as
+// `i128` at the boundary, so the packed two-register transport is exact.
+//
+// This also pins the constant domain: `u128` reaches one value past `i128`'s
+// maximum, so the boundary checks and the back end must both carry the full
+// unsigned range without overflowing.
+struct WideInteger { value: i128 }
+struct UnsignedWide { value: u128 }
+// The covering leaf is found through nesting and through an array of one
+// element, so these two shapes classify exactly like the flat struct.
+struct WideInner { value: i128 }
+struct WideNested { inner: WideInner }
+struct WideArray { values: [1]i128 }
+
+extern fn c_roundtrip(value: WideInteger) WideInteger;
+extern fn c_make() WideInteger;
+extern fn c_check_kyn() i64;
+extern fn c_echo_unsigned(value: u128) u128;
+extern fn c_check_nested(value: WideNested) i64;
+extern fn c_check_array(value: WideArray) i64;
+
+export fn kyn_double(value: WideInteger) WideInteger {
+    return WideInteger { value: value.value * 2 };
+}
+
+fn main() i32 {
+    let hi: i128 = 0x1122334455667788;
+    let lo: i128 = 0x99AABBCCDDEEFF00;
+    let wide: i128 = (hi << 64) | lo;
+
+    // Kyn -> C -> Kyn: both halves must survive the two-register round trip.
+    let back: WideInteger = c_roundtrip(WideInteger { value: wide });
+    if (back.value != wide) { return 80; }
+
+    // C -> Kyn: a value built entirely by the C side must decode the same way.
+    let made: WideInteger = c_make();
+    if (made.value != wide) { return 81; }
+
+    // C calls back into Kyn and checks the arithmetic from its own side.
+    if (c_check_kyn() != 0) { return 82; }
+
+    // A `u128` maximum is one past `i128`'s, and must still be expressible.
+    let top: u128 = 340282366920938463463374607431768211455;
+    let big: u128 = 18446744073709551615;
+    if (top < big) { return 83; }
+    if (top == big) { return 84; }
+    if (big != 18446744073709551615) { return 85; }
+    let unsigned: UnsignedWide = UnsignedWide { value: top };
+    if (unsigned.value != top) { return 86; }
+    // A scalar `u128` crosses the boundary too, so the wide constant is not
+    // only reachable through a struct.
+    if (c_echo_unsigned(top) != top) { return 89; }
+    if (c_echo_unsigned(big) != big) { return 90; }
+
+    // The same sixteen-byte INTEGER reached through nesting and through an
+    // array of one element must carry both halves intact.
+    if (c_check_nested(WideNested { inner: WideInner { value: wide } }) != 0) { return 91; }
+    if (c_check_array(WideArray { values: [wide] }) != 0) { return 92; }
+
+    // The signed extremes are representable and ordered.
+    let lowest: i128 = -170141183460469231731687303715884105727;
+    let highest: i128 = 170141183460469231731687303715884105727;
+    if (lowest > highest) { return 87; }
+    if (highest != 170141183460469231731687303715884105727) { return 88; }
+
+    return 0;
+}

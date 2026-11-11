@@ -32,6 +32,25 @@ fn main() i32 {
 }
 '''
 
+# The widest integer types sit exactly where the bound arithmetic and the
+# back end's constant transport used to overflow (`1 << 127` has no positive
+# `i128` counterpart, and a `u128` maximum has no `i128` spelling at all), so
+# the corpus carries them even though no other seed mentions them.
+WIDE_SEED_PROGRAM = '''struct Wide { value: i128 }
+struct UnsignedWide { value: u128 }
+fn main() i32 {
+    let hi: i128 = 170141183460469231731687303715884105727;
+    let lo: i128 = -170141183460469231731687303715884105727;
+    let top: u128 = 340282366920938463463374607431768211455;
+    let w: Wide = Wide { value: hi };
+    let u: UnsignedWide = UnsignedWide { value: top };
+    let sum: i128 = w.value + lo;
+    if (sum < 0) { return 1; }
+    if (u.value < top) { return 2; }
+    return 0;
+}
+'''
+
 TOKENS = [
     'fn', 'extern', 'export', 'struct', 'enum', 'const', 'let', 'var', 'if', 'else',
     'while', 'return', 'break', 'continue', 'as', 'true', 'false', 'null',
@@ -72,15 +91,27 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix='kyn-robustness.') as directory:
         root = Path(directory)
 
-        # 1. Localized mutations of a valid program.
-        tokens = SEED_PROGRAM.split()
+        # 1. Localized mutations of a valid program. The two seeds are mutated
+        #    in alternating slices so both the ordinary program and the
+        #    widest-integer one keep their shape while taking hits.
+        seeds = [SEED_PROGRAM.split(), WIDE_SEED_PROGRAM.split()]
         random.seed(112233)
         for index in range(300):
+            tokens = seeds[index % len(seeds)]
             mutated = tokens.copy()
             for _ in range(random.randint(1, 12)):
                 mutated[random.randrange(len(mutated))] = random.choice(tokens)
             path = root / f'mutation_{index}.kyn'
             path.write_text(' '.join(mutated))
+            error = check_case(args.kync, path)
+            counts['mutation'] += 1
+            if error:
+                failures.append((str(path), error))
+
+        # 1b. The wide seed verbatim must be accepted, not merely survivable.
+        for label, program in (('seed', SEED_PROGRAM), ('wide_seed', WIDE_SEED_PROGRAM)):
+            path = root / f'{label}.kyn'
+            path.write_text(program)
             error = check_case(args.kync, path)
             counts['mutation'] += 1
             if error:

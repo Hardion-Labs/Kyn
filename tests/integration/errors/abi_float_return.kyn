@@ -1,7 +1,6 @@
-// The same limitation on the return side: a struct whose only leaf is an
-// `i128` cannot be returned by value across the C ABI boundary.
-struct WideInteger { value: i128 }
-export fn kyn_make() WideInteger {
-    return WideInteger { value: 1 as i128 };
-}
+// The same limitation on the return side: a struct whose only member is a
+// slice cannot be returned by value across the C ABI boundary.
+struct SliceOnly { data: []u8 }
+fn echo(value: SliceOnly) SliceOnly { return value; }
+export fn kyn_make(value: SliceOnly) SliceOnly { return echo(value); }
 fn main() i32 { return 0; }

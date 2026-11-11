@@ -1399,7 +1399,7 @@ branch history; this increment does not redo them.
   most visible one — and specify cross-compilation targets before exposing
   further layouts across `extern`/`export`.
 
-## 36. Fixed-array member ABI increment (in progress on `arena/df9afc79-kyn`)
+## 36. Fixed-array member ABI increment (completed and merged as PR #19)
 
 - Scope: array fields were the last common C struct shape rejected with
   `E0473`. §35 taught the classifier about pointers and narrow second slots
@@ -1487,14 +1487,77 @@ branch history; this increment does not redo them.
   the same class as the width noise in the differential probe: a different
   spelling of the same register pair.
 - Limitations: the target remains `x86_64` Linux only. Still rejected with
-  `E0473`: a lone `i128` member, a bare array parameter, and a struct whose
-  only field is a slice. `Clang`'s `<2 x float>` spelling for a lone `f32`
-  array element is not reproduced (deliberate, see above). No sanitizer gate
-  is configured, so none was run.
-- Next task: specify cross-compilation targets, then continue with the
-  remaining `SSE`-class shapes (`{ f32, f32, f32, f32, f32 }` and similar
-  memory-class fallbacks) before exposing further layouts across
-  `extern`/`export`.
+  `E0473`: a bare array parameter, a struct whose only field is a slice, and
+  singleton `enum` members with 1-bit backings. `Clang`'s `<2 x float>`
+  spelling for a lone `f32` array element is not reproduced (deliberate, see
+  above). No sanitizer gate is configured, so none was run.
+
+## 37. Wide-integer increment (in progress on `arena/463b6e20-kyn`)
+
+- Scope: §36 closed the array shapes and left "a lone `i128` member" on the
+  unsupported list. A fresh space probe showed that the classifier was in fact
+  complete for every aggregate of at most 16 bytes: of 13 370 shapes over
+  eight member types, Kyn rejected **zero** that Clang accepts. The remaining
+  diffs were `i128` vs `{ i64, i64 }` (the same register pair, already proven
+  equivalent in §36) and one `i64` vs `ptr` spelling. So the next coherent step
+  was not more shapes but the two real defects the probe surfaced.
+- Implementation (`compiler/sema.zig`): `aggregateBoundaryClass` now returns
+  `.small_2` when `coversBothEightbytes` sees a struct whose only member is a
+  128-bit integer. Such a struct fills both eightbytes with one leaf, so no
+  per-eightbyte `singleton` exists and the old path returned `null` (`E0473`).
+  Clang classifies `struct { __int128 a; }` as `i128`, which is exactly the
+  packed two-register transport `.small_2` already emits, so no back-end change
+  was needed for the ABI itself.
+- Defect 1, compiler crash on any 128-bit literal (`compiler/types.zig`):
+  `IntInfo.max()` computed `1 << 128` and `IntInfo.min()` negated `i128`'s
+  minimum. Both overflow, so `let x: i128 = 1;` aborted with an
+  integer-overflow panic — reachable from ordinary source, not just `extern`
+  code. `max` now returns `u128` (the literal domain) and clamps at 128 bits;
+  `min` clamps at 128 bits; a new `minMagnitude` returns `1 << (bits-1)` by
+  shifting instead of negating, because the widest signed minimum has no
+  positive `i128` counterpart. The two `sema.zig` callers and the two
+  `analyzer.zig` callers compare through a shared `fits` predicate that works
+  in the unsigned domain past the lower bound.
+- Defect 2, `u128` maximum aborted the back end (`compiler/backend/llvm.zig`):
+  literals arrive as `u128` and were `@intCast` into `ir.Value.int`'s `i128`,
+  which has no spelling for `maxInt(u128)`. The literal now travels as its
+  two's-complement bit pattern (`@bitCast`), and `emitValue` renders it back in
+  the unsigned domain only for an unsigned 128-bit declared type, so every
+  narrower and every signed case keeps the existing rendering.
+- Fixtures: new `tests/integration/abi/cabi_wide_integer.{kyn,c}` covers
+  Kyn→C→Kyn with both halves of a wide value, a value built entirely by C,
+  a C→Kyn callback that checks the arithmetic, the `u128` extremes, and both
+  signed extremes. Guards 80–88, mutation-checked: dropping the high half on
+  either side gives 80/81, a wrong C expectation gives 82, an inverted unsigned
+  comparison gives 83.
+- `tests/integration/errors/abi_float_param.kyn` and `abi_float_return.kyn`
+  asserted the old `i128` rejection. They were **not** deleted: both were
+  rewritten to the shape that is still rejected (a struct whose only field is
+  a slice), so `E0473` coverage survives, and the new positive fixture covers
+  the accepted side.
+- Robustness corpus gap: `tests/integration/robustness.py` could not have found
+  either crash, because its single seed program never mentioned a 128-bit type.
+  It now mutates two seeds in alternating slices (the original plus a
+  `WIDE_SEED_PROGRAM` built from the `i128`/`u128` extremes) and also checks
+  both seeds verbatim, so the corpus grew 900 → 902 cases. Verified by
+  re-introducing the `min()` overflow: the corpus then reports
+  `wide_seed.kyn: crash (signal/exit -6)` instead of passing.
+- Docs: `abi.md` §1/§3/§8 (removed the stale "fixed arrays … remain rejected"
+  sentence left by §36, recorded the `i128` classification rule and trimmed
+  `i128` from the unsupported list), `CHANGELOG.md` under Added/Fixed including
+  the truncated sentence an earlier edit had left in the pointer-slot entry.
+- Validation: `zig build` OK; `zig build test --summary all` **79/79** (the
+  classifier row for `{ a: i128 }` moved from `null` to `.small_2`, plus a new
+  `types.zig` test pinning the 128-bit bounds and magnitudes);
+  integration **169 passed / 0 failed** in Debug; `zig fmt --check` clean;
+  `check_docs_links.py` and `check_diagnostic_docs.py` clean; robustness corpus
+  902 cases clean.
+- Limitations: unchanged target (`x86_64` Linux only). The fixture also
+  exercises a scalar `u128` parameter and return (`c_echo_unsigned`, guards
+  89/90), so the wide constant is covered outside a struct as well.
+- Next task: specify cross-compilation targets, then the remaining
+  `SSE`-class fallbacks (`{ f32, f32, f32, f32, f32 }` and similar
+  memory-class shapes) before exposing further layouts across `extern`/`export`.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

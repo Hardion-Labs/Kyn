@@ -342,7 +342,7 @@ pub const Analyzer = struct {
             else => null,
         };
         if (result) |value| {
-            if (value < info.min() or value > info.max()) {
+            if (!info.fits(value)) {
                 try self.reporter.err("E0505", expr.span, "constant expression overflows type '{s}'", .{info.name()});
             }
         }
@@ -354,7 +354,7 @@ pub const Analyzer = struct {
         if (!ty.isInteger() or ty.* == .comptime_int) return;
         const info = ty.intInfo();
         const result = std.math.negate(value) catch return;
-        if (result < info.min() or result > info.max()) {
+        if (!info.fits(result)) {
             try self.reporter.err("E0505", expr.span, "constant expression overflows type '{s}'", .{info.name()});
         }
     }

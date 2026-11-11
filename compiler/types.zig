@@ -29,14 +29,47 @@ pub const IntInfo = struct {
         };
     }
 
+    /// Smallest value of the type, as a signed 128-bit integer. Every type
+    /// narrower than 128 bits fits, and an `i128` is exactly `i128`'s minimum,
+    /// so this always has a representable answer.
     pub fn min(self: IntInfo) i128 {
         if (!self.signed) return 0;
+        if (self.bits >= 128) return std.math.minInt(i128);
         return -(@as(i128, 1) << @intCast(self.bits - 1));
     }
 
-    pub fn max(self: IntInfo) i128 {
-        if (!self.signed) return @intCast((@as(i128, 1) << @intCast(self.bits)) - 1);
-        return (@as(i128, 1) << @intCast(self.bits - 1)) - 1;
+    /// Largest value of the type, as an *unsigned* 128-bit integer: the width
+    /// domain the literal checks compare against. A signed 128-bit maximum is
+    /// not representable in `i128` arithmetic (`1 << 127` overflows), and a
+    /// `u128` maximum is not representable at all, so widening the result type
+    /// is what makes `i128`/`u128` bounds expressible rather than a special
+    /// case per call site.
+    pub fn max(self: IntInfo) u128 {
+        if (self.bits >= 128) {
+            return if (self.signed) std.math.maxInt(i128) else std.math.maxInt(u128);
+        }
+        const one: u128 = 1;
+        if (!self.signed) return (one << @intCast(self.bits)) - 1;
+        return (one << @intCast(self.bits - 1)) - 1;
+    }
+
+    /// True when `value` lies inside the type's range. The comparison runs in
+    /// the unsigned domain past the lower bound so a `u128` maximum, which has
+    /// no `i128` spelling, stays expressible.
+    pub fn fits(self: IntInfo, value: i128) bool {
+        if (value < self.min()) return false;
+        if (value < 0) return self.min() < 0;
+        return @as(u128, @intCast(value)) <= self.max();
+    }
+
+    /// Magnitude of the type's minimum, used to accept the most negative
+    /// literal of a signed type (`-128` written as `128` with a unary minus).
+    /// Computed by shifting rather than negating, because the minimum of the
+    /// widest signed type has no positive counterpart in `i128`.
+    pub fn minMagnitude(self: IntInfo) u128 {
+        if (!self.signed) return 0;
+        const one: u128 = 1;
+        return one << @intCast(self.bits - 1);
     }
 };
 
@@ -409,6 +442,26 @@ test "primitive type identity and equality" {
     try std.testing.expect(Type.eql(p.i32, p.i32));
     try std.testing.expect(!Type.eql(p.i32, p.u32));
     try std.testing.expect(p.i32.intInfo().signed);
-    try std.testing.expectEqual(@as(i128, 2147483647), p.i32.intInfo().max());
+    try std.testing.expectEqual(@as(u128, 2147483647), p.i32.intInfo().max());
     try std.testing.expectEqual(@as(i128, -2147483648), p.i32.intInfo().min());
+}
+
+test "128-bit integer bounds stay representable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const p = try Primitives.init(a);
+
+    // A signed 128-bit maximum is exactly `i128`'s, and its minimum is too, so
+    // neither may overflow the `i128` arithmetic that computes the bounds.
+    try std.testing.expectEqual(@as(u128, @intCast(std.math.maxInt(i128))), p.i128.intInfo().max());
+    try std.testing.expectEqual(std.math.minInt(i128), p.i128.intInfo().min());
+    // The magnitude of the signed minimum is one past the unsigned maximum of
+    // the same width, which is why it needs its own accessor.
+    try std.testing.expectEqual(@as(u128, 1) << 127, p.i128.intInfo().minMagnitude());
+
+    // An unsigned 128-bit maximum is not representable in `i128` at all.
+    try std.testing.expectEqual(std.math.maxInt(u128), p.u128.intInfo().max());
+    try std.testing.expectEqual(@as(i128, 0), p.u128.intInfo().min());
+    try std.testing.expectEqual(@as(u128, 0), p.u128.intInfo().minMagnitude());
 }

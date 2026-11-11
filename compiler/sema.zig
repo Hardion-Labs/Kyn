@@ -846,7 +846,7 @@ pub const Sema = struct {
         if (expected) |e| {
             if (e.isInteger()) {
                 const info = e.intInfo();
-                if (value > @as(u128, @intCast(info.max())) and !(info.signed and value == @as(u128, @intCast(-(info.min()))))) {
+                if (value > info.max() and !(info.signed and value == info.minMagnitude())) {
                     try self.reporter.err("E0426", expr.span, "integer literal {d} does not fit type '{s}'", .{ value, self.typeName(e) });
                 }
                 expr.ty = e;
@@ -1744,7 +1744,7 @@ fn containsIncompleteByValue(ty: *Type) bool {
 }
 
 fn fitsInt(info: types.IntInfo, value: i128) bool {
-    return value >= info.min() and value <= info.max();
+    return info.fits(value);
 }
 
 /// Extract an integer literal value through unary minus/casts.
@@ -1818,6 +1818,13 @@ pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
     if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
 
     if (layout.size > 8) {
+        // A single leaf that fills both eightbytes is a 16-byte INTEGER, and
+        // the two registers it occupies are exactly the halves of one `i128`.
+        // Clang classifies `struct { __int128 a; }` as `i128` for that reason,
+        // so the packed two-register transport is the right representation.
+        // The leaf walk sees through nesting, so `{ a: Inner }` where
+        // `Inner = { a: i128 }`, and `{ a: [1]i128 }`, land here as well.
+        if (leaves[0].covering) return .small_2;
         // The aggregate spans both eightbytes and travels in two registers,
         // one per eightbyte. A lone leaf of each eightbyte decides its own
         // register width, so `struct { short x; long b; }` becomes `i16, i64`
@@ -1926,6 +1933,10 @@ pub const EightbyteLeaf = struct {
     float_count: u16 = 0,
     /// The lone leaf of the eightbyte, when it carries exactly one.
     singleton: ?AggregateLeaf = null,
+    /// True when one integer leaf covers the aggregate's whole sixteen bytes,
+    /// which makes the aggregate a single 16-byte INTEGER rather than a pair of
+    /// registers with a leaf of their own.
+    covering: bool = false,
 };
 
 /// The kind of register an eightbyte travels in at the C ABI boundary.
@@ -2010,8 +2021,12 @@ fn recordAggregateLeaf(offset: u64, size: u64, leaf: AggregateLeaf, leaves: *[2]
     for (leaves[first .. last + 1]) |*eightbyte| {
         eightbyte.count += 1;
         if (leaf.kind == .float) eightbyte.float_count += 1;
-        // A leaf spanning two eightbytes never travels alone in a register.
+        // A leaf spanning two eightbytes never travels alone in a register, so
+        // it never becomes a `singleton`. The one exception is an integer that
+        // covers the whole sixteen bytes: its two registers are the halves of a
+        // single 16-byte INTEGER, which is what `covering` records.
         if (eightbyte.count == 1 and first == last) eightbyte.singleton = leaf;
+        if (offset == 0 and size == 16 and leaf.kind != .float) eightbyte.covering = true;
     }
     return true;
 }
@@ -2245,8 +2260,17 @@ test "C ABI boundary classification follows Clang's leaf registers" {
         .{ .decl = "struct S { a: [2]i32 }", .expected = .small_1 },
         .{ .decl = "struct S { a: [3]i32 }", .expected = .{ .pair = .{ .first = .i64, .second = .i32 } } },
         .{ .decl = "struct S { a: [2]f32 }", .expected = .sse_f32x2 },
-        // A lone `i128` still has no boundary register.
-        .{ .decl = "struct S { a: i128 }", .expected = null },
+        // A lone `i128` fills both eightbytes, which is one 16-byte INTEGER:
+        // Clang classifies `struct { __int128 a; }` exactly this way.
+        .{ .decl = "struct S { a: i128 }", .expected = .small_2 },
+        // Sixteen bytes of narrower members are two named registers instead,
+        // because each eightbyte carries leaves of its own.
+        .{ .decl = "struct S { a: [2]i64 }", .expected = .small_2 },
+        // The covering leaf is found through nesting and through an array of
+        // one element, so all three spellings classify the same way.
+        .{ .decl = "struct I { v: i128 }\nstruct S { a: I }", .expected = .small_2 },
+        .{ .decl = "struct S { a: [1]i128 }", .expected = .small_2 },
+        .{ .decl = "struct S { a: u128 }", .expected = .small_2 },
     };
 
     for (shapes) |shape| {

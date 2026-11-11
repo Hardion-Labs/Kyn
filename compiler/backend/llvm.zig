@@ -897,7 +897,10 @@ pub const Lowering = struct {
 
     fn lowerExpr(self: *Lowering, expr: *ast.Expr) Error!ir.Value {
         return switch (expr.kind) {
-            .int_lit => |lit| .{ .int = @intCast(lit.value) },
+            // A literal arrives as `u128`, which reaches one value past
+            // `i128`'s maximum. Keep the two's-complement bit pattern, which
+            // `emitValue` renders back according to the declared signedness.
+            .int_lit => |lit| .{ .int = @bitCast(lit.value) },
             .float_lit => |lit| .{ .float = lit.value },
             .bool_lit => |value| .{ .boolean = value },
             .char_lit => |value| .{ .int = @intCast(value) },
@@ -2543,6 +2546,12 @@ pub const Emitter = struct {
                 if (expected) |ty| {
                     if (ty.* == .bool) {
                         try writer.print("{d}", .{@intFromBool(number != 0)});
+                        return;
+                    }
+                    // An unsigned 128-bit value can exceed `i128`'s maximum, so
+                    // render its stored bit pattern in the unsigned domain.
+                    if (ty.* == .int and !ty.int.signed and ty.int.bits == 128) {
+                        try writer.print("{d}", .{@as(u128, @bitCast(number))});
                         return;
                     }
                 }
