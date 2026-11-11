@@ -1501,13 +1501,18 @@ branch history; this increment does not redo them.
   diffs were `i128` vs `{ i64, i64 }` (the same register pair, already proven
   equivalent in §36) and one `i64` vs `ptr` spelling. So the next coherent step
   was not more shapes but the two real defects the probe surfaced.
-- Implementation (`compiler/sema.zig`): `aggregateBoundaryClass` now returns
-  `.small_2` when `coversBothEightbytes` sees a struct whose only member is a
-  128-bit integer. Such a struct fills both eightbytes with one leaf, so no
-  per-eightbyte `singleton` exists and the old path returned `null` (`E0473`).
-  Clang classifies `struct { __int128 a; }` as `i128`, which is exactly the
-  packed two-register transport `.small_2` already emits, so no back-end change
-  was needed for the ABI itself.
+- Implementation (`compiler/sema.zig`): a struct whose only member is a
+  128-bit integer fills both eightbytes with one leaf, so no per-eightbyte
+  `singleton` exists and the old path returned `null` (`E0473`). Clang
+  classifies `struct { __int128 a; }` as `i128`, which is exactly the packed
+  two-register transport `.small_2` already emits, so the ABI itself needed no
+  back-end change. The first version of this tested the *type* (`struct` with
+  one `i128` field), which missed the nested and array spellings; it was redone
+  as an `EightbyteLeaf.covering` flag set by `recordAggregateLeaf` when one
+  non-float leaf starts at offset 0 with size 16. Because the leaf walk already
+  sees through nesting and arrays, `{ a: Inner }`, `{ a: [1]i128 }` and
+  `{ a: i128 }` all classify identically without a case each, and the checker
+  is derived from the same data the classifier uses.
 - Defect 1, compiler crash on any 128-bit literal (`compiler/types.zig`):
   `IntInfo.max()` computed `1 << 128` and `IntInfo.min()` negated `i128`'s
   minimum. Both overflow, so `let x: i128 = 1;` aborted with an
@@ -1515,9 +1520,9 @@ branch history; this increment does not redo them.
   code. `max` now returns `u128` (the literal domain) and clamps at 128 bits;
   `min` clamps at 128 bits; a new `minMagnitude` returns `1 << (bits-1)` by
   shifting instead of negating, because the widest signed minimum has no
-  positive `i128` counterpart. The two `sema.zig` callers and the two
-  `analyzer.zig` callers compare through a shared `fits` predicate that works
-  in the unsigned domain past the lower bound.
+  positive `i128` counterpart. The range predicate had been written once per
+  call site; it now lives on `IntInfo` as `fits` and runs in the unsigned
+  domain past the lower bound, so the two copies cannot drift.
 - Defect 2, `u128` maximum aborted the back end (`compiler/backend/llvm.zig`):
   literals arrive as `u128` and were `@intCast` into `ir.Value.int`'s `i128`,
   which has no spelling for `maxInt(u128)`. The literal now travels as its
@@ -1526,10 +1531,11 @@ branch history; this increment does not redo them.
   narrower and every signed case keeps the existing rendering.
 - Fixtures: new `tests/integration/abi/cabi_wide_integer.{kyn,c}` covers
   Kyn→C→Kyn with both halves of a wide value, a value built entirely by C,
-  a C→Kyn callback that checks the arithmetic, the `u128` extremes, and both
-  signed extremes. Guards 80–88, mutation-checked: dropping the high half on
-  either side gives 80/81, a wrong C expectation gives 82, an inverted unsigned
-  comparison gives 83.
+  a C→Kyn callback that checks the arithmetic, the `u128` extremes, both
+  signed extremes, and the nested and one-element-array spellings. Guards
+  80–92, mutation-checked: dropping the high half on either side gives 80/81,
+  a wrong C expectation gives 82, an inverted unsigned comparison gives 83, and
+  truncating only the C-side expected value gives 91.
 - `tests/integration/errors/abi_float_param.kyn` and `abi_float_return.kyn`
   asserted the old `i128` rejection. They were **not** deleted: both were
   rewritten to the shape that is still rejected (a struct whose only field is
@@ -1555,6 +1561,9 @@ branch history; this increment does not redo them.
 - Limitations: unchanged target (`x86_64` Linux only). The fixture also
   exercises a scalar `u128` parameter and return (`c_echo_unsigned`, guards
   89/90), so the wide constant is covered outside a struct as well.
+- Method note: a mutation that truncates *both* sides of a comparison proves
+  nothing, which is how the first attempt at checking guard 91 appeared to pass
+  while passing vacuously. Mutate one side only.
 - Next task: specify cross-compilation targets, then the remaining
   `SSE`-class fallbacks (`{ f32, f32, f32, f32, f32 }` and similar
   memory-class shapes) before exposing further layouts across `extern`/`export`.
