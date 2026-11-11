@@ -96,10 +96,7 @@ extern fn free(ptr: *u8);
   8 uses `double, i32` arguments and returns as `{ double, i32 }`; the reverse
   `{ i32, f64 }` / `{ u32, f64 }` layout uses `i32, double` and
   `{ i32, double }`. Larger supported structs use hidden `byval`/`sret`
-  pointers. Fixed arrays and other
-  unsupported small SSE layouts remain rejected at C boundaries (`E0473`).
-  Slice boundaries match a C struct
-  `{ T *ptr; size_t len; }`.
+  pointers. Slice boundaries match a C struct `{ T *ptr; size_t len; }`.
 - Only the x86_64 System V calling convention is supported in v0.1.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
@@ -228,9 +225,11 @@ Caveats:
   pointer, so `extern fn take(values: [2]i32)` is rejected (`E0473`) — write
   `*const i32` (or a struct wrapping the array) instead. Arrays nested inside
   a struct are supported.
-  Only a lone `i128` member (which has no register transport) and a struct
-  whose only field is a slice remain unsupported (`E0473`); pass a pointer
-  instead.
+  A struct whose only member is a 16-byte integer (`{ a: i128 }`) fills both
+  eightbytes, so it is one 16-byte INTEGER and travels as `i128` — exactly how
+  Clang classifies `struct { __int128 a; }`. The remaining unsupported shape is
+  a struct whose only field is a slice (`E0473`); name the fields or pass a
+  pointer instead.
   One deliberate deviation from Clang: an eightbyte whose only leaf is a lone
   `f32` array element (`{ [1]i64, [1]f32 }`) is spelled `float` here, where
   Clang spells it `<2 x float>`. GCC spells it `float` too. Both carry the
@@ -331,10 +330,9 @@ clang hello.o -o hello
 - variadic extern functions;
 - bare fixed-size array parameters and returns by value (C decays them to a
   pointer; a struct wrapping the array works), and aggregate layouts not
-  supported by the selected target/classifier (including `SSE`-only forms
-  outside the supported scalar/pair/triple/quad and multi-member run shapes,
-  a lone `i128` member, a struct whose only field is a slice, and singleton
-  `enum` members with 1-bit backings) (`E0473`);
+  supported by the selected target/classifier (including a struct whose only
+  field is a slice and singleton `enum` members with 1-bit backings)
+  (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
 - function pointers and callbacks;

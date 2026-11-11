@@ -1,6 +1,6 @@
-// A lone `i128` has no boundary register: the classification only knows
-// `i8`/`i16`/`i32`/`i64` INTEGER slots and SSE slots, so a 16-byte integer
-// leaf is rejected instead of being guessed at. Pass a pointer instead.
-struct WideInteger { value: i128 }
-extern fn c_take(value: WideInteger);
+// A struct whose only member is a slice has no C aggregate layout: a slice is
+// two words, but a lone `{ []u8 }` is ambiguous with a plain two-word value and
+// the classifier refuses to guess. Pass a pointer, or name the fields.
+struct SliceOnly { data: []u8 }
+extern fn c_take(value: SliceOnly);
 fn main() i32 { return 0; }
