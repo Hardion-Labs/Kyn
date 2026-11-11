@@ -4,7 +4,10 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
-## [Unreleased]
+## [0.1.0-alpha.4] - 2026-11-10
+
+System V aggregate classification by scalar leaves, fixed-array and 16-byte
+integer members, and prebuilt release installers.
 
 ### Added
 
