@@ -102,9 +102,12 @@ echo "CI for $EXPECTED_SHA"
 if ! command -v gh >/dev/null 2>&1; then
     bad "GitHub CLI is available"
 else
-    ci_run=$(gh run list --branch main --workflow CI --commit "$EXPECTED_SHA" --limit 10 \
+    # `gh run list` has no commit filter, so select the SHA in jq instead. The
+    # limit is generous because a merge produces a push run of its own and the
+    # caller may be auditing a commit a few merges behind `main`.
+    ci_run=$(gh run list --branch main --workflow CI --limit 50 \
         --json headSha,conclusion,databaseId \
-        --jq '.[] | select(.conclusion == "success") | .databaseId' 2>/dev/null | head -n 1 || true)
+        --jq ".[] | select(.headSha == \"$EXPECTED_SHA\" and .conclusion == \"success\") | .databaseId" 2>/dev/null | head -n 1 || true)
     if [ -n "$ci_run" ]; then
         ok "CI succeeded for expected SHA (run $ci_run)"
     else

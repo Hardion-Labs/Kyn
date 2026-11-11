@@ -1622,11 +1622,19 @@ branch history; this increment does not redo them.
   integration **169 passed / 0 failed** in Debug and ReleaseSafe;
   `zig fmt --check build.zig compiler build-system` clean; `check_docs_links.py`
   21 files; `check_diagnostic_docs.py` 127 codes; `check_versions.py` consistent.
-- Next: run `tools/release-check.sh 0.1.0-alpha.4 <sha>` against the validated
-  `main` commit (it needs a clean `main` checkout and a green CI run for that
-  exact SHA), then tag and publish per the checklist's *Creating the release*
-  section. The gate does not authorize the release; the user's standing
-  instruction is that releases should be published once warranted.
+- Gate defect found while auditing `main` at `01191c6`: the CI step ran
+  `gh run list --commit <sha>`, and this `gh` has no `--commit` flag, so the
+  step failed unconditionally — it had been failing since `alpha.3`, meaning the
+  gate could never have passed. `gh` also writes that error to stdout and exits
+  0, so the empty result looked like "no successful run". The filter now happens
+  in jq against `headSha`, with `--limit 50` to cover a merge's own push run and
+  commits a few merges behind `main`. Verified: the step reports
+  `CI succeeded for expected SHA (run 43027891490)`.
+- Next: merge the gate fix, re-run `tools/release-check.sh 0.1.0-alpha.4 <sha>`
+  against a clean `main` checkout, then tag and publish per the checklist's
+  *Creating the release* section. The gate does not authorize the release; the
+  user's standing instruction is that releases should be published once
+  warranted.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
