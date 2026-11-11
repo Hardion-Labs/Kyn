@@ -51,6 +51,11 @@ pub const Sema = struct {
     next_symbol_id: u32 = 1,
     loop_depth: u32 = 0,
     current_fn: ?*ast.FnDecl = null,
+    /// The target whose C ABI the boundary checks apply. Defaults to the host,
+    /// which is the only target the System V classifier is defined for; the
+    /// driver sets it from `--target` so a cross-compilation rejects C
+    /// boundaries it cannot lower instead of emitting the wrong convention.
+    target_supports_c_abi: bool = builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -444,7 +449,7 @@ pub const Sema = struct {
             param.sym = param_sym;
             if (ty.* == .void) {
                 try self.reporter.err("E0410", param.span, "parameter '{s}' cannot have type 'void'", .{param.name});
-            } else if (is_c_boundary and ty.isAggregate() and aggregateBoundaryClass(ty) == null) {
+            } else if (is_c_boundary and ty.isAggregate() and self.boundaryClass(ty) == null) {
                 try self.reporter.err("E0473", param.span, "aggregate parameter '{s}' is not supported by the current C ABI target; pass a pointer or use a supported aggregate layout", .{param.name});
             }
             params[i] = ty;
@@ -455,7 +460,7 @@ pub const Sema = struct {
             break :blk ty;
         } else self.prims.void;
 
-        if (is_c_boundary and ret.isAggregate() and aggregateBoundaryClass(ret) == null) {
+        if (is_c_boundary and ret.isAggregate() and self.boundaryClass(ret) == null) {
             try self.reporter.err("E0473", fd.span, "aggregate return type is not supported by the current C ABI target; return a pointer or use a supported aggregate layout", .{});
         }
         const fn_ty = try types.makeFn(self.allocator, params, ret);
@@ -840,6 +845,11 @@ pub const Sema = struct {
         }
         expr.ty = final_ty;
         return final_ty;
+    }
+
+    /// The boundary class of an aggregate for this compilation's target.
+    fn boundaryClass(self: *Sema, ty: *Type) ?BoundaryClass {
+        return aggregateBoundaryClassFor(ty, self.target_supports_c_abi);
     }
 
     fn checkIntLiteral(self: *Sema, expr: *ast.Expr, value: u128, expected: ?*Type) Error!*Type {
@@ -1798,8 +1808,14 @@ pub const BoundaryClass = union(enum) {
     }
 };
 
-pub fn aggregateBoundaryClass(ty: *Type) ?BoundaryClass {
-    if (builtin.target.os.tag != .linux or builtin.target.cpu.arch != .x86_64) return null;
+/// Boundary classification for an explicitly chosen target. The System V rules
+/// below are only defined for `x86_64` Linux, so any other target has no C
+/// aggregate ABI here and callers must reject the boundary rather than guess.
+/// There is deliberately no variant that reads the *build* target: the compile
+/// target can differ from it under `--target`, and two sources of truth here
+/// would let a cross-compilation lower the host convention silently.
+pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
+    if (!systemv) return null;
     // A bare array is not a by-value aggregate at the boundary: a C array
     // parameter decays to a pointer, so passing the elements in registers
     // would silently disagree with the callee. Only arrays nested inside a
@@ -2303,7 +2319,7 @@ test "C ABI boundary classification follows Clang's leaf registers" {
             }
         }
         const ty = struct_ty orelse return error.MissingStructType;
-        const actual = aggregateBoundaryClass(ty);
+        const actual = aggregateBoundaryClassFor(ty, true);
         if (shape.expected) |expected| {
             try testing.expect(actual != null);
             try testing.expect(expected.eql(actual.?));

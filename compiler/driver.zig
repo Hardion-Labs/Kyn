@@ -9,6 +9,7 @@ const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const types = @import("types.zig");
 const sema_mod = @import("sema.zig");
+const target_mod = @import("target.zig");
 const analyzer_mod = @import("analyzer.zig");
 const ir = @import("ir.zig");
 const llvm = @import("backend/llvm.zig");
@@ -65,6 +66,7 @@ pub fn compile(
     io: std.Io,
     path: []const u8,
     profile: Profile,
+    target: target_mod.Target,
     src: *source.Source,
     reporter: *diagnostics.Reporter,
     program_out: *?*@import("ast.zig").Program,
@@ -79,6 +81,7 @@ pub fn compile(
 
     var prims = try types.Primitives.init(arena);
     var sema = sema_mod.Sema.init(arena, reporter, &prims);
+    sema.target_supports_c_abi = target.supportsSystemVAbi();
     try sema.analyze(program);
     if (reporter.hasErrors()) {
         renderDiagnostics(reporter);
@@ -97,6 +100,7 @@ pub fn compile(
 
     var module = ir.Module.init(arena);
     var lowering = llvm.Lowering.init(arena, reporter, &module, profile.runtimeCheckPolicy());
+    lowering.target_supports_c_abi = target.supportsSystemVAbi();
     try lowering.lower(program);
     if (reporter.hasErrors()) {
         renderDiagnostics(reporter);

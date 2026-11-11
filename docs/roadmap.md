@@ -82,9 +82,16 @@ Milestones below are directions, not release promises.
 ## Next direction
 
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
-- Complete System V C ABI coercions for remaining `SSE`/`SSEUP` aggregate
-  classes and specify cross-compilation targets before exposing those layouts
-  across `extern`/`export`. Implemented subsets: one direct `f32`/`f64` field
+- Complete System V C ABI coercions for the remaining `SSE`/`SSEUP` aggregate
+  classes before exposing those layouts across `extern`/`export`.
+- Cross-compilation targets are specified and implemented at the
+  code-generation level: `kync --target <triple>` reaches the external
+  assembler, which is what selects the machine code, and the type checker
+  refuses to lower a C aggregate boundary for a target whose ABI it does not
+  know (`E0473`) instead of silently applying the host convention. What is not
+  yet specified: linking a cross-compiled object into a full executable for
+  another platform (that needs a target sysroot and linker), and per-target
+  variations of the C ABI, which would be a new classifier rather than a flag. Implemented subsets: one direct `f32`/`f64` field
   via scalar SSE, exactly two direct `f32` fields via `<2 x float>`, exactly
   three adjacent direct `f32` fields via `<2 x float>, float` with a
   `{ <2 x float>, float }` return, exactly four adjacent direct `f32` fields

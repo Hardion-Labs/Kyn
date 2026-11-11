@@ -40,6 +40,10 @@ pub const Lowering = struct {
     globals: std.AutoHashMap(u32, u32),
     ctx: ?*FnCtx = null,
     current_fd: ?*ast.FnDecl = null,
+    /// Whether the compilation target has the System V aggregate ABI this
+    /// back end lowers. A target without it never reaches here: the front end
+    /// rejects such boundaries, so this only has to agree with `Sema`.
+    target_supports_c_abi: bool = true,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -238,9 +242,8 @@ pub const Lowering = struct {
     }
 
     fn aggregateBoundaryParam(self: *Lowering, ty: *types.Type) BoundaryClass {
-        _ = self;
         if (!ty.isAggregate()) return no_boundary;
-        return sema_mod.aggregateBoundaryClass(ty) orelse no_boundary;
+        return sema_mod.aggregateBoundaryClassFor(ty, self.target_supports_c_abi) orelse no_boundary;
     }
 
     fn aggregateBoundaryRet(self: *Lowering, ret_expr: ?*ast.TypeExpr) BoundaryClass {
