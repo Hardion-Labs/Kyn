@@ -1492,7 +1492,7 @@ branch history; this increment does not redo them.
   spelling for a lone `f32` array element is not reproduced (deliberate, see
   above). No sanitizer gate is configured, so none was run.
 
-## 37. Wide-integer increment (in progress on `arena/463b6e20-kyn`)
+## 37. Wide-integer increment (completed and merged as PR #20)
 
 - Scope: §36 closed the array shapes and left "a lone `i128` member" on the
   unsupported list. A fresh space probe showed that the classifier was in fact
@@ -1564,9 +1564,21 @@ branch history; this increment does not redo them.
 - Method note: a mutation that truncates *both* sides of a comparison proves
   nothing, which is how the first attempt at checking guard 91 appeared to pass
   while passing vacuously. Mutate one side only.
+- Merge: PR #20 squash-free merge commit `d1ee24c`, CI green; `main` re-validated
+  in a clean worktree (79/79 unit, 169/0 integration). Commits `839c58e`
+  (implementation and fixtures) and `e19b06d` (this record).
+- State of the classifier: the 13 370-shape space probe over aggregates of at
+  most 16 bytes now yields zero Kyn rejections, and the surviving IR diffs are
+  all register-pair spellings proven equivalent in execution (`i128` vs
+  `{ i64, i64 }`, `i64` vs `ptr`, `float` vs `<2 x float>`). Further work here
+  is no longer shape coverage.
 - Next task: specify cross-compilation targets, then the remaining
   `SSE`-class fallbacks (`{ f32, f32, f32, f32, f32 }` and similar
   memory-class shapes) before exposing further layouts across `extern`/`export`.
+  Worth revisiting the 30 mutation seeds in `robustness.py`: the 128-bit crash
+  survived because a type the corpus never mentioned was never exercised, so
+  widening the seed vocabulary (unsigned widths, enums with unusual backings,
+  slices of slices) is likely to pay off again.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
