@@ -1630,11 +1630,25 @@ branch history; this increment does not redo them.
   in jq against `headSha`, with `--limit 50` to cover a merge's own push run and
   commits a few merges behind `main`. Verified: the step reports
   `CI succeeded for expected SHA (run 43027891490)`.
-- Next: merge the gate fix, re-run `tools/release-check.sh 0.1.0-alpha.4 <sha>`
-  against a clean `main` checkout, then tag and publish per the checklist's
-  *Creating the release* section. The gate does not authorize the release; the
-  user's standing instruction is that releases should be published once
-  warranted.
+- **Released.** Gate passed **17/0** on `main` at `d6e7302`: on `main`, clean
+  tree, HEAD matches, `origin/main` matches, not shallow, CI green for that
+  exact SHA (run 43029050168), CHANGELOG contains the version, no pre-existing
+  tag or release, and the full clean-room clone build/test/robustness pass.
+  Then:
+  - annotated tag `v0.1.0-alpha.4` → `d6e7302b9d0423c6c4fafa49da0ee8ae751fb0a4`;
+  - GitHub Release `Kyn v0.1.0-alpha.4` published (currently "Latest");
+  - `alpha.1`–`alpha.3` untouched, as the checklist requires.
+- Blocker, recorded not hidden: the two release archives could not be attached.
+  GitHub asset uploads go through `uploads.github.com`, which is unreachable
+  from this sandbox (`SSL_ERROR_SYSCALL`; `api.github.com` answers 200), so
+  `gh release upload` fails with `EOF` before any byte is sent. The archives
+  were built and verified from the tagged commit, and the release notes say how
+  to reproduce them from the tag. Attaching them is a follow-up that needs a
+  network path to `uploads.github.com`.
+- Next task: attach the two `dist/` archives to the existing release once
+  uploads are reachable (no re-tag; content is unchanged), then proceed with
+  cross-compilation targets and the remaining `SSE`-class fallbacks per the
+  roadmap.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
