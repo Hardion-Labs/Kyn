@@ -1610,6 +1610,14 @@ pub const Sema = struct {
                     if (!self.isTypeAccessible(struct_field.ty, expr.span.source_id)) {
                         try self.reporter.err("E0467", field.span, "field type is private to another module", .{});
                     }
+                    // "Every field exactly once" is the documented rule, and a
+                    // repeated name would otherwise be accepted with the last
+                    // value silently winning. The same diagnosis `E0404` covers
+                    // a duplicate *declaration* field, so one code means one
+                    // thing.
+                    if (assigned[struct_field.index]) {
+                        try self.reporter.err("E0404", field.span, "duplicate field '{s}' in initializer for struct '{s}'", .{ field.name, info.name });
+                    }
                     const value_ty = try self.checkExpr(field.value, struct_field.ty);
                     try self.requireAssignable(struct_field.ty, field.value, value_ty, true);
                     assigned[struct_field.index] = true;
@@ -3373,6 +3381,36 @@ test "the root entry point accepts only the signatures the C runtime calls" {
     try expectClean(
         \\export fn main(argc: i32, argv: *u8) i32 { return 0; }
     );
+}
+
+test "a struct initializer names every field exactly once" {
+    // Declaration order does not matter.
+    try expectClean(
+        \\struct Point { x: i32, y: i32 }
+        \\fn main() i32 {
+        \\    let p: Point = Point { y: 2, x: 1 };
+        \\    return p.x + p.y;
+        \\}
+    );
+
+    // A repeated field is rejected instead of the last value winning.
+    try expectSemanticError(
+        \\struct Point { x: i32, y: i32 }
+        \\fn main() i32 {
+        \\    let p: Point = Point { x: 1, y: 2, x: 3 };
+        \\    return p.x;
+        \\}
+    , "E0404");
+
+    // The rule applies to every nested initializer, not only the outermost.
+    try expectSemanticError(
+        \\struct Inner { a: i32 }
+        \\struct Outer { inner: Inner }
+        \\fn main() i32 {
+        \\    let o: Outer = Outer { inner: Inner { a: 1, a: 2 } };
+        \\    return o.inner.a;
+        \\}
+    , "E0404");
 }
 
 test "global initializer with a function call is rejected" {

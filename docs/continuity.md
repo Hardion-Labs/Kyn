@@ -20,8 +20,10 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§45):** the `argc`/`argv` entry
-  point — already delivered correctly by the C ABI but undocumented, untested,
+- **Unreleased work on the current branch (§46):** a struct initializer that
+  repeats a field is now `E0404` — the documented "specified exactly once" rule
+  was unenforced and the last value silently won.
+- **Merged (`7ddd626` .. `f50733a`, §45):** the `argc`/`argv` entry point — already delivered correctly by the C ABI but undocumented, untested,
   and unconstrained: any `main` signature passed the type checker. Now
   documented, covered by a fixture with program arguments, and checked
   (`E0477`).
@@ -2208,3 +2210,53 @@ assumed feature.
   the still-unscheduled type-system decision on unions/bitfields/packed structs.
 - Contract kept: no test was modified to pass; the new behaviour is pinned by
   one unit test, one positive fixture and three negative ones.
+
+## 46. Struct-initializer field uniqueness, and a contract sweep (on `arena/ecb80055-kyn`)
+
+- Base: `main` at `f50733a`; `v0.1.0-alpha.5` remains the published baseline.
+  With `abi.md` §9 listing only design decisions, the increment was chosen by
+  **sweeping documented contracts against real behaviour** rather than by reading
+  a TODO list, and the one defect the sweep found was fixed.
+- The sweep, and what it cleared: signed division and remainder on
+  `INT_MIN / -1` (traps, 132), shift-amount bounds (132) and arithmetic `>>` on
+  a negative value, struct layout and alignment against C `offsetof`/`sizeof`
+  for a mixed `u8`/`i64`/`u8`/`i32` aggregate with writes in both directions,
+  `enum` backings (`u8` with 255, `i8` with -1, comparisons), string literals
+  (`*const u8`, writable only through an array slice), `E0501`/`W0501`/`E0506`
+  static analyses, the runtime null traps for pointer indexing and
+  array-pointer slicing, `kyn-build` exit codes (build-file errors 2,
+  compile failure 3) and `staticlib` output, struct/enum trailing commas, array
+  literal length and element-type mismatches, and recursive structs through a
+  pointer versus by value. All matched their documentation.
+- **Defect found and fixed:** `Point { x: 1, y: 2, x: 3 }` was accepted, with the
+  last value silently winning (`p.x == 3`). The language reference has always
+  said "every field must be specified exactly once", and `E0404` already existed
+  for a duplicate *declaration* field, so the initializer path simply never
+  consulted `assigned[]` before setting it. Fixed by checking that flag — no new
+  diagnostic code, because a duplicate field is one concept.
+- Scope note: the check lives in `sema.checkStructLiteral`, which runs for every
+  initializer, so nested initializers are covered by construction rather than by
+  a second code path. Verified that a duplicate does not also cascade into
+  `E0458 missing field`, and that declaration order still does not matter.
+- Not changed, and deliberately so: `E0506` does not propagate through
+  variables (`let p: *i32 = null; p[0]`), which `safety-model.md`
+  §2.8 documents explicitly as "proven from the expression text" with "variable
+  provenance is not tracked yet" — the runtime trap covers it. Array literals do
+  not accept a trailing comma while struct fields do; the grammar and the
+  reference only promise the latter, so both sides agree.
+- Files changed: `compiler/sema.zig` (initializer check + one unit test), docs
+  (`language-reference.md` §3.3, `roadmap.md`, `README.md`, `CHANGELOG.md`), and
+  fixture `errors/struct_init_duplicate_field.{kyn,code}`.
+- Validation from a clean cache: `zig build` OK; `zig build test` **100/100**
+  (99 → 100); integration **196/0** in Debug and ReleaseSafe (195 → 196);
+  `zig fmt --check` clean; docs links 21; documented codes **131** (unchanged —
+  `E0404` was already documented for the declaration case); robustness corpus
+  902 clean; versions consistent at `0.1.0-alpha.5`.
+- Not done, and not claimed: no sanitizer gate exists in this repo;
+  `v0.1.0-alpha.5` release assets remain unattached (§38/§42); the Windows
+  archive path was not re-exercised.
+- Next task: the callee side of variadics (`va_list` + an exported variadic), or
+  the still-unscheduled type-system decision on unions/bitfields/packed structs.
+- Contract kept: no test was modified to pass; the new behaviour is pinned by
+  one unit test and one fixture, and the sweep's negative results are recorded
+  above so the next session does not repeat them.

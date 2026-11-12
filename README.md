@@ -336,6 +336,7 @@ build.zig            Builds the toolchain and wires test steps
 | First-class function values and indirect calls | ✅ Shipped in `v0.1.0-alpha.5` |
 | Pointer/integer/function-value casts in both directions | ✅ Shipped after `v0.1.0-alpha.5` |
 | `argc`/`argv` entry point, with its signature checked (`E0477`) | ✅ Shipped after `v0.1.0-alpha.5` |
+| Duplicate struct-initializer field rejected (`E0404`) | ✅ Shipped after `v0.1.0-alpha.5` |
 | Exported globals (`export var`/`let`/`const`) with the `E0476` ABI guard | ✅ Shipped after `v0.1.0-alpha.5` |
 | `u128` constants above `i128`'s maximum in globals and comparisons | ✅ Shipped after `v0.1.0-alpha.5` |
 | Leaf-based System V classification (nested, pointer, narrow-slot, fixed-array and 16-byte integer members) | ✅ Shipped in `v0.1.0-alpha.4` |
