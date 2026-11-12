@@ -2114,6 +2114,15 @@ assumed feature.
 - Rejected-behaviour checks (so nothing was loosened): `fn(i32) i32 as
   fn(i64) i64`, `Pair as fn(i32) i32`, `fn_value as []const u8` and a
   non-representable `*T` cast all still report `E0447`.
+- Git, final for this increment: implementation commit `e668134` and record
+  `571b18c` on `arena/cdf27e39-kyn`, pushed before the turn ended; PR #35 → CI
+  green → merged as **`d2a20d2`**; `main` re-validated in a fresh clone of
+  `d2a20d2` (98/98 unit, 191/0 integration).
+- Release decision: `v0.1.0-alpha.5` (published 2026-11-12T14:13:41Z) still
+  covers the tag; §43 and §44 accumulate under `[Unreleased]`. No new tag was cut
+  for this increment — the two are small and land within an hour of the release,
+  so a version boundary would carry no information. The standing authorization
+  to tag and publish applies once the unreleased section is worth a release.
 - Not done, and not claimed: no sanitizer gate exists in this repo; the Windows
   archive path was not re-exercised; `v0.1.0-alpha.5` release assets remain
   unattached (§38/§42, `uploads.github.com` unreachable).
