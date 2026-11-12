@@ -1804,6 +1804,9 @@ branch history; this increment does not redo them.
   callback into Kyn remains impossible. A variadic argument that is a
   `comptime`-only value materialises to the promoted default rather than being
   inferred from context. Format-string interpretation is of course not checked.
+- Merge: PR #27 → `a0d00f4`, CI green (`43133353138`, 2m3s); `main`
+  re-validated in a clean worktree (90/90 unit, 180/0 integration).
+  Implementation commit `0250b3c`.
 - Next task: the callee side of variadics (`va_list`, `va_start`-like
   primitives and an `export`ed variadic) if it is wanted, which is a language
   and ABI design decision rather than a lowering gap; otherwise the remaining
