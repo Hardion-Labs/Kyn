@@ -1928,13 +1928,25 @@ branch history; this increment does not redo them.
   robustness corpus 902 clean; `check_versions.py` reports
   `versions consistent at 0.1.0-alpha.5`, which is the check that would have
   caught a partially-updated version string.
-- Tag: `v0.1.0-alpha.5` on the merge commit of this increment, published as a
-  GitHub prerelease with notes scoped to the three increments. The tag is never
-  moved; a later fix gets a new version.
-- Known blocker, unchanged and independent: attaching the release **archives**
-  still requires `uploads.github.com`, which remains unreachable from this
-  environment (`HTTP 000`). The tag and release exist; the binary assets do not
-  (§38).
+- Merge: PR #31 → `38d1849`, CI green (`43234150814`, 2m5s). `main` re-validated
+  in a clean worktree **before** tagging — 95/95 unit, 185/0 integration, both
+  binaries reporting `0.1.0-alpha.5` — so the tag only ever pointed at a
+  commit proven green. Implementation commit `f92400f`.
+- Tag `v0.1.0-alpha.5` was created on `38d1849` and pushed; the GitHub Release
+  was published as a prerelease (`443040775`, `2026-11-12T14:13:41Z`) with notes
+  scoped to the three increments. The tag is never moved; a later fix gets a new
+  version.
+- Release archives: `packaging/make-dist.sh 0.1.0-alpha.5` produced and verified
+  both archives locally — the Linux one through extract, `install.sh`, and a
+  `hello.kyn` run printing `Hello from Kyn!`, the Windows one structurally
+  (contents and PE magic). **They are not attached.** `gh release upload` fails
+  with `Post ".../assets": EOF`, an `HTTP POST` probe to
+  `uploads.github.com/.../assets` returns `000`, and the release still reports
+  `assets: 0`. `api.github.com` answers `200` from the same shell, so this is a
+  network block on the upload host specifically, not an authentication or
+  permission problem — §38's blocker reproduced, now on a second release.
+  `dist/` is generated output and already ignored by Git, so nothing stale was
+  committed.
 - Next task: unions/bitfields/packed structs, or the callee side of variadics
   (`va_list` + `export`ed variadic); both are language design decisions rather
   than lowering gaps.
