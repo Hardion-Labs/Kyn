@@ -7,12 +7,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 ## 1. Current real stage
 
-- **Published toolchain baseline:** `v0.1.0-alpha.4` (`d6e7302`, tagged),
-  replacing `v0.1.0-alpha.3` (`84093a2`); archives still cannot be attached
-  (see §38). `main` additionally carries three merged post-`alpha.4` increments:
-  explicit code-generation targets (§39, PR #25 → `47763af`), variadic `extern`
-  declarations (§40, PR #27 → `a0d00f4`) and first-class function values with
-  indirect calls (§41, PR #29 → `5b9dc00`).
+- **Published toolchain baseline:** `v0.1.0-alpha.5`, cut from `af7cfff` and
+  published as a prerelease (§42). It carries the three increments that had
+  accumulated on `main` after `alpha.4`: explicit code-generation targets (§39,
+  PR #25 → `47763af`), variadic `extern` declarations (§40, PR #27 →
+  `a0d00f4`) and first-class function values with indirect calls (§41, PR #29 →
+  `5b9dc00`).
+- **Previous published baseline:** `v0.1.0-alpha.4` (`d6e7302`), replacing
+  `v0.1.0-alpha.3` (`84093a2`); its archives could not be attached (see §38),
+  and that uploader blocker was re-checked for `alpha.5` in §42.
 - **Previous published baseline:** `v0.1.0-alpha.3` (`84093a2`), Zig `0.17.0`
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
@@ -1890,6 +1893,51 @@ branch history; this increment does not redo them.
   (`va_list` + `export`ed variadic), whichever is wanted; both are language
   design decisions rather than lowering gaps. The `alpha.4` archive uploader
   blocker of §38 remains open and independent.
+
+## 42. Release increment: v0.1.0-alpha.5 (implemented on `arena/4417f623-kyn`)
+
+- Why this was the next coherent step rather than another language feature: the
+  `CHANGELOG.md` on `main` recorded the three increments above under
+  `## [0.1.0-alpha.4]`, a section that is **already tagged and published**, and a
+  `git diff v0.1.0-alpha.4 HEAD -- CHANGELOG.md` showed all three entries were
+  pure additions made after the tag. A reader of the published release was
+  therefore told that `--target`, variadic `extern` declarations and function
+  values ship in a version that predates them. That is a factual error in a
+  public document, and three validated increments had accumulated since the last
+  boundary, so the release boundary was the honest place to fix it.
+- `CHANGELOG.md`: the four post-`alpha.4` bullets were moved out of
+  `[0.1.0-alpha.4]` into a new `[0.1.0-alpha.5] - 2026-11-12` section, which also
+  records the correction itself under "Fixed". `[0.1.0-alpha.4]` now lists only
+  what the tag actually contains — verified by diffing the file against
+  `v0.1.0-alpha.4`, where every line was an addition and none a modification.
+- Version metadata moved together, and `check_versions.py` enforces that they
+  stay equal: `build.zig.zon` (`.version`), `compiler/main.zig` (the `--version`
+  string), `build-system/main.zig` (the `kyn-build --version` string). All three
+  now report `0.1.0-alpha.5`.
+- Docs: `README.md` status banner, archive names, the `release-check.sh` example,
+  and the roadmap table — which gains the `alpha.5` milestone, keeps `alpha.4`
+  as the previous published preview, and moves the `SSE` aggregate C ABI row
+  from 🟡 Partial to ✅ Implemented, because §40 verified it exhaustively against
+  Clang rather than leaving it as an unproven claim. `docs/roadmap.md` gains an
+  `alpha.5` section; `docs/release-checklist.md` names `alpha.5` as current and
+  keeps `alpha.4`/`alpha.3` published and untouched; `tools/release-check.sh`
+  examples follow.
+- Validation before tagging: `zig build` OK; `zig build test` **95/95**;
+  integration **185/0** in Debug and ReleaseSafe; `zig fmt --check` clean;
+  `check_docs_links.py` 21 files; `check_diagnostic_docs.py` 129 codes;
+  robustness corpus 902 clean; `check_versions.py` reports
+  `versions consistent at 0.1.0-alpha.5`, which is the check that would have
+  caught a partially-updated version string.
+- Tag: `v0.1.0-alpha.5` on the merge commit of this increment, published as a
+  GitHub prerelease with notes scoped to the three increments. The tag is never
+  moved; a later fix gets a new version.
+- Known blocker, unchanged and independent: attaching the release **archives**
+  still requires `uploads.github.com`, which remains unreachable from this
+  environment (`HTTP 000`). The tag and release exist; the binary assets do not
+  (§38).
+- Next task: unions/bitfields/packed structs, or the callee side of variadics
+  (`va_list` + `export`ed variadic); both are language design decisions rather
+  than lowering gaps.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

@@ -21,8 +21,8 @@
 
 ---
 
-> 🧪 **Status:** `v0.1.0-alpha.4` — *published preview, actively developed.*  
-> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4).  
+> 🧪 **Status:** `v0.1.0-alpha.5` — *published preview, actively developed.*  
+> See the [release](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.5).  
 > Features listed under [Current Limitations](#-current-limitations) are **not implemented**.
 
 </div>
@@ -81,12 +81,12 @@ Prebuilt toolchain archives are produced by [`packaging/make-dist.sh`](packaging
 
 ```bash
 # Linux
-tar -xzf kyn-0.1.0-alpha.4-linux-x86_64.tar.gz
-cd kyn-0.1.0-alpha.4-linux-x86_64 && ./install.sh   # /usr/local as root, else ~/.local
+tar -xzf kyn-0.1.0-alpha.5-linux-x86_64.tar.gz
+cd kyn-0.1.0-alpha.5-linux-x86_64 && ./install.sh   # /usr/local as root, else ~/.local
 
 # Windows (PowerShell)
-Expand-Archive kyn-0.1.0-alpha.4-windows-x86_64.zip -DestinationPath .
-cd kyn-0.1.0-alpha.4-windows-x86_64; .\install.ps1
+Expand-Archive kyn-0.1.0-alpha.5-windows-x86_64.zip -DestinationPath .
+cd kyn-0.1.0-alpha.5-windows-x86_64; .\install.ps1
 ```
 
 Both installers copy `kync` and `kyn-build` to a `bin` directory, put it on
@@ -304,7 +304,7 @@ The integration suite covers:
 Release readiness can be audited without creating a tag or release:
 
 ```sh
-tools/release-check.sh 0.1.0-alpha.4 "$(git rev-parse HEAD)"
+tools/release-check.sh 0.1.0-alpha.5 "$(git rev-parse HEAD)"
 ```
 
 ---
@@ -329,7 +329,11 @@ build.zig            Builds the toolchain and wires test steps
 
 | Milestone | Status |
 |:---|:---|
-| `v0.1.0-alpha.4` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4) |
+| `v0.1.0-alpha.5` — current principal preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.5) |
+| `v0.1.0-alpha.4` — previous preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4) |
+| Explicit code-generation targets (`kync --target`) with the `E0473` ABI guard | ✅ Shipped in `v0.1.0-alpha.5` |
+| Variadic `extern` declarations with C default argument promotions | ✅ Shipped in `v0.1.0-alpha.5` |
+| First-class function values and indirect calls | ✅ Shipped in `v0.1.0-alpha.5` |
 | Leaf-based System V classification (nested, pointer, narrow-slot, fixed-array and 16-byte integer members) | ✅ Shipped in `v0.1.0-alpha.4` |
 | Prebuilt release archives and installers (`packaging/`) | ✅ Shipped in `v0.1.0-alpha.4` |
 | 128-bit integer constants in the type checker and back end | ✅ Shipped in `v0.1.0-alpha.4` |
@@ -338,7 +342,7 @@ build.zig            Builds the toolchain and wires test steps
 | Relative-path imports, qualified aliases and module namespaces | ✅ Shipped in `v0.1.0-alpha.3` |
 | Integer-class mixed float/integer aggregate C ABI cases | ✅ Shipped in `v0.1.0-alpha.3` |
 | Integer-pair and nested-member aggregate C ABI coercions | ✅ Shipped in `v0.1.0-alpha.4` |
-| SSE aggregate C ABI coercions (scalar, `f32`/`f64` pairs, `f32` triple/quad, mixed widths, `i8`/`i16`/`bool` members, layouts splitting SSE/INTEGER eightbytes) | 🟡 Partial |
+| SSE aggregate C ABI coercions (scalar, `f32`/`f64` pairs, `f32` triple/quad, mixed widths, `i8`/`i16`/`bool` members, layouts splitting SSE/INTEGER eightbytes) | ✅ Implemented |
 | Explicit all-check runtime policy across profiles | ✅ Implemented |
 
 See [docs/roadmap.md](docs/roadmap.md) for the exact scope and ordering.
