@@ -2196,6 +2196,10 @@ assumed feature.
   `E0477` instead of being accepted with a documented caveat. No fixture,
   example or test depended on the old permissiveness (the two `diagnostics.zig`
   tests that use such a string only render diagnostics and never compile it).
+- Git, final for this increment: implementation commit `6eec487` and record
+  `2262bfd` on `arena/0c7eb404-kyn`, pushed before the turn ended; PR #37 → CI
+  green → merged as **`7ddd626`**; `main` re-validated in a fresh clone of
+  `7ddd626` (99/99 unit, 195/0 integration).
 - Not done, and not claimed: no sanitizer gate exists in this repo; `envp` is
   not passed to `main` (C's third parameter) — a program that needs the
   environment calls `getenv`, which works; the Windows archive path was not
