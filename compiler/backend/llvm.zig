@@ -1931,7 +1931,11 @@ pub const Lowering = struct {
 
     fn lowerConst(self: *Lowering, expr: *ast.Expr, ty: *types.Type) Error!?ir.Value {
         switch (expr.kind) {
-            .int_lit => |lit| return .{ .int = @intCast(lit.value) },
+            // A literal above `i128`'s maximum (a `u128` constant) has no
+            // `i128` spelling, so preserve its bit pattern instead of trapping.
+            // The emitter renders it back in the unsigned domain when the
+            // expected type is an unsigned 128-bit integer.
+            .int_lit => |lit| return .{ .int = @bitCast(lit.value) },
             .char_lit => |value| return .{ .int = @intCast(value) },
             .bool_lit => |value| return .{ .boolean = value },
             .float_lit => |lit| return .{ .float = lit.value },
