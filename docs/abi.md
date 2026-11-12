@@ -214,7 +214,9 @@ int main(void) {
 ```
 
 `fn main` is also emitted with external linkage so the platform entry point is
-available. Other `fn` declarations use internal linkage.
+available, which is why its signature is constrained to what the C runtime
+passes and reads back (`argc: i32`, `argv: **u8`, returning `i32`; `E0477`
+otherwise). Other `fn` declarations use internal linkage.
 
 ### Exporting globals
 

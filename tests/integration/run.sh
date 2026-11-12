@@ -96,10 +96,24 @@ for case_file in "$ROOT"/tests/integration/cases/*.kyn; do
         expected_exit=$(tr -d '[:space:]' <"${case_file%.kyn}.exit")
     fi
 
+    # A `.args` file holds the program arguments, one per line, so a case can
+    # exercise the `argc`/`argv` entry point. Empty lines are meaningful (an
+    # empty argument) and a missing file means no arguments at all.
+    case_args=()
+    if [ -f "${case_file%.kyn}.args" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            case_args+=("$line")
+        done <"${case_file%.kyn}.args"
+    fi
+
     stdout_file="$TMP/$name.stdout"
     stderr_file="$TMP/$name.stderr"
     status=0
-    (cd "$TMP/work" && "$KYNC" run "$case_file" --profile "$PROFILE" >"$stdout_file" 2>"$stderr_file") || status=$?
+    run_args=()
+    if [ ${#case_args[@]} -gt 0 ]; then
+        run_args=(-- "${case_args[@]}")
+    fi
+    (cd "$TMP/work" && "$KYNC" run "$case_file" --profile "$PROFILE" "${run_args[@]}" >"$stdout_file" 2>"$stderr_file") || status=$?
 
     if [ "$status" -ne "$expected_exit" ]; then
         bad "$name: expected exit $expected_exit, got $status" "$(cat "$stderr_file")"

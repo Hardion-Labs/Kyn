@@ -490,6 +490,36 @@ pub const Sema = struct {
             sym.is_export = fd.is_export;
             sym.is_variadic = fd.is_variadic;
         }
+        try self.checkEntryPoint(fd, params, ret);
+    }
+
+    /// The root module's `main` is the process entry point the C runtime calls,
+    /// so its signature is not free: the caller passes `argc` and the vector of
+    /// argument strings and reads an `int` back. Anything else links and then
+    /// misbehaves at run time — a three-parameter `main` reads a register the
+    /// loader never set, and a `f64` return makes the exit status meaningless —
+    /// so it is diagnosed here instead of being discovered later. A library
+    /// (`staticlib`/`sharedlib`) may legitimately expose a `main` with another
+    /// shape, so only the unmarked root declaration is treated as the entry
+    /// point; an `extern` one is a C declaration, not a definition.
+    fn checkEntryPoint(self: *Sema, fd: *ast.FnDecl, params: []*Type, ret: *Type) Error!void {
+        if (fd.is_extern or fd.is_export) return;
+        if (fd.span.source_id != 0 or !std.mem.eql(u8, fd.name, "main")) return;
+        if (fd.is_variadic) return;
+
+        if (params.len > 2) {
+            try self.reporter.err("E0477", fd.span, "entry point 'main' takes at most 'argc: i32' and 'argv: **u8', found {d} parameters", .{params.len});
+            return;
+        }
+        if (params.len >= 1 and !(params[0].* == .int and params[0].int.bits == 32 and params[0].int.signed)) {
+            try self.reporter.err("E0477", fd.span, "entry point 'main' parameter 1 must be 'i32', found '{s}'", .{self.typeName(params[0])});
+        }
+        if (params.len == 2 and !isArgvType(params[1])) {
+            try self.reporter.err("E0477", fd.span, "entry point 'main' parameter 2 must be '**u8', found '{s}'", .{self.typeName(params[1])});
+        }
+        if (!(ret.* == .int and ret.int.bits == 32 and ret.int.signed)) {
+            try self.reporter.err("E0477", fd.span, "entry point 'main' must return 'i32', found '{s}'", .{self.typeName(ret)});
+        }
     }
 
     fn resolveGlobal(self: *Sema, vd: *ast.VarDecl) Error!void {
@@ -1919,6 +1949,17 @@ fn containsIncompleteByValue(ty: *Type) bool {
     };
 }
 
+/// `**u8` is the C `char **`: the vector of argument strings the entry point
+/// receives. `**const u8` is accepted too, since the program is not supposed to
+/// write through it.
+fn isArgvType(ty: *Type) bool {
+    if (ty.* != .pointer) return false;
+    const inner = ty.pointer.elem;
+    if (inner.* != .pointer) return false;
+    const byte = inner.pointer.elem;
+    return byte.* == .int and byte.int.bits == 8 and !byte.int.signed;
+}
+
 fn fitsInt(info: types.IntInfo, value: i128) bool {
     return info.fits(value);
 }
@@ -3293,6 +3334,45 @@ test "pointer and integer casts reach and leave a function value" {
         \\    return 0;
         \\}
     , "E0447");
+}
+
+test "the root entry point accepts only the signatures the C runtime calls" {
+    // All four shapes the loader can satisfy.
+    try expectClean(
+        \\fn main() i32 { return 0; }
+    );
+    try expectClean(
+        \\fn main(argc: i32) i32 { return argc; }
+    );
+    try expectClean(
+        \\fn main(argc: i32, argv: **u8) i32 { return argc; }
+    );
+    try expectClean(
+        \\fn main(argc: i32, argv: **const u8) i32 { return argc; }
+    );
+
+    // A return type the exit status cannot carry.
+    try expectSemanticError(
+        \\fn main() f64 { return 1.5; }
+    , "E0477");
+    // `argv` must be the string vector, not one string.
+    try expectSemanticError(
+        \\fn main(argc: i32, argv: *u8) i32 { return argc; }
+    , "E0477");
+    // `argc` is an `int`, not a wider integer.
+    try expectSemanticError(
+        \\fn main(argc: u64) i32 { return 0; }
+    , "E0477");
+    // C passes two arguments, never three.
+    try expectSemanticError(
+        \\fn main(argc: i32, argv: **u8, envp: **u8) i32 { return argc; }
+    , "E0477");
+
+    // A library may expose `main` with any shape; only the unmarked root
+    // declaration is the entry point, and an exported one is just a function.
+    try expectClean(
+        \\export fn main(argc: i32, argv: *u8) i32 { return 0; }
+    );
 }
 
 test "global initializer with a function call is rejected" {

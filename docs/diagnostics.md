@@ -149,6 +149,7 @@ unsupported construct or an internal compiler invariant violation.
 | `E0474` | variadic declaration is not `extern`, or has no fixed parameter |
 | `E0475` | argument cannot be passed to a variadic `extern` function |
 | `E0476` | exported global has a layout the C ABI target cannot represent |
+| `E0477` | entry point `main` has a signature the C runtime cannot call |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

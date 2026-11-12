@@ -1,0 +1,19 @@
+// The entry point may take the C `argc`/`argv` pair, which is how a program
+// reads its own command line. `run.sh` executes this case with three extra
+// arguments and expects the exit status below to match `argc` plus a checksum
+// of the arguments themselves.
+fn strlen(value: *const u8) i32 {
+    var n: i32 = 0;
+    while (value[n] != 0) { n = n + 1; }
+    return n;
+}
+
+fn main(argc: i32, argv: **u8) i32 {
+    if (argc != 4) { return 100; }
+    // argv[argc] is the null terminator of the vector.
+    if (argv[argc] != null) { return 101; }
+    if (strlen(argv[1]) != 3) { return 102; }
+    if (strlen(argv[2]) != 0) { return 103; }
+    if (strlen(argv[3]) != 5) { return 104; }
+    return argc + strlen(argv[1]) + strlen(argv[3]);
+}

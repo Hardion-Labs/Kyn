@@ -26,6 +26,17 @@ Exported globals, and two constant-representation fixes.
   refuses to convert between two signatures and from an aggregate to a
   function value (`E0447`).
 
+- The entry point's signature is now checked (`E0477`). `main` is the function
+  the C runtime calls, so it may take `argc: i32` and `argv: **u8` and must
+  return `i32`; a `f64` return, a `*u8` `argv`, a `u64` `argc` or a third
+  parameter previously passed the type checker and then misbehaved at run time.
+  Only the unmarked `main` of the root module is checked — an `export fn main`,
+  an `extern fn main` and a library's `main` are ordinary functions.
+- `argc`/`argv` themselves were already delivered correctly by the C ABI and are
+  now documented and covered: a program reads its command line, including
+  `argv[argc] == null` and empty arguments, and `kync run ... -- args` passes
+  them through.
+
 ### Fixed
 
 - An integer-to-pointer cast (`usize as *u8`), documented and accepted by the
