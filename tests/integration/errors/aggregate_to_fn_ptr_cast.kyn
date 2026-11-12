@@ -1,0 +1,9 @@
+// An aggregate is two words or more; a function value is one address. Casting
+// one to the other would reinterpret storage as a callee, so it is rejected
+// like every other unsupported cast pair.
+struct Pair { a: i32, b: i32 }
+fn main() i32 {
+    let pair: Pair = Pair { a: 1, b: 2 };
+    let handler: fn(i32) i32 = pair as fn(i32) i32;
+    return 0;
+}

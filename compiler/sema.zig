@@ -1311,13 +1311,20 @@ pub const Sema = struct {
         const target_ty = try self.resolveType(cast.target);
         if (source_ty.* == .invalid or target_ty.* == .invalid) return target_ty;
 
+        // A function value is a pointer at the ABI level, and the two directions
+        // are deliberately spelled differently: naming a raw pointer as a
+        // function type with `as` is what a C callback retrieved from a table
+        // needs, while a function *name* is written as a plain expression and
+        // only a cast to `*T` explains which pointer it is.
+        const is_callable_pointer = target_ty.* == .fn_ptr;
         const allowed = switch (source_ty.*) {
-            .comptime_int, .comptime_float => target_ty.isNumeric() or target_ty.isPointer() or target_ty.* == .bool or target_ty.* == .enum_type,
-            .int, .char => target_ty.isNumeric() or target_ty.* == .bool or target_ty.* == .enum_type or target_ty.isPointer(),
+            .comptime_int, .comptime_float => target_ty.isNumeric() or target_ty.isPointer() or target_ty.* == .bool or target_ty.* == .enum_type or is_callable_pointer,
+            .int, .char => target_ty.isNumeric() or target_ty.* == .bool or target_ty.* == .enum_type or target_ty.isPointer() or is_callable_pointer,
             .float => target_ty.isFloat() or self.isIntegerType(target_ty) or target_ty.* == .bool,
             .bool => self.isIntegerType(target_ty) or target_ty.isFloat() or target_ty.* == .bool,
             .enum_type => self.isIntegerType(target_ty) or target_ty.* == .enum_type,
-            .pointer => self.isPointerCast(source_ty, target_ty),
+            .pointer => self.isPointerCast(source_ty, target_ty) or is_callable_pointer,
+            .fn_ptr => self.isFunctionPointerCast(source_ty, target_ty),
             .slice => self.isSliceCast(source_ty, target_ty),
             .null_type => target_ty.isPointer(),
             else => false,
@@ -1341,6 +1348,18 @@ pub const Sema = struct {
             return Type.eql(target_info.elem, array.elem);
         }
         return target_ty.isPointer() or target_ty.isInteger() or target_ty.* == .bool;
+    }
+
+    /// A function value casts to the two things C erases it to: a raw pointer
+    /// (`*T`, keeping its const-ness explicit) or an integer wide enough to hold
+    /// an address. Function types and aggregates are not casts — the same rule
+    /// already applies to `*T` in `isPointerCast` — because a signature is not
+    /// a representation and an aggregate would be reinterpreting two words as
+    /// one.
+    fn isFunctionPointerCast(self: *const Sema, source_ty: *Type, target_ty: *Type) bool {
+        _ = self;
+        _ = source_ty;
+        return target_ty.isPointer() or target_ty.isInteger();
     }
 
     fn isSliceCast(self: *const Sema, source_ty: *Type, target_ty: *Type) bool {
@@ -3241,6 +3260,39 @@ test "a u128 maximum literal is usable where the type is already u128" {
         \\    return 0;
         \\}
     , "E0426");
+}
+
+test "pointer and integer casts reach and leave a function value" {
+    try expectClean(
+        \\extern fn get_callback() *u8;
+        \\fn double(x: i32) i32 { return x * 2; }
+        \\fn main() i32 {
+        \\    let handler: fn(i32) i32 = get_callback() as fn(i32) i32;
+        \\    let erased: *u8 = double as *u8;
+        \\    let address: usize = erased as usize;
+        \\    let again: fn(i32) i32 = address as fn(i32) i32;
+        \\    return handler(1) + again(1);
+        \\}
+    );
+
+    // A signature is not a representation: two function types do not cast.
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let handler: fn(i32) i32 = 1 as fn(i32) i32;
+        \\    let other: fn(i64) i64 = handler as fn(i64) i64;
+        \\    return 0;
+        \\}
+    , "E0447");
+
+    // Nor does an aggregate reinterpret as one address.
+    try expectSemanticError(
+        \\struct Pair { a: i32, b: i32 }
+        \\fn main() i32 {
+        \\    let pair: Pair = Pair { a: 1, b: 2 };
+        \\    let handler: fn(i32) i32 = pair as fn(i32) i32;
+        \\    return 0;
+        \\}
+    , "E0447");
 }
 
 test "global initializer with a function call is rejected" {
