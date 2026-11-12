@@ -111,6 +111,38 @@ followed by a `.`. `@` is lexed but has no grammar rule in v0.1.
 
 ## 2. Types
 
+Function types are written `fn(P) R` and declare a first-class function value:
+
+```kyn
+fn add(a: i32, b: i32) i32 { return a + b; }
+
+fn apply(op: fn(i32, i32) i32, a: i32, b: i32) i32 {
+    return op(a, b);
+}
+
+fn main() i32 {
+    let chosen: fn(i32, i32) i32 = add;
+    let unset: fn(i32, i32) i32 = null;
+    if (unset == null) { return apply(chosen, 20, 22); }
+    return 0;
+}
+```
+
+- A function name in value position decays to a function value with that
+  signature, so it can be stored, passed and returned by the same rules as any
+  other value. Calling a **declared** function still calls its symbol directly;
+  calling through a value is an indirect call.
+- `null` is assignable to a function type, and `==`/`!=` compare a function value
+  with `null`, which is how an optional callback is tested.
+- Two function types are compatible only when the parameter list and the return
+  type agree; the diagnostic prints both signatures. A missing return type means
+  `void`, and a `void`-returning value is called as a statement.
+- Function types nest, so a callback can itself take a callback
+  (`fn(fn(i32) i32, i32) i32`).
+- At the C boundary a function value is one `ptr` in an INTEGER register, so it
+  can be passed to and received from C directly. Calling through a null function
+  pointer traps instead of jumping to address zero.
+
 The concrete type grammar is:
 
 ```
@@ -680,7 +712,8 @@ The following are rejected or simply not part of v0.1:
   [the ABI guide](abi.md#variadic-declarations));
 - arrays as value parameters/returns; aggregates containing floating-point
   fields across `extern`/`export` boundaries;
-- indirect calls and first-class function values;
+- function pointer *casts* (`*u8` to a function value) — declare the right
+  signature instead;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;
 - runtime alignment and full initialization checks;

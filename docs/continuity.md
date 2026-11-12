@@ -9,9 +9,10 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 - **Published toolchain baseline:** `v0.1.0-alpha.4` (`d6e7302`, tagged),
   replacing `v0.1.0-alpha.3` (`84093a2`); archives still cannot be attached
-  (see §38). `main` additionally carries two merged post-`alpha.4` increments:
-  explicit code-generation targets (§39, PR #25 → `47763af`) and variadic
-  `extern` declarations (§40).
+  (see §38). `main` additionally carries three merged post-`alpha.4` increments:
+  explicit code-generation targets (§39, PR #25 → `47763af`), variadic `extern`
+  declarations (§40, PR #27 → `a0d00f4`) and first-class function values with
+  indirect calls (§41).
 - **Previous published baseline:** `v0.1.0-alpha.3` (`84093a2`), Zig `0.17.0`
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
@@ -1804,11 +1805,88 @@ branch history; this increment does not redo them.
   callback into Kyn remains impossible. A variadic argument that is a
   `comptime`-only value materialises to the promoted default rather than being
   inferred from context. Format-string interpretation is of course not checked.
+- Merge: PR #27 → `a0d00f4`, CI green (`43133353138`, 2m3s). `main`
+  re-validated in a clean worktree: 90/90 unit, 180/0 integration.
+  Implementation commit `0250b3c`. (The follow-up commit that recorded this
+  merge, `3a413c4`, was pushed as PR #28 but did not reach `main` before that
+  branch was retired; this paragraph replaces it.)
 - Next task: the callee side of variadics (`va_list`, `va_start`-like
   primitives and an `export`ed variadic) if it is wanted, which is a language
   and ABI design decision rather than a lowering gap; otherwise the remaining
-  documented gaps are function pointers/callbacks, unions/bitfields/packed
-  structs, and the `alpha.4` archive uploader blocker of §38.
+  documented gaps are function pointers/callbacks (since implemented, §41),
+  unions/bitfields/packed structs, and the `alpha.4` archive uploader blocker of
+  §38.
+
+## 41. First-class function values and indirect calls (implemented on `arena/35db4ee4-kyn`)
+
+- Starting point: with variadics done, the largest remaining construct that the
+  documentation listed as absent and that the backend actively refused was
+  indirect calls — `lowerCall` returned `E0604 "indirect calls are not supported
+  yet"` for any callee that was not a declared function symbol, which blocked
+  every callback shape.
+- Design decision: a function value is a **new type**, `fn_ptr: *FnInfo`, not a
+  `.pointer` to a `.fn_type`. The distinction is not cosmetic — a function
+  pointer must not be dereferenceable as data or usable for pointer arithmetic —
+  but its C representation is one `ptr`, so it slots into the existing
+  INTEGER-eightbyte classifier with no new ABI path. `typeName` renders the
+  signature so a mismatch names both sides.
+- Syntax: `fn(P) R` as a type expression (`ast.TypeExpr.Kind.fn_type`), parsed
+  in `parseType` and included in `isTypeStart`, so it works anywhere a type does
+  (locals, parameters, returns, struct fields, nested). A missing return type
+  means `void`, matching a declaration.
+- Semantics: `resolveType` builds one `FnInfo` and wraps it with `makeFnPtr`, so
+  there is exactly one signature representation in the compiler and a
+  `fn(..) R` annotation compares equal to the declaration it is initialised
+  from. `checkIdent` decays a function name to a value *in value position*;
+  `checkCall` accepts either `fn_type` or `fn_ptr` and runs the argument checks
+  once for both. `isAssignable` allows declaration → value, value → value (whole
+  signature compared via the new `types.fnInfoEql`, which also replaced a
+  duplicated loop inside `Type.eql`), and `null` → value. `==`/`!=` against
+  `null` compares at the pointer's own type.
+- **A bug found and fixed by the regression suite**, worth recording: the first
+  version set an `ast.Call.is_indirect` flag from the callee's *type*, but
+  `checkIdent` had just decayed every function name to `fn_ptr`, so every direct
+  call looked indirect. 21 ABI fixtures failed at once. The fix was to delete the
+  flag entirely and let the backend keep deciding from the symbol: a direct call
+  is one whose callee resolves to a `function` symbol, and that is the same
+  evidence the backend already had. Mutation-checking then confirmed the flag had
+  been redundant, so removing it was the smaller, correct design rather than a
+  workaround.
+- Lowering: `ir.Value.func` (a symbol address) is the only new value kind, and
+  `ir.Inst.call.callee` is set for an indirect call. `lowerIndirectCall` lowers
+  the callee, runs `emitNullCheck` on it, converts each argument to the type the
+  analyzer recorded, and emits `call <ret> %vN(<args>)` — the signature is
+  spelled out because an indirect call has no declaration to read it from. No
+  `bitcast ptr to ptr` is emitted: a function value already has pointer
+  representation. `emitNullCheck` now accepts `.fn_ptr` as well as `.pointer`,
+  so calling an unset callback traps under the existing null-check policy.
+- Validation: `zig build` OK; `zig build test` **95/95** (90 → 95: one parser
+  test for function types, three semantic tests, one IR emitter test);
+  integration **185/0** in Debug and ReleaseSafe (180 → 185: the
+  `function_pointers` case, the `cabi_function_pointer` fixture and three error
+  fixtures); `zig fmt --check` clean; `check_docs_links.py` 21 files;
+  `check_diagnostic_docs.py` 129 codes; robustness corpus 902 clean;
+  `check_versions.py` consistent at `0.1.0-alpha.4`.
+- Mutation checks, each with `zig build` asserted at rc=0 first: replacing the
+  indirect branch with the old `E0604` error fails `function_pointers` and
+  `cabi_function_pointer`; dropping `.fn_ptr` from `emitNullCheck` removes the
+  trap (measured: the mutated binary exits 96 from an uninitialised register
+  where the correct one exits 132 = SIGILL from `llvm.trap`). A third attempted
+  mutation — decaying the function name back to `fn_type` — did **not** fail,
+  which is itself the evidence that the decay and the `fn_ptr` wrapper are two
+  spellings of one signature rather than a behavioural switch.
+- Boundary coverage: `cabi_function_pointer` calls a Kyn callback from C,
+  round-trips its return, stores a Kyn function pointer in a static C variable
+  and calls it later, and calls a C function through a value that arrived from C
+  and was stored in a struct field.
+- Limitations: no cast between a raw pointer and a function value (declare the
+  signature instead); no variadic function values (a `...` declaration cannot be
+  given a `fn(P) R` type yet); indirect calls to aggregates follow the ordinary
+  boundary classifier, which was already verified exhaustively in §40.
+- Next task: unions/bitfields/packed structs, or the callee side of variadics
+  (`va_list` + `export`ed variadic), whichever is wanted; both are language
+  design decisions rather than lowering gaps. The `alpha.4` archive uploader
+  blocker of §38 remains open and independent.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

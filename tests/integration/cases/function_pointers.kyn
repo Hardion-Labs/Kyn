@@ -1,0 +1,32 @@
+// Function values are pointers to functions: they can be stored in fields and
+// locals, passed to Kyn functions, compared with `null`, and called indirectly.
+// A direct call must still go through the symbol, so both paths are exercised.
+struct Ops { add: fn(i32, i32) i32, mul: fn(i32, i32) i32 }
+
+fn add(a: i32, b: i32) i32 { return a + b; }
+fn mul(a: i32, b: i32) i32 { return a * b; }
+fn sub(a: i32, b: i32) i32 { return a - b; }
+
+fn apply(op: fn(i32, i32) i32, a: i32, b: i32) i32 {
+    return op(a, b);
+}
+
+fn main() i32 {
+    let ops: Ops = Ops { add: add, mul: mul };
+    if (ops.add(2, 3) != 5) { return 1; }
+    if (ops.mul(4, 5) != 20) { return 2; }
+
+    let direct: i32 = mul(6, 7);
+    if (direct != 42) { return 3; }
+
+    let chosen: fn(i32, i32) i32 = sub;
+    if (chosen(9, 4) != 5) { return 4; }
+
+    if (apply(chosen, 10, 3) != 7) { return 5; }
+
+    let unset: fn(i32, i32) i32 = null;
+    if (unset != null) { return 6; }
+    if (apply(ops.add, 20, 22) != 42) { return 7; }
+
+    return 42;
+}

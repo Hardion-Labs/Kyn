@@ -1,0 +1,7 @@
+// Two function values are interchangeable only when their whole signatures
+// match: the parameter list and the return type must both agree.
+fn double(v: i32) i32 { return v * 2; }
+fn main() i32 {
+    let f: fn(i32, i32) i32 = double;
+    return f(1, 2);
+}

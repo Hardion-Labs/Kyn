@@ -1,0 +1,7 @@
+// A call through a function value is checked against the signature the value
+// has, exactly like a direct call.
+fn double(v: i32) i32 { return v * 2; }
+fn main() i32 {
+    let f: fn(i32) i32 = double;
+    return f(1, 2);
+}

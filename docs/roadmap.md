@@ -82,6 +82,15 @@ Milestones below are directions, not release promises.
 ## Next direction
 
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
+- First-class function values and indirect calls are implemented: `fn(P) R`
+  names a signature, a function name decays to a value in value position, the
+  value can be stored in aggregates, passed to and received from C, compared with
+  `null`, and called indirectly (with a null-call trap). A direct call keeps
+  calling the symbol. What is not implemented: casting between a raw pointer and
+  a function value, and function values as *aggregate members at the C boundary*
+  are covered indirectly (they are one `ptr` leaf) rather than by a dedicated
+  classifier — a struct of only function pointers travels as an aggregate like
+  any other and follows the existing eightbyte rules.
 - Variadic `extern` declarations are implemented: `...` after at least one fixed
   parameter, with the C default argument promotions applied to the trailing
   arguments and aggregates, slices and bare `null` rejected. What remains

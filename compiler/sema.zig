@@ -768,6 +768,19 @@ pub const Sema = struct {
                 try self.reporter.err("E0425", te.span, "array type requires an explicit length", .{});
                 break :blk self.prims.invalid;
             },
+            .fn_type => |signature_expr| blk: {
+                // The signature is resolved into the ordinary function type and
+                // then wrapped as a first-class value, so there is exactly one
+                // `FnInfo` shape in the compiler: a `fn(..) R` type and the
+                // declaration it is initialised from compare equal.
+                var params = try self.allocator.alloc(*Type, signature_expr.params.len);
+                for (signature_expr.params, 0..) |param, i| {
+                    params[i] = try self.resolveType(param.ty_expr);
+                }
+                const ret = if (signature_expr.ret) |ret_expr| try self.resolveType(ret_expr) else self.prims.void;
+                const signature = try types.makeFn(self.allocator, params, ret);
+                break :blk try types.makeFnPtr(self.allocator, signature);
+            },
         };
         te.resolved = ty;
         return ty;
@@ -901,6 +914,15 @@ pub const Sema = struct {
             return self.prims.invalid;
         }
         ident.sym = sym;
+        // A function name used in value position is its address: that is what
+        // makes `let f: fn(i32) i32 = double;` and passing `double` as an
+        // argument work. In call position `checkCall` reads the symbol
+        // directly, so the decay never changes how a direct call lowers.
+        if (sym.kind == .function and sym.ty.* == .fn_type) {
+            const value_ty = try types.makeFnPtr(self.allocator, sym.ty);
+            expr.ty = value_ty;
+            return value_ty;
+        }
         expr.ty = sym.ty;
         return sym.ty;
     }
@@ -967,11 +989,14 @@ pub const Sema = struct {
 
         switch (binary.op) {
             .eq, .ne => {
-                if (lhs_ty.* == .null_type and rhs_ty.isPointer()) {
+                // A function value is a pointer, so a null comparison is the
+                // ordinary "is this callback set?" test and must compare at the
+                // pointer's own type.
+                if (lhs_ty.* == .null_type and (rhs_ty.isPointer() or rhs_ty.* == .fn_ptr)) {
                     binary.lhs.ty = rhs_ty;
                     return self.prims.bool;
                 }
-                if (rhs_ty.* == .null_type and lhs_ty.isPointer()) {
+                if (rhs_ty.* == .null_type and (lhs_ty.isPointer() or lhs_ty.* == .fn_ptr)) {
                     binary.rhs.ty = lhs_ty;
                     return self.prims.bool;
                 }
@@ -1164,12 +1189,18 @@ pub const Sema = struct {
             for (call.args) |arg| _ = try self.checkExpr(arg, null);
             return self.prims.invalid;
         }
-        if (callee_ty.* != .fn_type) {
-            try self.reporter.err("E0445", call.callee.span, "cannot call value of type '{s}'", .{self.typeName(callee_ty)});
-            for (call.args) |arg| _ = try self.checkExpr(arg, null);
-            return self.prims.invalid;
-        }
-        const fn_info = callee_ty.fn_type;
+        // A callee is either a declared function or a first-class function
+        // value; both reduce to one signature, so the argument checks below run
+        // once for either form.
+        const fn_info = switch (callee_ty.*) {
+            .fn_type => |info| info,
+            .fn_ptr => |info| info,
+            else => {
+                try self.reporter.err("E0445", call.callee.span, "cannot call value of type '{s}'", .{self.typeName(callee_ty)});
+                for (call.args) |arg| _ = try self.checkExpr(arg, null);
+                return self.prims.invalid;
+            },
+        };
         const declares_variadic = switch (call.callee.kind) {
             .ident => |ident| if (ident.sym) |sym| sym.is_variadic else false,
             .field => |field| if (field.sym) |sym| sym.is_variadic else false,
@@ -1596,7 +1627,12 @@ pub const Sema = struct {
             return fitsInt(target.intInfo(), value);
         }
         if (value_ty.* == .comptime_float and target.* == .float) return true;
-        if (value_ty.* == .null_type and target.isPointer()) return true;
+        if (value_ty.* == .null_type and (target.isPointer() or target.* == .fn_ptr)) return true;
+        // A declared function and a function value with the same signature are
+        // interchangeable, in either direction: the decay happens at the use
+        // site, so neither side needs an explicit cast.
+        if (target.* == .fn_ptr and value_ty.* == .fn_type) return types.fnInfoEql(target.fn_ptr, value_ty.fn_type);
+        if (target.* == .fn_ptr and value_ty.* == .fn_ptr) return types.fnInfoEql(target.fn_ptr, value_ty.fn_ptr);
         // String literals have type *const u8 already; no other implicit
         // conversions are permitted.
         return false;
@@ -1773,6 +1809,21 @@ pub const Sema = struct {
     // Diagnostics helpers
     // ------------------------------------------------------------------
 
+    /// Renders a signature as `fn(i32, i32) i32`, so a mismatch between two
+    /// function types names the difference instead of printing `fn` twice.
+    fn fnTypeName(self: *const Sema, info: *types.FnInfo) []const u8 {
+        var params: std.ArrayList(u8) = .empty;
+        defer params.deinit(self.allocator);
+        for (info.params, 0..) |param, i| {
+            if (i > 0) params.appendSlice(self.allocator, ", ") catch return "fn";
+            params.appendSlice(self.allocator, self.typeName(param)) catch return "fn";
+        }
+        return std.fmt.allocPrint(self.allocator, "fn({s}) {s}", .{
+            params.items,
+            self.typeName(info.ret),
+        }) catch "fn";
+    }
+
     pub fn typeName(self: *const Sema, ty: *Type) []const u8 {
         return switch (ty.*) {
             .invalid => "invalid",
@@ -1805,7 +1856,8 @@ pub const Sema = struct {
             }) catch (if (s.is_const) "[]const ?" else "[]?"),
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
-            .fn_type => "fn",
+            .fn_type => |info| self.fnTypeName(info),
+            .fn_ptr => |info| self.fnTypeName(info),
             .comptime_int => "integer literal",
             .comptime_float => "float literal",
             .null_type => "null",
@@ -2516,6 +2568,54 @@ test "semantic rejects aggregates, slices and null in variadic calls" {
         \\extern fn nope(...) i32;
         \\fn main() i32 { return 0; }
     , "E0474");
+}
+
+test "semantic accepts first-class function values and indirect calls" {
+    try expectClean(
+        \\fn double(v: i32) i32 { return v * 2; }
+        \\fn apply(f: fn(i32) i32, v: i32) i32 { return f(v); }
+        \\fn main() i32 {
+        \\    let f: fn(i32) i32 = double;
+        \\    let g = double;
+        \\    if (f(2) != 4) { return 1; }
+        \\    if (g(3) != 6) { return 2; }
+        \\    let none: fn(i32) i32 = null;
+        \\    if (none == null) { return apply(f, 5); }
+        \\    return 0;
+        \\}
+    );
+}
+
+test "semantic distinguishes signatures in function type errors" {
+    // The signature, not the word `fn`, has to appear: a mismatch between two
+    // callbacks is otherwise unreadable.
+    var ctx: SemTest = undefined;
+    try ctx.init(
+        \\fn double(v: i32) i32 { return v * 2; }
+        \\fn main() i32 { let f: fn(i32, i32) i32 = double; return 0; }
+    );
+    defer ctx.deinit();
+    try ctx.run();
+    try testing.expect(ctx.reporter.hasErrors());
+    var found = false;
+    for (ctx.reporter.list.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "fn(i32) i32") != null and
+            std.mem.indexOf(u8, diag.message, "fn(i32, i32) i32") != null)
+        {
+            found = true;
+        }
+    }
+    try testing.expect(found);
+}
+
+test "semantic rejects calling a value that is not a function" {
+    try expectSemanticError(
+        \\fn main() i32 { let x: i32 = 1; return x(1); }
+    , "E0445");
+    try expectSemanticError(
+        \\fn double(v: i32) i32 { return v * 2; }
+        \\fn main() i32 { let f: fn(i32) i32 = double; return f(1, 2); }
+    , "E0446");
 }
 
 test "semantic rejects unknown identifier" {

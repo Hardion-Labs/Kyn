@@ -1,0 +1,23 @@
+// A function value has the C representation of a function pointer: one word,
+// passed in an INTEGER register. This checks both directions: C calls a Kyn
+// function through a pointer, and Kyn calls a C function through one, including
+// a callback that itself crosses the boundary.
+extern fn c_apply(op: fn(i32, i32) i32, a: i32, b: i32) i32;
+extern fn c_apply_twice(op: fn(i32, i32) i32, a: i32, b: i32) i32;
+extern fn c_verify_kyn_callbacks() i32;
+
+export fn kyn_add(a: i32, b: i32) i32 { return a + b; }
+export fn kyn_mul(a: i32, b: i32) i32 { return a * b; }
+
+struct Ops { combine: fn(i32, i32) i32 }
+
+fn main() i32 {
+    if (c_apply(kyn_mul, 6, 7) != 42) { return 1; }
+    if (c_apply_twice(kyn_add, 10, 11) != 31) { return 2; }
+
+    // A pointer that arrived from C and was stored in a field still calls.
+    let ops: Ops = Ops { combine: kyn_mul };
+    if (ops.combine(2, 21) != 42) { return 3; }
+
+    return c_verify_kyn_callbacks();
+}

@@ -1,0 +1,6 @@
+// A value that is not a function cannot be called, and the diagnostic names the
+// type instead of failing later in the backend.
+fn main() i32 {
+    let x: i32 = 1;
+    return x(1);
+}

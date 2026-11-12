@@ -409,7 +409,8 @@ pub const Lowering = struct {
     }
 
     fn emitNullCheck(self: *Lowering, pointer_ty: *types.Type, pointer: ir.Value) Error!void {
-        if (!self.checks.null_dereference or pointer_ty.* != .pointer) return;
+        const is_pointer = pointer_ty.* == .pointer or pointer_ty.* == .fn_ptr;
+        if (!self.checks.null_dereference or !is_pointer) return;
         const bool_ty = try self.booleanType();
         const condition = try self.reg(bool_ty);
         try self.emit(.{ .icmp = .{ .dst = condition, .op = .eq, .ty = pointer_ty, .lhs = pointer, .rhs = .null_ptr } });
@@ -990,7 +991,11 @@ pub const Lowering = struct {
 
     fn lowerIdent(self: *Lowering, expr: *ast.Expr, ident: ast.Expr.Kind.Ident) Error!ir.Value {
         const sym = ident.sym orelse return .none;
-        if (sym.kind == .function or sym.kind == .struct_type or sym.kind == .enum_type) return .none;
+        // A function name in value position is its address; in call position
+        // `lowerCall` reads the symbol directly, so a direct call never goes
+        // through this path.
+        if (sym.kind == .function) return .{ .func = sym.link_name };
+        if (sym.kind == .struct_type or sym.kind == .enum_type) return .none;
         const ty = expr.ty orelse sym.ty;
         const ptr: ir.Value = if (sym.kind == .global)
             .{ .global = self.globals.get(sym.id) orelse return .none }
@@ -1225,15 +1230,60 @@ pub const Lowering = struct {
         return .{ .reg = dst };
     }
 
+    /// Lowers a call through a function value. The callee is an ordinary
+    /// pointer, so the value is converted to `ptr` and the call names its own
+    /// signature: an indirect call has no declaration to read the parameter and
+    /// return types from.
+    fn lowerIndirectCall(self: *Lowering, call: ast.Expr.Kind.Call) Error!ir.Value {
+        const signature = call.callee.ty orelse return .none;
+        const info = switch (signature.*) {
+            .fn_ptr => |fn_info| fn_info,
+            else => {
+                try self.reporter.err("E0604", call.callee.span, "callee has no function signature", .{});
+                return .none;
+            },
+        };
+        // A declared function lowers to a symbol address and a stored value to a
+        // load; both already have `ptr` representation, so no conversion is
+        // emitted. Calling through a null function pointer is the same fault as
+        // dereferencing one, so it goes through the same check.
+        const callee = try self.lowerExpr(call.callee);
+        try self.emitNullCheck(signature, callee);
+
+        var args = try self.allocator.alloc(ir.Value, call.args.len);
+        var arg_types = try self.allocator.alloc(*types.Type, call.args.len);
+        for (call.args, 0..) |arg, i| {
+            const expressed = arg.ty orelse try self.simpleType(.invalid);
+            const ty = if (i < call.arg_types.len) call.arg_types[i] else expressed;
+            args[i] = try self.lowerArgument(arg, expressed, ty);
+            arg_types[i] = ty;
+        }
+        const ret = info.ret;
+        var dst: ?u32 = null;
+        if (ret.* != .void) dst = try self.reg(ret);
+        try self.emit(.{ .call = .{
+            .dst = dst,
+            .name = "",
+            .callee = callee,
+            .args = args,
+            .arg_types = arg_types,
+            .ret = ret,
+        } });
+        return if (dst) |id| .{ .reg = id } else .none;
+    }
+
     fn lowerCall(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!ir.Value {
         const callee_sym = switch (call.callee.kind) {
             .ident => |ident| ident.sym,
             .field => |field| field.sym,
             else => null,
         };
+        // The callee denotes a declared function only when the syntax resolves
+        // to one: a function name decays to a value so it can be passed around,
+        // which means a call through a local, a field or a parameter is indirect
+        // and needs no separate flag to say so.
         if (callee_sym == null or callee_sym.?.kind != .function) {
-            try self.reporter.err("E0604", call.callee.span, "indirect calls are not supported yet", .{});
-            return .none;
+            return self.lowerIndirectCall(call);
         }
         const name = callee_sym.?.link_name;
         const call_result = expr.ty orelse return .none;
@@ -2417,7 +2467,17 @@ pub const Emitter = struct {
                 // the aggregate type here would declare a second, conflicting
                 // result for the same call, which makes the result undefined.
                 const call_ret = if (call.sret) "void" else try self.typeString(call.ret);
-                try writer.print("call {s} @{s}(", .{ call_ret, call.name });
+                // An indirect call has no declaration to take the signature
+                // from, so the return and parameter types are spelled out at the
+                // call site: `call i32 %v3(i32 21)`. A direct call keeps naming
+                // the symbol, which is what lets the module stay declarative.
+                if (call.callee) |callee| {
+                    try writer.print("call {s} ", .{call_ret});
+                    try self.emitValue(writer, callee, null);
+                    try writer.writeByte('(');
+                } else {
+                    try writer.print("call {s} @{s}(", .{ call_ret, call.name });
+                }
                 for (call.args, 0..) |arg, i| {
                     if (i > 0) try writer.writeAll(", ");
                     const byval_type = if (i < call.byval_types.len) call.byval_types[i] else null;
@@ -2597,6 +2657,7 @@ pub const Emitter = struct {
             .string => |index| try writer.print("@.str{d}", .{index}),
             .reg => |id| try writer.print("%t{d}", .{id}),
             .param => |id| try writer.print("%arg{d}", .{id}),
+            .func => |name| try writer.print("@{s}", .{name}),
         }
     }
 
@@ -2666,7 +2727,7 @@ pub const Emitter = struct {
             .slice => "%kyn.slice",
             .struct_type => |info| try std.fmt.allocPrint(self.allocator, "%struct.{s}", .{structLlvmName(info)}),
             .enum_type => |info| try self.typeString(info.backing),
-            .fn_type => "ptr",
+            .fn_type, .fn_ptr => "ptr",
             .comptime_int => "i64",
             .comptime_float => "double",
             .null_type => "ptr",
@@ -2847,6 +2908,60 @@ test "lowering open-ended slices, slice.ptr and C ABI small global aggregates" {
     try testing.expect(std.mem.indexOf(u8, ll, ", align 8") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "@llvm.memcpy.p0.p0.i64") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "call i32 @take_small(i32 ") != null);
+}
+
+test "lowering emits a direct call by name and an indirect call through the value" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `direct` must stay a call by symbol: routing it through the address would
+    // still work but would lose the declaration and defeat the linker's ability
+    // to resolve it. `via_value` must be indirect, and through a checked
+    // pointer, because calling a null callback is a fault not a silent `undef`.
+    const text =
+        \\fn direct(v: i32) i32 { return v + 1; }
+        \\fn main() i32 {
+        \\    let via_value: fn(i32) i32 = direct;
+        \\    return direct(1) + via_value(2);
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    try testing.expect(std.mem.indexOf(u8, ll, "call i32 @__kyn_f_m0_direct(i32 1)") != null);
+    // An indirect call spells out its signature: there is no declaration to
+    // read it from.
+    try testing.expect(std.mem.indexOf(u8, ll, "call i32 %t") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "icmp eq ptr %t") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "@llvm.trap()") != null);
+    // No redundant pointer-to-pointer cast is emitted for the callee.
+    try testing.expect(std.mem.indexOf(u8, ll, "bitcast ptr %t") == null);
 }
 
 test "lowering declares a variadic extern and passes promoted arguments" {
