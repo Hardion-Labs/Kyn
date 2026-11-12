@@ -18,8 +18,21 @@ Exported globals, and two constant-representation fixes.
   checked as an ABI boundary and an unsupported layout is rejected with `E0476`
   instead of being laid out at offsets C would disagree with.
 
+- Function values now cast to and from raw pointers and integer addresses.
+  `get_callback() as fn(i32) i32` names the signature of a pointer C handed out
+  as `void *`, and `kyn_double as *u8` (or `as usize`) erases a function value
+  back to the address C expects. A function value is one `ptr`, so both
+  directions change the meaning without emitting an instruction. `as` still
+  refuses to convert between two signatures and from an aggregate to a
+  function value (`E0447`).
+
 ### Fixed
 
+- An integer-to-pointer cast (`usize as *u8`), documented and accepted by the
+  type checker, reached the back end as `E0605 internal: unsupported cast`:
+  the lowering table had no destination-pointer arm even though the emitter
+  already knew `inttoptr`. Integer-to-function-value casts were affected for the
+  same reason and are covered by the new cast support.
 - A `u128` constant above `i128`'s maximum crashed the back end
   (`integer does not fit in destination type`) instead of being emitted. The
   constant path now preserves the bit pattern, which the emitter already renders

@@ -616,8 +616,13 @@ Allowed conversions:
 | enum                       | integer, enum                                   |
 | float                      | integer, bool, float                            |
 | null                       | pointer                                         |
+| pointer                    | function value (`fn(P) R`)                      |
+| function value (`fn(P) R`) | pointer, integer                                |
+| integer, char              | function value (`fn(P) R`)                      |
 
-Other casts between aggregates and functions are rejected (`E0447`). Casting a
+Other casts between aggregates and functions are rejected (`E0447`): `as` never
+converts between two function *signatures*, because a signature is a meaning
+and not a representation, and an aggregate never becomes one address. Casting a
 provably `null` array pointer to a slice is rejected (`E0506`), and a dynamic
 `null` array pointer cast to a slice traps at runtime. Numeric casts do not
 insert runtime range checks in v0.1; converting an out-of-range numeric value
@@ -720,8 +725,6 @@ The following are rejected or simply not part of v0.1:
   [the ABI guide](abi.md#variadic-declarations));
 - arrays as value parameters/returns; aggregates containing floating-point
   fields across `extern`/`export` boundaries;
-- function pointer *casts* (`*u8` to a function value) — declare the right
-  signature instead;
 - unions, packed structs, bitfields, alignment/attribute syntax;
 - implicit numeric conversions and implicit pointer mutability conversion;
 - runtime alignment and full initialization checks;

@@ -1,0 +1,8 @@
+// `as` never converts between two signatures: a function value is one address,
+// and reinterpreting it as a different signature would call the callee with an
+// argument list it never agreed to. Declare the signature the callback has.
+fn main() i32 {
+    let handler: fn(i32) i32 = 1 as fn(i32) i32;
+    let other: fn(i64) i64 = handler as fn(i64) i64;
+    return 0;
+}

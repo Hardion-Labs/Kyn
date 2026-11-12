@@ -1,0 +1,34 @@
+// C libraries hand callbacks out as `void *` and accept them back the same
+// way, erasing the signature. Naming that pointer with `as fn(P) R` is what
+// makes it callable again, and a function value casts back to `*T` or to an
+// integer address. Every direction below crosses a real C boundary.
+extern fn get_callback() *u8;
+extern fn call_through(ptr: *u8, value: i32) i32;
+extern fn check_kyn_callback(ptr: *u8) i32;
+extern fn triple_ptr() *u8;
+
+export fn kyn_double(x: i32) i32 { return x * 2; }
+
+fn main() i32 {
+    // C pointer -> Kyn function value, then an indirect call.
+    let handler: fn(i32) i32 = get_callback() as fn(i32) i32;
+    if (handler(14) != 42) { return 1; }
+
+    // Kyn function value -> C pointer, and C calls it.
+    let erased: *u8 = kyn_double as *u8;
+    if (call_through(erased, 21) != 42) { return 2; }
+
+    // A pointer that came back from C keeps working through the same cast.
+    let again: fn(i32) i32 = triple_ptr() as fn(i32) i32;
+    if (again(4) != 12) { return 3; }
+
+    // Address <-> integer round-trips, so the two erasures compose.
+    let as_int: usize = erased as usize;
+    let back: fn(i32) i32 = as_int as fn(i32) i32;
+    if (back(5) != 10) { return 4; }
+
+    // A function value still crosses as an argument of its own type.
+    if (call_through(erased, 7) != 14) { return 5; }
+
+    return check_kyn_callback(erased);
+}

@@ -171,6 +171,29 @@ fn main() i32 {
 - A *declared* function is still called by its symbol, so an ordinary direct call
   keeps its declaration and the linker resolves it normally.
 
+A C library usually hands a callback out as `void *`, so the signature is named
+with a cast where the pointer is received, and a function value casts back to a
+raw pointer (or to an integer address) where C expects one:
+
+```kyn
+extern fn get_callback() *u8;
+extern fn call_through(ptr: *u8, value: i32) i32;
+
+export fn kyn_double(x: i32) i32 { return x * 2; }
+
+fn main() i32 {
+    let handler: fn(i32) i32 = get_callback() as fn(i32) i32;
+    let erased: *u8 = kyn_double as *u8;
+    return call_through(erased, handler(0));
+}
+```
+
+Both directions are a change of *meaning*, not of representation — a function
+value is one `ptr` — so no instruction is emitted. The cast is the only way to
+cross: `as` never converts between two function signatures (`E0447`), because
+reinterpreting one address as a different signature would call the callee with
+an argument list it never agreed to, and an aggregate never casts to one.
+
 ## 2. Exporting Kyn functions
 
 ```kyn
@@ -470,8 +493,6 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
   (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
-- casts between a raw pointer and a function value (declare the signature the
-  callback has instead);
 - linking against Kyn-specific runtime support (there is none yet).
 
 These restrictions are diagnosed where the type checker can see them, rather

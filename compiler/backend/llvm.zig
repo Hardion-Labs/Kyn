@@ -2066,6 +2066,10 @@ fn binaryOp(op: ast.BinaryOp) ?ir.BinaryOp {
 fn isSameRepresentation(from: *types.Type, to: *types.Type) bool {
     if (types.Type.eql(from, to)) return true;
     if (from.isPointer() and to.isPointer()) return true;
+    // A function value is one `ptr` at the ABI level, so converting between it
+    // and a raw pointer is a change of meaning, not of representation: nothing
+    // is emitted and the value keeps travelling in the same register.
+    if ((from.* == .fn_ptr and to.isPointer()) or (from.isPointer() and to.* == .fn_ptr)) return true;
     if (from.* == .slice and to.* == .slice) return types.Type.eql(from.slice.elem, to.slice.elem);
     const from_bits = intBits(from);
     const to_bits = intBits(to);
@@ -2105,9 +2109,16 @@ fn castKind(from: *types.Type, to: *types.Type) ?ir.CastKind {
         return null;
     }
     if (from.* == .bool) return .bool_to_int;
-    if (from.isPointer()) {
-        if (to.isPointer()) return .bitcast;
+    // A function value has the same representation as a raw pointer, so both
+    // directions of that pair are a bitcast; the integer directions are the
+    // address erasure `ptrtoint`/`inttoptr` spell.
+    if (from.isPointer() or from.* == .fn_ptr) {
+        if (to.isPointer() or to.* == .fn_ptr) return .bitcast;
         if (to.isInteger()) return .ptrtoint;
+        return null;
+    }
+    if (to.isPointer() or to.* == .fn_ptr) {
+        if (from.isInteger()) return .inttoptr;
         return null;
     }
     const from_int = intBits(from);
