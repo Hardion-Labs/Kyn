@@ -1650,7 +1650,7 @@ branch history; this increment does not redo them.
   cross-compilation targets and the remaining `SSE`-class fallbacks per the
   roadmap.
 
-## 39. Compilation-target increment (in progress on `arena/679dcf12-kyn`)
+## 39. Compilation-target increment (completed and merged as PR #25)
 
 - Scope: the roadmap asked to *specify cross-compilation targets* before
   exposing further C ABI layouts. `v0.1.0-alpha.4` was already published, so the
@@ -1713,6 +1713,14 @@ branch history; this increment does not redo them.
   execute locally, so `--target` mainly matters for `emit-obj` and `build`.
   Linking a cross-compiled executable (as opposed to an object) is not
   implemented. `kyn-build` has no per-target setting.
+- Merge: PR #25 → `47763af`, CI green; `main` re-validated in a clean worktree
+  (83/83 unit, 174/0 integration). Implementation commit `dcab8b4`.
+- Release status: `v0.1.0-alpha.4` is tagged at `d6e7302`, which predates this
+  increment, so `main` now carries `--target` without a release of its own.
+  This is recorded rather than acted on: a release is a public promise and the
+  change is a single coherent increment, so the next release boundary is the
+  user's call. The uploader blocker of §38 is still open and independent
+  (`uploads.github.com` unreachable, `HTTP 000`).
 - Next task: the remaining `SSE`/`SSEUP` aggregate classes (for example
   `{ f32, f32, f32, f32, f32 }`, which stays `sret`), then per-target ABI
   variants if a second C ABI is ever specified.
