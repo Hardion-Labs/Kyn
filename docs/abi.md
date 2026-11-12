@@ -193,6 +193,40 @@ int main(void) {
 `fn main` is also emitted with external linkage so the platform entry point is
 available. Other `fn` declarations use internal linkage.
 
+### Exporting globals
+
+`export` also applies to a global variable, which then becomes a C object
+rather than a Kyn-private one:
+
+```kyn
+export var counter: i32 = 41;
+export let threshold: i32 = 7;
+export const limits: Limits = Limits { lo: 3, hi: 4 };
+```
+
+```c
+extern int32_t counter;              /* writable */
+extern const int32_t threshold;      /* read-only */
+extern const struct Limits limits;   /* read-only struct */
+```
+
+- The symbol is the source spelling, exactly as for `export fn`. A global that
+  is *not* exported keeps its module-mangled private name, so ordinary Kyn
+  globals stay invisible to the linker.
+- Mutability decides the LLVM storage class and therefore the C spelling:
+  `export var` emits a writable `global`, while `export let` and
+  `export const` emit `constant`. Writing through the Kyn name is checked by
+  the normal immutability rules (`E0442`) rather than by the object's section,
+  so a `let` cannot be reassigned from either side of the boundary.
+- Because the object is C-visible, its type is a boundary: one the current
+  target cannot classify is rejected with `E0476` instead of being laid out at
+  offsets C would disagree with. A bare fixed-size array is the case that
+  reaches that check today (the same shape `E0473` rejects as a parameter);
+  pass a pointer, or wrap the data in a struct with a supported layout.
+- `void` is already rejected as storage by the ordinary global rules
+  (`E0411`), and a function value is an ordinary pointer, which C represents
+  natively.
+
 ## 3. Type mapping
 
 | Kyn type | C type (typical LP64) | LLVM IR |
@@ -438,7 +472,6 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
 - calling conventions other than `x86_64` Linux System V;
 - casts between a raw pointer and a function value (declare the signature the
   callback has instead);
-- exported globals with controlled visibility;
 - linking against Kyn-specific runtime support (there is none yet).
 
 These restrictions are diagnosed where the type checker can see them, rather

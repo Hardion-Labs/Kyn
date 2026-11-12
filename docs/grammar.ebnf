@@ -17,7 +17,7 @@ import_decl    = "import" , string_literal , [ "as" , identifier ] , ";" ;
 
 declaration    = [ "private" ] ,
                  ( function_decl | extern_decl | export_decl | struct_decl
-                 | enum_decl | global_var ) ;
+                 | enum_decl | global_var | export_global ) ;
 
 (* Functions *)
 
@@ -29,6 +29,8 @@ extern_decl    = "extern" , "fn" , identifier , "(" , [ parameter_list ] , ")" ,
 
 export_decl    = "export" , "fn" , identifier , "(" , [ parameter_list ] , ")" ,
                  [ type ] , block ;
+
+export_global  = "export" , global_var ;
 
 parameter_list = parameter , { "," , parameter } ;
 

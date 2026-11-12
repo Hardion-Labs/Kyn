@@ -57,9 +57,16 @@ pub const IntInfo = struct {
     /// the unsigned domain past the lower bound so a `u128` maximum, which has
     /// no `i128` spelling, stays expressible.
     pub fn fits(self: IntInfo, value: i128) bool {
-        if (value < self.min()) return false;
-        if (value < 0) return self.min() < 0;
-        return @as(u128, @intCast(value)) <= self.max();
+        if (value < 0) return value >= self.min();
+        return self.fitsUnsigned(@intCast(value));
+    }
+
+    /// Whether a literal's magnitude, which can exceed `i128`'s maximum, lies
+    /// inside the type's range. A value above `i128`'s maximum is only
+    /// representable by an unsigned type, so it is compared in the unsigned
+    /// domain rather than being rejected as unspeakable.
+    pub fn fitsUnsigned(self: IntInfo, magnitude: u128) bool {
+        return magnitude <= self.max();
     }
 
     /// Magnitude of the type's minimum, used to accept the most negative
@@ -487,4 +494,11 @@ test "128-bit integer bounds stay representable" {
     try std.testing.expectEqual(std.math.maxInt(u128), p.u128.intInfo().max());
     try std.testing.expectEqual(@as(i128, 0), p.u128.intInfo().min());
     try std.testing.expectEqual(@as(u128, 0), p.u128.intInfo().minMagnitude());
+
+    // A `u128` maximum is a valid literal but has no `i128` spelling, so it is
+    // checked through the unsigned magnitude rather than through `fits`, whose
+    // argument cannot hold it.
+    try std.testing.expect(p.u128.intInfo().fitsUnsigned(std.math.maxInt(u128)));
+    try std.testing.expect(!p.u64.intInfo().fitsUnsigned(std.math.maxInt(u128)));
+    try std.testing.expect(!p.i128.intInfo().fitsUnsigned(@as(u128, 1) << 127));
 }

@@ -41,6 +41,9 @@ pub const VarDecl = struct {
     name: []const u8,
     mutable: bool,
     is_global: bool,
+    /// True for `export var`/`export let`/`export const`: the variable is
+    /// emitted under its source name so a C object can link against it.
+    is_export: bool = false,
     ty_expr: ?*TypeExpr,
     init: ?*Expr,
     ty: ?*Type = null,

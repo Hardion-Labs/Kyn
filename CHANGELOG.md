@@ -4,6 +4,33 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
+## [Unreleased]
+
+Exported globals, and two constant-representation fixes.
+
+### Added
+
+- `export` now applies to global variables. `export var counter: i32 = 41;`
+  publishes a writable C object under its source spelling; `export let` and
+  `export const` publish read-only storage. A global that is not exported keeps
+  its module-mangled private symbol, so ordinary Kyn globals stay invisible to
+  the linker, exactly as before. Because the object is C-visible, its type is
+  checked as an ABI boundary and an unsupported layout is rejected with `E0476`
+  instead of being laid out at offsets C would disagree with.
+
+### Fixed
+
+- A `u128` constant above `i128`'s maximum crashed the back end
+  (`integer does not fit in destination type`) instead of being emitted. The
+  constant path now preserves the bit pattern, which the emitter already renders
+  back in the unsigned domain, so a `u128` global maximum is representable.
+- The same value was rejected with `E0440` when it appeared as a literal next to
+  an already-typed `u128` operand
+  (`top != 340282366920938463463374607431768211455`), because literal adaptation
+  went through a signed extraction that has no spelling for it. Adaptation now
+  consults the unsigned magnitude first; values that genuinely do not fit are
+  still rejected.
+
 ## [0.1.0-alpha.5] - 2026-11-12
 
 Explicit code-generation targets, variadic `extern` declarations and

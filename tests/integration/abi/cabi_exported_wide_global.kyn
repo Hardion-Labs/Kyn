@@ -1,0 +1,15 @@
+// A `u128` maximum has no `i128` spelling, so the constant path must preserve
+// the bit pattern rather than trapping, and the exported object must carry all
+// four 32-bit limbs to C unchanged.
+export const wide_max: u128 = 340282366920938463463374607431768211455;
+export const wide_small: u128 = 18446744073709551615;
+
+extern fn c_check_wide() i32;
+
+export fn kyn_get_max() u128 { return wide_max; }
+
+fn main() i32 {
+    if (wide_max != 340282366920938463463374607431768211455) { return 1; }
+    if (wide_small != 18446744073709551615) { return 2; }
+    return c_check_wide();
+}

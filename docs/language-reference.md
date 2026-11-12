@@ -315,6 +315,10 @@ export fn zig_mul(a: i32, b: i32) i32 {
 - `export fn` defines a function with external linkage under its Kyn name.
 - `fn main` also has external linkage, so the native linker can find it.
 - All other Kyn functions have internal linkage.
+- `export` may also prefix a global declaration (`export var`, `export let`,
+  `export const`), which gives that object external linkage under its Kyn name
+  and makes its type a C ABI boundary (`E0476` when the layout is not
+  representable). See [exporting globals](abi.md#exporting-globals).
 
 An `extern` declaration may end its parameter list with `...`, which declares a
 C variadic function and lets a call pass extra arguments after the fixed ones:
@@ -391,6 +395,10 @@ let version: i32 = 1;
 - Globals are emitted as LLVM globals with explicit storage; no constructor or
   runtime initialization is generated. Aggregate constants are emitted in the
   same constant section.
+- A non-exported global is private to its compilation unit: its symbol is
+  module-mangled and not link-visible. `export` opts a global into C linkage
+  under its source name, with `var` emitting writable storage and `let`/`const`
+  read-only storage.
 
 ## 4. Statements
 
