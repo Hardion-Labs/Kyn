@@ -27,6 +27,21 @@ integer members, and prebuilt release installers.
   unchanged. The backend and the type checker read the target from one place:
   the previous build-target constant was removed, because a second source of
   truth would let a cross-compilation lower the wrong convention silently.
+- First-class function values and indirect calls. `fn(P) R` is a type, a
+  function name decays to a value where a value is expected, and the value can be
+  stored in a struct, passed to and returned from Kyn functions, handed to and
+  received from C, compared with `null`, and called. A function value is one
+  `ptr` at the C boundary, so the same declaration serves both directions; a
+  *declared* function is still called by its symbol, so direct calls keep their
+  declaration and the linker resolves them as before. An indirect call carries
+  its own signature in the IR because there is no declaration to read it from,
+  and it goes through the same null check as a dereference, so calling an unset
+  callback traps instead of jumping to address zero. Two function types are
+  compatible only when the whole signature matches, and the diagnostic prints
+  both signatures instead of the word `fn`. Nested signatures
+  (`fn(fn(i32) i32, i32) i32`) and `void` returns work. Casting between a raw
+  pointer and a function value remains unsupported.
+
 - Variadic `extern` declarations: `extern fn printf(format: *const u8, ...) i32;`
   now parses, type-checks and links, so C functions with a trailing unspecified
   argument list are callable from Kyn. The trailing arguments go through the C

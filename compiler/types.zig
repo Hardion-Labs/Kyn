@@ -193,6 +193,11 @@ pub const Type = union(enum) {
     /// pairs that only occur in parameters and pointer-bearing eightbytes.
     abi_pair: AbiPair,
     pointer: PointerInfo,
+    /// A first-class function value: a pointer to a function whose signature is
+    /// `info`. It is a distinct type from `.pointer` on purpose — a function
+    /// pointer cannot be dereferenced as data or used for pointer arithmetic —
+    /// but it has the same C representation, one `ptr` at the boundary.
+    fn_ptr: *FnInfo,
     array: ArrayInfo,
     slice: SliceInfo,
     struct_type: *StructInfo,
@@ -272,6 +277,10 @@ pub const Type = union(enum) {
                 .pointer => |bp| ap.is_const == bp.is_const and eql(ap.elem, bp.elem),
                 else => false,
             },
+            .fn_ptr => |af| switch (b.*) {
+                .fn_ptr => |bf| fnInfoEql(af, bf),
+                else => false,
+            },
             .array => |aa| switch (b.*) {
                 .array => |ba| aa.len == ba.len and eql(aa.elem, ba.elem),
                 else => false,
@@ -289,14 +298,7 @@ pub const Type = union(enum) {
                 else => false,
             },
             .fn_type => |af| switch (b.*) {
-                .fn_type => |bf| blk: {
-                    if (af.params.len != bf.params.len) break :blk false;
-                    if (!eql(af.ret, bf.ret)) break :blk false;
-                    for (af.params, bf.params) |ap, bp| {
-                        if (!eql(ap, bp)) break :blk false;
-                    }
-                    break :blk true;
-                },
+                .fn_type => |bf| fnInfoEql(af, bf),
                 else => false,
             },
         };
@@ -332,12 +334,26 @@ pub const Type = union(enum) {
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
             .fn_type => "fn",
+            .fn_ptr => "fn",
             .comptime_int => "comptime_int",
             .comptime_float => "comptime_float",
             .null_type => "null",
         };
     }
 };
+
+/// Structural equality of two function signatures. Kept beside `Type.eql`
+/// because both `fn_type` and `fn_ptr` need it, and a signature must compare
+/// identically wherever it appears.
+pub fn fnInfoEql(a: *const FnInfo, b: *const FnInfo) bool {
+    if (a == b) return true;
+    if (a.params.len != b.params.len) return false;
+    if (!Type.eql(a.ret, b.ret)) return false;
+    for (a.params, b.params) |ap, bp| {
+        if (!Type.eql(ap, bp)) return false;
+    }
+    return true;
+}
 
 /// Allocates and interns nothing: callers create types through these helpers.
 pub fn makePointer(allocator: std.mem.Allocator, elem: *Type, is_const: bool) !*Type {
@@ -355,6 +371,13 @@ pub fn makeArray(allocator: std.mem.Allocator, elem: *Type, len: usize) !*Type {
 pub fn makeSlice(allocator: std.mem.Allocator, elem: *Type, is_const: bool) !*Type {
     const ty = try allocator.create(Type);
     ty.* = .{ .slice = .{ .elem = elem, .is_const = is_const } };
+    return ty;
+}
+
+/// A first-class function value with the same signature as `fn_ty`.
+pub fn makeFnPtr(allocator: std.mem.Allocator, fn_ty: *Type) !*Type {
+    const ty = try allocator.create(Type);
+    ty.* = .{ .fn_ptr = fn_ty.fn_type };
     return ty;
 }
 

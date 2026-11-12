@@ -384,13 +384,41 @@ pub const Parser = struct {
 
     fn isTypeStart(self: *const Parser) bool {
         return switch (self.peek().kind) {
-            .identifier, .star, .l_bracket => true,
+            .identifier, .star, .l_bracket, .kw_fn => true,
             else => self.peek().kind.isPrimitiveType(),
         };
     }
 
     fn parseType(self: *Parser) !?*ast.TypeExpr {
         const tok = self.peek();
+        if (tok.kind == .kw_fn) {
+            // `fn(i32, i32) i32` names a signature, so a function type is its
+            // own type expression rather than a pointer to one: that is what
+            // lets `let f: fn(i32) i32 = double;` read as a signature.
+            _ = self.advance();
+            var params: std.ArrayList(ast.TypeExpr.ParamType) = .empty;
+            if (try self.expect(.l_paren, "after 'fn' in a function type")) {
+                if (!self.check(.r_paren)) {
+                    while (true) {
+                        const param_ty = (try self.parseType()) orelse break;
+                        try params.append(self.allocator, .{ .span = param_ty.span, .ty_expr = param_ty });
+                        if (!self.match(.comma)) break;
+                    }
+                }
+                _ = try self.expect(.r_paren, "after function type parameters");
+            }
+            // A missing return type means `void`, matching a function
+            // declaration.
+            var ret: ?*ast.TypeExpr = null;
+            if (self.isTypeStart()) ret = try self.parseType();
+            const expr = try self.allocator.create(ast.TypeExpr);
+            const end = if (ret) |r| r.span else self.peek().span;
+            expr.* = .{
+                .span = Span.join(tok.span, end),
+                .kind = .{ .fn_type = .{ .params = try params.toOwnedSlice(self.allocator), .ret = ret } },
+            };
+            return expr;
+        }
         if (tok.kind == .star) {
             _ = self.advance();
             const is_const = self.match(.kw_const);
@@ -1280,6 +1308,29 @@ test "variadic function with a body is rejected" {
     _ = try parseTest(ctx.src.text, &ctx);
     try testing.expect(ctx.reporter.hasErrors());
     try testing.expectEqualStrings("E0474", ctx.reporter.list.items[0].code);
+}
+
+test "parse a function type" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    let f: fn(i32, i32) i32 = add;
+        \\    let g: fn() = notify;
+        \\    return f(1, 2);
+        \\}
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const body = program.decls[0].kind.fn_decl.body.?;
+    const f_ty = body.stmts[0].kind.var_decl.ty_expr.?;
+    const f_sig = f_ty.kind.fn_type;
+    try testing.expectEqual(@as(usize, 2), f_sig.params.len);
+    try testing.expect(f_sig.ret != null);
+    // A missing return type means `void`, so it stays null in the tree.
+    const g_sig = body.stmts[1].kind.var_decl.ty_expr.?.kind.fn_type;
+    try testing.expectEqual(@as(usize, 0), g_sig.params.len);
+    try testing.expect(g_sig.ret == null);
 }
 
 test "parse errors are reported and recovered" {

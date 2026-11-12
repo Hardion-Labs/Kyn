@@ -146,6 +146,31 @@ without one there would be nothing to anchor the call). `export` is likewise
 rejected, because an exported function is called *by* C and its inbound
 argument list would be unspecified.
 
+### Function pointers
+
+A function value (`fn(P) R`) has the C representation of a function pointer: one
+word in an INTEGER register. It can be passed to an `extern` function, received
+from one, stored in an aggregate and called indirectly:
+
+```kyn
+extern fn c_apply(op: fn(i32, i32) i32, a: i32, b: i32) i32;
+
+export fn kyn_add(a: i32, b: i32) i32 { return a + b; }
+
+fn main() i32 {
+    return c_apply(kyn_add, 20, 22);
+}
+```
+
+- The signature is part of the type, so a callback with the wrong parameter list
+  or return type is rejected instead of being called with the wrong ABI.
+- An indirect call names its own signature in the IR, because there is no
+  declaration to read it from: `call i32 %v3(i32 21)`.
+- Calling through a `null` function value traps under the same runtime-check
+  policy that guards null dereferences, rather than jumping to address zero.
+- A *declared* function is still called by its symbol, so an ordinary direct call
+  keeps its declaration and the linker resolves it normally.
+
 ## 2. Exporting Kyn functions
 
 ```kyn
@@ -411,7 +436,8 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
   (`E0473`);
 - unions, bitfields, packed structs and explicit alignment;
 - calling conventions other than `x86_64` Linux System V;
-- function pointers and callbacks;
+- casts between a raw pointer and a function value (declare the signature the
+  callback has instead);
 - exported globals with controlled visibility;
 - linking against Kyn-specific runtime support (there is none yet).
 

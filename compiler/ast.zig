@@ -108,11 +108,26 @@ pub const TypeExpr = struct {
     resolved: ?*Type = null,
     kind: Kind,
 
+    /// One parameter of a function type. A function *type* names no parameters,
+    /// only their types, so this carries no name.
+    pub const ParamType = struct {
+        span: Span,
+        ty_expr: *TypeExpr,
+    };
+
     pub const Kind = union(enum) {
         name: []const u8,
         pointer: Pointer,
         array: Array,
         slice: Slice,
+        /// `fn(i32, i32) i32` — the signature of a first-class function value.
+        fn_type: FnType,
+
+        pub const FnType = struct {
+            params: []ParamType,
+            /// Null for a `void` return.
+            ret: ?*TypeExpr,
+        };
 
         pub const Pointer = struct {
             elem: *TypeExpr,

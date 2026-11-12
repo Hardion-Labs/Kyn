@@ -38,6 +38,10 @@ pub const Value = union(enum) {
     string: u32,
     reg: u32,
     param: u32,
+    /// The address of a function, either a declared one or an arbitrary symbol
+    /// name. Function values are plain pointers at the ABI level, so this is
+    /// the only new value kind a first-class function needs.
+    func: []const u8,
 };
 
 pub const Linkage = enum {
@@ -172,6 +176,10 @@ pub const Inst = union(enum) {
     call: struct {
         dst: ?u32,
         name: []const u8,
+        /// Set for an indirect call: the callee is this value, not `name`. The
+        /// target carries its own signature, so the emitted call spells out the
+        /// return and parameter types instead of relying on a declaration.
+        callee: ?Value = null,
         args: []Value,
         arg_types: []*Type,
         ret: *Type,
