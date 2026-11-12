@@ -20,6 +20,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
+- **Unreleased work on the current branch (§43):** exported globals
+  (`export var`/`export let`/`export const`, `E0476` guard) plus two
+  pre-existing `u128`-constant defects fixed in the back end and in literal
+  adaptation. Validated locally — 97/97 unit, 188/0 integration in Debug and
+  ReleaseSafe.
 - **Active stage:** Post-`v0.1.0-alpha.3` incremental development. Any future
   pre-release boundary requires the same human-authorized procedure per
   [release-checklist.md](release-checklist.md).
@@ -1953,3 +1958,89 @@ branch history; this increment does not redo them.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.
+
+## 43. Exported globals, and two constant-representation defects (on `arena/332f179d-kyn`)
+
+- Base: `main` at `78bcb87` (the §42 record merged; code baseline
+  `v0.1.0-alpha.5`, `38d1849`). Chosen increment: `export` on a global
+  declaration — the documented gap in `abi.md` §9 ("exported globals with
+  controlled visibility") and the symmetric completion of `export fn`. Unions,
+  bitfields and packed structs, the other candidates, need a type-system design
+  decision rather than a lowering; they stay unscheduled.
+- **Recovery note, important for the next session.** This increment had been
+  implemented and validated once in the previous sandbox, but that sandbox was
+  replaced before `git push` succeeded (GitHub was unreachable at the time:
+  `HTTP 000`, `gnutls_handshake` terminated). Only the §42 documentation commit
+  had been pushed, and it reached `main` as PR #32 → `78bcb87`, merged and
+  re-verified in this session. The three §43 commits were therefore lost with
+  the old sandbox and the implementation was redone here from the same design;
+  the numbers below are from this session's runs. Lesson: push before ending a
+  turn that has produced commits, or the work survives only as long as the
+  sandbox.
+- Design: `export` is an *opt-in to C linkage*, and the symbol is the source
+  spelling, exactly as `export fn` already does. A non-exported global keeps the
+  module-mangled `__kyn_g_m<N>_<name>` symbol, so no existing program changes
+  meaning. Mutability already decided the storage class (`global` vs `constant`),
+  so it now also decides the C spelling: `export var` is `extern int32_t
+  counter`, `export let`/`export const` are `extern const ...`. No new IR,
+  backend or ABI code was needed — the emitter already printed `@{link_name}`
+  with external linkage — which is why the feature is a parser + sema change
+  plus one guard.
+- What was added: `ast.VarDecl.is_export`, `parser.parseDecl` accepting
+  `const`/`let`/`var` after `export` (the error text now names all three),
+  `sema.declareTopLevel` passing `vd.is_export` as `is_external_name` and
+  recording `sym.is_export`, and the boundary guard in `sema.resolveGlobal`: an
+  exported aggregate whose `boundaryClass` is null is `E0476`. The guard reuses
+  the classifier `E0473` uses; it does not restate the ABI rules.
+- What was deliberately *not* added: a `void`/function-type arm in the guard.
+  `void` is already rejected as storage by `E0411`, and `fn(P) R` resolves to
+  `.fn_ptr`, i.e. a plain pointer C represents natively — both arms would be
+  unreachable, so they are not written. `private export let` is accepted and
+  means what `private export fn` already means: the name is module-private, the
+  object is link-visible.
+- Two **pre-existing** defects were found while testing the feature, both
+  reproduced on this tree before being touched:
+  1. `const w: u128 = 340282366920938463463374607431768211455;` panicked in
+     `lowerConst` (`@intCast(lit.value)`, `llvm.zig`), an abort instead of a
+     diagnostic, and reachable through this feature as `export let w: u128 = ...`.
+     Fixed by preserving the bit pattern (`@bitCast`), matching what the runtime
+     path in the same file already did; `emitValue` already renders an unsigned
+     128-bit constant in the unsigned domain.
+  2. The same literal was rejected `E0440` next to an already-typed `u128`
+     operand, because `applyLiteralType` went through `literalIntValue`, which
+     returns null above `i128`'s maximum. Fixed by consulting a new
+     `types.IntInfo.fitsUnsigned` through `sema.literalUnsignedValue` first.
+     `IntInfo.fits` keeps its exact prior semantics, and values that genuinely
+     do not fit are still rejected (checked case by case: `u64` one past its
+     maximum, `u8` 256, `i8` -129, `u128` one past its maximum).
+  The `alpha.4` changelog claimed 128-bit constants were representable "end to
+  end"; for a global they were not. The fix is recorded under `[Unreleased]` and
+  the published claim was not retro-edited.
+- Files changed: `compiler/ast.zig`, `compiler/parser.zig`, `compiler/sema.zig`
+  (declaration, guard, two unit tests), `compiler/backend/llvm.zig` (constant
+  bit pattern), `compiler/types.zig` (`fitsUnsigned` + bounds test), docs
+  (`abi.md` new "Exporting globals" section with the §9 line removed,
+  `language-reference.md` §3.3/§3.5, `diagnostics.md` `E0476`, `grammar.md`,
+  `grammar.ebnf`, `roadmap.md`, `README.md`, `CHANGELOG.md`), and fixtures
+  `abi/cabi_exported_globals.{kyn,c,exit}` (scalars, struct, `u8`, C→Kyn→C
+  mutation of the same object), `abi/cabi_exported_wide_global.{kyn,c,exit}`
+  (`u128` maxima both directions), `errors/export_global_array.{kyn,code}`.
+- Validation from a clean cache: `zig build` OK; `zig build test` **97/97**
+  (95 → 97); integration **188/0** in Debug and ReleaseSafe (185 → 188: three
+  new fixtures); `zig fmt --check` clean; `check_docs_links.py` 21 files;
+  `check_diagnostic_docs.py` **130** codes (129 → 130, `E0476`); robustness
+  corpus 902 cases clean; `check_versions.py` consistent at `0.1.0-alpha.5`.
+  Both Kyn-`main` fixtures were also linked by hand against `clang` and return
+  42. Not done, and not claimed: no sanitizer gate exists in this repo, so none
+  ran; the Windows archive path was not re-exercised.
+- Git: `main` at `78bcb87` after PR #32. This increment's commits stay on
+  `arena/332f179d-kyn`; merging requires a green CI run.
+- Release assets for `v0.1.0-alpha.5` remain unattached (§38/§42): the archives
+  build and self-verify, but `uploads.github.com` was unreachable from this
+  sandbox. Not retried this session.
+- Next task: the callee side of variadics (`va_list` + an exported variadic), or
+  the still-unscheduled type-system decision on unions/bitfields/packed structs.
+- Contract kept: no test was modified to pass; every new behaviour above has a
+  passing fixture or unit test, and the two defect fixes are pinned by
+  `cabi_exported_wide_global` and the `u128` unit tests so a regression reopens
+  a failure rather than a crash.

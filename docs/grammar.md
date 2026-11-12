@@ -7,11 +7,12 @@ syntax accepted by the v0.1 parser.
 
 ```
 program     := declaration*
-declaration := fn | extern fn | export fn | struct | enum | global
+declaration := fn | extern fn | export fn | export global | struct | enum | global
 fn          := "fn" IDENT "(" params? ")" type? block
 struct      := "struct" IDENT "{" (field ("," field)* ","?)? "}"
 enum        := "enum" IDENT (":" type)? "{" (variant ("," variant)* ","?)? "}"
 global      := ("const"|"let"|"var") IDENT (":" type)? ("=" expr)? ";"
+export global := "export" global
 type        := "*" ["const"] type | "[" "]" ["const"] type | "[" expr "]" type | IDENT | primitive
 statement   := block | if | while | return | break | continue | local | expr ";"
 expression  := assignment, with precedence documented in the language reference

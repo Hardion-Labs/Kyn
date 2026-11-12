@@ -7,6 +7,16 @@ https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.5
 the `alpha.5` toolchain. No `beta.1` artifact exists and no next version number
 is selected. Milestones below are directions, not release promises.
 
+## After `v0.1.0-alpha.5` — on `main`, unreleased
+
+- Exported globals: `export var`/`export let`/`export const` publish a C object
+  under its source spelling, with mutability deciding writable vs read-only
+  storage, and the type checked as an ABI boundary (`E0476`).
+- Two constant-representation defects fixed, both predating the release: a
+  `u128` constant above `i128`'s maximum crashed the back end instead of being
+  emitted, and the same value was rejected as `E0440` when it appeared beside an
+  already-typed `u128` operand.
+
 ## v0.1.0-alpha.5 — published preview
 
 - Explicit code-generation targets: `kync --target <triple>` reaches the
