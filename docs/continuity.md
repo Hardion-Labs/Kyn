@@ -12,7 +12,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   (see §38). `main` additionally carries three merged post-`alpha.4` increments:
   explicit code-generation targets (§39, PR #25 → `47763af`), variadic `extern`
   declarations (§40, PR #27 → `a0d00f4`) and first-class function values with
-  indirect calls (§41).
+  indirect calls (§41, PR #29 → `5b9dc00`).
 - **Previous published baseline:** `v0.1.0-alpha.3` (`84093a2`), Zig `0.17.0`
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
@@ -1883,6 +1883,9 @@ branch history; this increment does not redo them.
   signature instead); no variadic function values (a `...` declaration cannot be
   given a `fn(P) R` type yet); indirect calls to aggregates follow the ordinary
   boundary classifier, which was already verified exhaustively in §40.
+- Merge: PR #29 → `5b9dc00`, CI green (`43229943298`, 2m8s); `main` re-validated
+  in a clean worktree (95/95 unit, 185/0 integration). Implementation commit
+  `7c17df3`.
 - Next task: unions/bitfields/packed structs, or the callee side of variadics
   (`va_list` + `export`ed variadic), whichever is wanted; both are language
   design decisions rather than lowering gaps. The `alpha.4` archive uploader
