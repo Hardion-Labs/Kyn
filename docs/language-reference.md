@@ -354,7 +354,9 @@ struct Point {
 - A struct cannot contain itself by value (`E0403`), directly or through an
   array. Recursion through a pointer is allowed.
 - Struct values are created with a struct initializer. Every field must be
-  specified exactly once; order does not matter.
+  specified exactly once; order does not matter. A repeated field name is
+  `E0404` rather than the last value silently winning, and the rule applies to
+  nested initializers as well.
 - Field access is `.` on a value and `->` on a pointer.
 
 ### 3.4 Enums

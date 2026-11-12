@@ -9,6 +9,9 @@ is selected. Milestones below are directions, not release promises.
 
 ## After `v0.1.0-alpha.5` — on `main`, unreleased
 
+- A struct initializer that repeats a field is `E0404`; the documented "exactly
+  once" rule was previously unenforced and the last value won.
+
 - `argc`/`argv` entry point: the C ABI already delivered both, but nothing
   documented or tested it and any signature was accepted. The entry point is now
   checked (`E0477`) and the suite runs a case with `.args`.

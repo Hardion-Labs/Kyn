@@ -39,6 +39,11 @@ Exported globals, and two constant-representation fixes.
 
 ### Fixed
 
+- A struct initializer naming the same field twice is now `E0404`. The
+  documentation has always required "every field specified exactly once", but
+  the type checker accepted the repetition and let the last value win, so
+  `Point { x: 1, y: 2, x: 3 }` compiled to `x == 3` instead of reporting the
+  mistake. The rule covers nested initializers too.
 - An integer-to-pointer cast (`usize as *u8`), documented and accepted by the
   type checker, reached the back end as `E0605 internal: unsupported cast`:
   the lowering table had no destination-pointer arm even though the emitter
