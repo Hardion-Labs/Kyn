@@ -2033,8 +2033,16 @@ assumed feature.
   Both Kyn-`main` fixtures were also linked by hand against `clang` and return
   42. Not done, and not claimed: no sanitizer gate exists in this repo, so none
   ran; the Windows archive path was not re-exercised.
-- Git: `main` at `78bcb87` after PR #32. This increment's commits stay on
-  `arena/332f179d-kyn`; merging requires a green CI run.
+- Git, final for this increment: implementation commits `e8ffac3` (feature),
+  `2164f06` (`u128` fixes) and `4e97cad` (docs + this record) on
+  `arena/332f179d-kyn`; pushed *before* the turn ended, then PR #33 → CI
+  `43243815984` green (2m1s) → merged as **`c001d05`**. `main` was re-validated
+  in a fresh clone of `c001d05`: 97/97 unit, 188/0 integration, `zig build` OK.
+- Release decision, recorded rather than implied: `v0.1.0-alpha.5` was published
+  2026-11-12T14:13:41Z and this increment landed about an hour later, so no
+  `alpha.6` tag was cut for it. The `[Unreleased]` changelog section stays open
+  until enough work accumulates to justify a release, at which point the
+  standing authorization to tag and publish applies again.
 - Release assets for `v0.1.0-alpha.5` remain unattached (§38/§42): the archives
   build and self-verify, but `uploads.github.com` was unreachable from this
   sandbox. Not retried this session.
