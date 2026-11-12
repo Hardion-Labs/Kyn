@@ -59,6 +59,11 @@ pub const FnDecl = struct {
     span: Span,
     name: []const u8,
     params: []Param,
+    /// True for an `extern fn name(fixed: T, ...) R;` declaration, whose extra
+    /// arguments are supplied positionally at each call and default-promoted.
+    /// Only a C boundary can be variadic, so the flag lives on the declaration
+    /// rather than in the function type.
+    is_variadic: bool = false,
     ret_expr: ?*TypeExpr,
     body: ?*Block,
     is_extern: bool,
@@ -268,6 +273,17 @@ pub const Expr = struct {
         pub const Call = struct {
             callee: *Expr,
             args: []*Expr,
+            /// Filled by the analyzer when the callee is a variadic `extern`
+            /// function, so the back end knows the tail arguments carry their
+            /// promoted types rather than declared parameter types.
+            is_variadic: bool = false,
+            /// Per-argument type the call passes, taken from the declaration for
+            /// a fixed parameter and from the C default promotions for a
+            /// variadic one. Empty until the analyzer fills it. The back end
+            /// converts each argument to this type, so the conversion is written
+            /// once in the analyzer instead of being re-derived from the
+            /// expression's own type on every emission path.
+            arg_types: []*Type = &.{},
         };
 
         pub const Cast = struct {

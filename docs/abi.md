@@ -106,6 +106,46 @@ extern fn free(ptr: *u8);
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
 
+### Variadic declarations
+
+A C function that takes a trailing unspecified argument list is declared with
+`...` after at least one fixed parameter, exactly like the C prototype:
+
+```kyn
+extern fn printf(format: *const u8, ...) i32;
+extern fn snprintf(buffer: *u8, size: u64, format: *const u8, ...) i32;
+```
+
+Three rules follow from the C standard, and Kyn enforces each of them rather
+than lowering something the callee would misread:
+
+- **The fixed parameters are typed normally.** `format` is a `*const u8` and is
+  passed exactly as declared, including its aggregate classification.
+- **The trailing arguments go through the C default argument promotions.** An
+  integer narrower than `i32` widens to `i32` keeping its signedness (`i8` →
+  `i32`, `u8` → `u32`), `bool` → `i32`, an `enum` → `i32`, `char` → `u32`
+  (Kyn's `char` is a 32-bit type, so it is already the promoted width), and
+  `f32` → `f64`. An `i64`, `u64`, `f64` and a pointer travel unchanged. The
+  promotion is not optional: a `f32` that stayed `float` would be read by `%f`
+  as a `double`, and a `bool` that stayed one byte would leave the register
+  half-defined. The promoted type is what the call site actually passes, so the
+  emitted call and the callee agree by construction.
+- **Only values C can pass are accepted.** An aggregate, a fixed array or a
+  slice has no default promotion, so passing one is rejected with `E0475`
+  instead of being copied onto the stack in an order the callee never agreed to;
+  pass a pointer to it. A bare `null` is rejected for the same reason — it needs
+  an explicit pointer type — and so is a slice, whose two words would arrive as
+  an unrelated pair. Calling with only the fixed parameters is legal, since zero
+  variadic arguments is a valid C call.
+
+A variadic declaration must be `extern`: a Kyn-defined function has a fixed
+signature and there is no calling convention here that could receive an
+argument list of unknown shape, so a body is rejected with `E0474`, and so is a
+declaration with no fixed parameter at all (the same rule ISO C applies, and
+without one there would be nothing to anchor the call). `export` is likewise
+rejected, because an exported function is called *by* C and its inbound
+argument list would be unspecified.
+
 ## 2. Exporting Kyn functions
 
 ```kyn
@@ -364,7 +404,6 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
 
 ## 9. Not supported in v0.1
 
-- variadic extern functions;
 - bare fixed-size array parameters and returns by value (C decays them to a
   pointer; a struct wrapping the array works), and aggregate layouts not
   supported by the selected target/classifier (including a struct whose only

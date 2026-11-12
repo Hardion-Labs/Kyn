@@ -174,9 +174,18 @@ pub const Parser = struct {
         const name_tok = self.advance();
 
         var params: std.ArrayList(ast.Param) = .empty;
+        var is_variadic = false;
         if (try self.expect(.l_paren, "after function name")) {
             if (!self.check(.r_paren)) {
                 while (true) {
+                    // The parameter list ends at `...`, which is the variadic
+                    // marker rather than a parameter: it carries no name, so it
+                    // is consumed here and the loop stops.
+                    if (self.check(.ellipsis)) {
+                        is_variadic = true;
+                        _ = self.advance();
+                        break;
+                    }
                     if (!self.check(.identifier)) {
                         try self.reporter.err("E0206", self.peek().span, "expected parameter name, found {s}", .{token.describe(self.peek().kind)});
                         break;
@@ -202,6 +211,11 @@ pub const Parser = struct {
 
         var body: ?*ast.Block = null;
         if (!is_extern) {
+            // A Kyn-defined function has a fixed signature: there is no calling
+            // convention here that can receive an unspecified trailing list.
+            if (is_variadic) {
+                try self.reporter.err("E0474", name_tok.span, "variadic functions must be declared 'extern'; '{s}' has a body", .{name_tok.lexeme});
+            }
             body = try self.parseBlock();
         } else {
             _ = try self.expect(.semicolon, "after extern function declaration");
@@ -212,6 +226,7 @@ pub const Parser = struct {
             .span = Span.join(start, if (body) |b| b.span else self.peek().span),
             .name = name_tok.lexeme,
             .params = try params.toOwnedSlice(self.allocator),
+            .is_variadic = is_variadic,
             .ret_expr = ret_expr,
             .body = body,
             .is_extern = is_extern,
@@ -1236,6 +1251,35 @@ test "parse extern function" {
     const program = try parseTest(ctx.src.text, &ctx);
     try testing.expect(!ctx.reporter.hasErrors());
     try testing.expect(program.decls[0].kind.fn_decl.is_extern);
+}
+
+test "parse variadic extern declaration" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\extern fn puts(s: *const u8) i32;
+        \\fn main() i32 { return 0; }
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const variadic = program.decls[0].kind.fn_decl;
+    try testing.expect(variadic.is_variadic);
+    // The marker is not a parameter: only the format string is declared, which
+    // is what keeps the signature usable for the fixed-argument arity check.
+    try testing.expectEqual(@as(usize, 1), variadic.params.len);
+    try testing.expectEqualStrings("format", variadic.params[0].name);
+    try testing.expect(!program.decls[1].kind.fn_decl.is_variadic);
+    try testing.expect(!program.decls[2].kind.fn_decl.is_variadic);
+}
+
+test "variadic function with a body is rejected" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn helper(value: i32, ...) i32 { return value; }");
+    defer ctx.deinit();
+    _ = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(ctx.reporter.hasErrors());
+    try testing.expectEqualStrings("E0474", ctx.reporter.list.items[0].code);
 }
 
 test "parse errors are reported and recovered" {

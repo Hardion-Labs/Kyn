@@ -7,7 +7,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
 
 ## 1. Current real stage
 
-- **Published toolchain baseline:** `v0.1.0-alpha.3` (`84093a2`), Zig `0.17.0`
+- **Published toolchain baseline:** `v0.1.0-alpha.4` (`d6e7302`, tagged),
+  replacing `v0.1.0-alpha.3` (`84093a2`); archives still cannot be attached
+  (see §38). `main` additionally carries two merged post-`alpha.4` increments:
+  explicit code-generation targets (§39, PR #25 → `47763af`) and variadic
+  `extern` declarations (§40).
+- **Previous published baseline:** `v0.1.0-alpha.3` (`84093a2`), Zig `0.17.0`
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
@@ -1721,9 +1726,89 @@ branch history; this increment does not redo them.
   change is a single coherent increment, so the next release boundary is the
   user's call. The uploader blocker of §38 is still open and independent
   (`uploads.github.com` unreachable, `HTTP 000`).
-- Next task: the remaining `SSE`/`SSEUP` aggregate classes (for example
-  `{ f32, f32, f32, f32, f32 }`, which stays `sret`), then per-target ABI
-  variants if a second C ABI is ever specified.
+- The §39 claim that `{ f32, f32, f32, f32, f32 }` and other `SSE`/`SSEUP`
+  shapes still use `sret` was **verified to be obsolete** against the actual
+  compiler before starting new ABI work: an exhaustive differential harness
+  (below) shows the current classifier and lowering already match Clang for
+  every probed shape. That entry is corrected here rather than implemented
+  again.
+
+## 40. Variadic `extern` declarations (implemented on `arena/998c03dc-kyn`)
+
+- Starting point: context recovery confirmed the aggregate ABI had no remaining
+  gap, so the next coherent step came from the documented-but-unimplemented
+  list in `language-reference.md` §7 and `abi.md` §9: `extern` variadics. That
+  entry blocks every C function with a trailing `...` (`printf`, `snprintf`,
+  `syslog`, `open` with a mode, `execl`), which is the single most common FFI
+  shape still missing.
+- Scope decision, made by measurement rather than assumption: an exhaustive
+  differential harness was built first (see "Validation" below) to confirm the
+  aggregate ABI was complete, so this increment is **only** the variadic
+  declaration and its argument promotions. Nothing in the classifier changed.
+- Syntax: `...` is a new token (`ellipsis`), lexed by a dedicated `lexDot` so
+  one, two and three dots stay distinct; `..` ranges are unaffected and the
+  existing range tests still pass. `ast.FnDecl.is_variadic` records the marker,
+  which is *not* a parameter: `extern fn printf(format: *const u8, ...) i32;`
+  has exactly one parameter, so the fixed-arity check keeps working.
+- Type rule: the promotion lives in the analyzer (`sema.promoteVariadic`), not
+  in the backend, and `ast.Expr.Kind.Call.arg_types` records the type each
+  argument is *passed as* — the declared parameter type for a fixed parameter,
+  the promoted type for a variadic one. `Lowering.lowerArgument` converts to
+  that recorded type, so the promotion is written once. This removed a latent
+  duplication: before it, the call path re-derived the argument type from the
+  expression and would have had to re-derive the promotion in two places
+  (fixed-parameter and variadic branches).
+- Promotions, exactly the C defaults: `i8`/`i16` → `i32`, `u8`/`u16` → `u32`
+  (signedness kept), `bool` → `i32`, `enum` → `i32`, `char` → `u32` (already
+  32-bit in Kyn), `f32` → `f64`, `comptime_int` → `i32`,
+  `comptime_float` → `f64`; `i32`/`u32`/`i64`/`u64`/`f64`/`isize`/`usize` and
+  pointers unchanged.
+- Rejections, each matching a real C constraint: an aggregate, a fixed array or
+  a slice in the variadic tail is `E0475` (none has a default promotion, and
+  each would arrive in a shape the callee never agreed to); a bare `null` is
+  `E0475` (no pointer type to promote to); a variadic declaration that is not
+  `extern`, or that has no fixed parameter, is `E0474` (ISO C requires a named
+  parameter before `...`, and a Kyn body has a fixed signature).
+- IR: `ir.Function.variadic` makes the emitter print `...` in a declaration;
+  without it an LLVM call carrying extra arguments would not match the
+  declaration. A definition can never be variadic (rejected earlier), so the
+  flag is only meaningful on declarations.
+- Interaction with the C ABI work: fixed parameters keep their aggregate
+  classification and the variadic tail is never an aggregate, so the System V
+  register classes and the `--target` guard (`E0473`) are untouched.
+- Validation: `zig build` OK; `zig build test` **90/90** (83 → 90: one lexer
+  test for `.`/`..`/`...`, two parser tests, three semantic tests, one IR
+  emitter test); integration **180/0** in Debug and ReleaseSafe (174 → 180: the
+  `cabi_variadic` fixture plus five error fixtures); `zig fmt --check` clean;
+  `check_docs_links.py` 21 files; `check_diagnostic_docs.py` **129** codes;
+  robustness corpus 902 clean; `check_versions.py` consistent at
+  `0.1.0-alpha.4`.
+- Differential verification of the *aggregate* claim: a generated harness
+  emitted 347 struct shapes with up to three scalar members and 1,350 with up to
+  four (`f32`/`f64`/`i8`/`i16`/`i32`/`i64`/`bool`/pointer, size ≤ 16 bytes),
+  each passed through Kyn into C and back with C comparing every field, plus 16
+  layouts wider than 16 bytes exercising `sret`/`byval`, plus nested
+  struct/enum/array/`i128` members, plus System V register exhaustion (a
+  two-eightbyte aggregate arriving after five INTEGER or eight SSE arguments,
+  where the whole aggregate must move to the stack). All matched. Two of these
+  confirmed subtleties worth keeping: `u8` promotes to `u32`, not `i32`, and a
+  fixture must account for a value crossing *both* directions.
+- Mutation check: replacing the `f32` → `f64` promotion with an identity
+  conversion leaves `zig build` succeeding (rc=0, asserted before believing the
+  result) and fails **three independent tests** — the semantic promotion test,
+  the IR emitter test and `cabi_variadic` — proving the guard is real and not
+  incidental. Restored and re-verified. The `export` rejection was verified
+  separately: `export fn f(v: i32, ...) i32 { ... }` reports `E0474`.
+- Limitations: only the *caller* side exists. A variadic function cannot be
+  defined in Kyn or exported, and there is no `va_list` type, so a C variadic
+  callback into Kyn remains impossible. A variadic argument that is a
+  `comptime`-only value materialises to the promoted default rather than being
+  inferred from context. Format-string interpretation is of course not checked.
+- Next task: the callee side of variadics (`va_list`, `va_start`-like
+  primitives and an `export`ed variadic) if it is wanted, which is a language
+  and ABI design decision rather than a lowering gap; otherwise the remaining
+  documented gaps are function pointers/callbacks, unions/bitfields/packed
+  structs, and the `alpha.4` archive uploader blocker of §38.
 
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

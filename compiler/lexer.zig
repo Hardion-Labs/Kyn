@@ -69,7 +69,7 @@ pub const Lexer = struct {
                 ',' => try self.single(.comma, start),
                 ';' => try self.single(.semicolon, start),
                 ':' => try self.single(.colon, start),
-                '.' => try self.twoOrOne(.dot, .dotdot, start, '.'),
+                '.' => try self.lexDot(start),
                 '@' => try self.single(.at, start),
                 '~' => try self.single(.tilde, start),
                 '+' => try self.lexPlus(start),
@@ -114,6 +114,24 @@ pub const Lexer = struct {
         } else {
             try self.emit(one, start, self.pos);
         }
+    }
+
+    /// `.`, `..` and `...`. The three-byte form is the variadic marker of an
+    /// `extern` declaration; it is longer than `..`, so it needs its own probe
+    /// instead of the two-byte helper.
+    fn lexDot(self: *Lexer, start: usize) !void {
+        self.pos += 1;
+        if (self.pos < self.text.len and self.text[self.pos] == '.') {
+            self.pos += 1;
+            if (self.pos < self.text.len and self.text[self.pos] == '.') {
+                self.pos += 1;
+                try self.emit(.ellipsis, start, self.pos);
+                return;
+            }
+            try self.emit(.dotdot, start, self.pos);
+            return;
+        }
+        try self.emit(.dot, start, self.pos);
     }
 
     fn lexPlus(self: *Lexer, start: usize) !void {
@@ -468,6 +486,29 @@ test "lex operators" {
     };
     try testing.expectEqual(expected.len + 1, toks.len);
     for (expected, 0..) |kind, i| try testing.expectEqual(kind, toks[i].kind);
+}
+
+test "lex dot, range and variadic markers apart" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // One, two and three dots must tokenize as distinct kinds: `..` is the range
+    // operator and `...` the variadic marker, so a three-byte form that fell
+    // back to `..` would corrupt every variadic declaration.
+    var src = try source.Source.init(a, "test.kyn", "a.b a..b a...b");
+    var rep = diagnostics.Reporter.init(a, &src);
+    var lexer = Lexer.init(a, &src, &rep);
+    const toks = try lexer.tokenize();
+
+    const expected = [_]Kind{
+        .identifier, .dot,      .identifier,
+        .identifier, .dotdot,   .identifier,
+        .identifier, .ellipsis, .identifier,
+        .eof,
+    };
+    try testing.expectEqual(expected.len, toks.len);
+    for (expected, 0..) |kind, i| try testing.expectEqual(kind, toks[i].kind);
+    try testing.expectEqualStrings("...", toks[7].lexeme);
 }
 
 test "lex comments and strings" {

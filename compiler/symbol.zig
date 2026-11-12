@@ -27,4 +27,7 @@ pub const Symbol = struct {
     /// For functions: whether the symbol is defined in Kyn.
     is_extern: bool = false,
     is_export: bool = false,
+    /// For `extern` functions: whether the declaration ends in `...`, so calls
+    /// may pass more arguments than the fixed parameters.
+    is_variadic: bool = false,
 };

@@ -234,6 +234,9 @@ pub const Function = struct {
     params: []Param,
     ret: *Type,
     linkage: Linkage,
+    /// True for a C declaration ending in `...`. Only a declaration can be
+    /// variadic, so a definition never carries it.
+    variadic: bool = false,
     sret: bool = false,
     sret_type: ?*types.StructInfo = null,
     byval_params: []bool = &.{},

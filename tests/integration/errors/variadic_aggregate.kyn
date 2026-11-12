@@ -1,0 +1,5 @@
+extern fn printf(format: *const u8, ...) i32;
+struct Pair { a: i32, b: i32 }
+fn main() i32 {
+    return printf("%d\n", Pair { a: 1, b: 2 });
+}

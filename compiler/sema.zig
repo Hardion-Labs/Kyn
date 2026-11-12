@@ -268,6 +268,7 @@ pub const Sema = struct {
                     if (fd.sym) |sym| {
                         sym.is_extern = fd.is_extern;
                         sym.is_export = fd.is_export;
+                        sym.is_variadic = fd.is_variadic;
                     }
                 },
                 .var_decl => |vd| {
@@ -427,6 +428,18 @@ pub const Sema = struct {
     }
 
     fn resolveSignature(self: *Sema, fd: *ast.FnDecl) Error!void {
+        // A variadic declaration is C-only and inbound-unspecified: Kyn cannot
+        // receive an argument list it was not told the shape of, so `export` is
+        // rejected while `extern` calls are promoted at each call site.
+        if (fd.is_variadic and !fd.is_extern) {
+            try self.reporter.err("E0474", fd.span, "variadic declaration '{s}' must be 'extern'; an exported or Kyn function has a fixed signature", .{fd.name});
+        }
+        // ISO C requires a named parameter before the `...`, and the rule exists
+        // for the same reason here: with no fixed parameter there is nothing to
+        // anchor the call and every argument would be inferred.
+        if (fd.is_variadic and fd.params.len == 0) {
+            try self.reporter.err("E0474", fd.span, "variadic declaration '{s}' needs at least one fixed parameter before '...'", .{fd.name});
+        }
         var params = try self.allocator.alloc(*Type, fd.params.len);
         var seen = std.StringHashMap(void).init(self.allocator);
         const is_c_boundary = fd.is_extern or fd.is_export;
@@ -469,6 +482,7 @@ pub const Sema = struct {
             sym.ty = fn_ty;
             sym.is_extern = fd.is_extern;
             sym.is_export = fd.is_export;
+            sym.is_variadic = fd.is_variadic;
         }
     }
 
@@ -825,7 +839,7 @@ pub const Sema = struct {
             .unary => |unary| try self.checkUnary(expr, unary),
             .binary => |binary| try self.checkBinary(expr, binary),
             .assign => |assign| try self.checkAssign(expr, assign),
-            .call => |call| try self.checkCall(expr, call),
+            .call => |*call| try self.checkCall(expr, call),
             .cast => |cast| try self.checkCast(expr, cast),
             .slice => |slice| try self.checkSlice(expr, slice, expected),
             .field => |*field| try self.checkField(expr, field),
@@ -1144,7 +1158,7 @@ pub const Sema = struct {
         return target_ty;
     }
 
-    fn checkCall(self: *Sema, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!*Type {
+    fn checkCall(self: *Sema, expr: *ast.Expr, call: *ast.Expr.Kind.Call) Error!*Type {
         const callee_ty = try self.checkExpr(call.callee, null);
         if (callee_ty.* == .invalid) {
             for (call.args) |arg| _ = try self.checkExpr(arg, null);
@@ -1156,15 +1170,27 @@ pub const Sema = struct {
             return self.prims.invalid;
         }
         const fn_info = callee_ty.fn_type;
+        const declares_variadic = switch (call.callee.kind) {
+            .ident => |ident| if (ident.sym) |sym| sym.is_variadic else false,
+            .field => |field| if (field.sym) |sym| sym.is_variadic else false,
+            else => false,
+        };
+        call.is_variadic = declares_variadic;
+        const is_variadic = declares_variadic;
         if (!self.isTypeAccessible(fn_info.ret, expr.span.source_id)) {
             try self.reporter.err("E0467", call.callee.span, "function return type is private to another module", .{});
         }
-        if (call.args.len != fn_info.params.len) {
+        if (!is_variadic and call.args.len != fn_info.params.len) {
             try self.reporter.err("E0446", expr.span, "function expects {d} argument(s), found {d}", .{
+                fn_info.params.len, call.args.len,
+            });
+        } else if (is_variadic and call.args.len < fn_info.params.len) {
+            try self.reporter.err("E0446", expr.span, "function expects at least {d} argument(s), found {d}", .{
                 fn_info.params.len, call.args.len,
             });
         }
         const count = @min(call.args.len, fn_info.params.len);
+        var arg_types = try self.allocator.alloc(*Type, call.args.len);
         for (call.args, 0..) |arg, i| {
             if (i < count) {
                 const param_ty = fn_info.params[i];
@@ -1173,11 +1199,53 @@ pub const Sema = struct {
                 }
                 const arg_ty = try self.checkExpr(arg, param_ty);
                 try self.requireAssignable(param_ty, arg, arg_ty, false);
+                arg_types[i] = param_ty;
             } else {
-                _ = try self.checkExpr(arg, null);
+                // A variadic argument has no declared type, so it is checked
+                // against none and then given the type the C default argument
+                // promotions produce. That type is recorded as the type the call
+                // passes, so the back end emits exactly the promoted value: a
+                // struct, an array or a slice cannot be passed, mirroring C's
+                // constraint.
+                const arg_ty = try self.checkExpr(arg, null);
+                arg_types[i] = try self.promoteVariadic(arg, arg_ty);
             }
         }
+        call.arg_types = arg_types;
         return fn_info.ret;
+    }
+
+    /// The type an argument to a variadic `extern` call travels as, following
+    /// the C default argument promotions: integer types narrower than `i32`
+    /// widen to `i32` (keeping signedness), `f32` widens to `f64`, and every
+    /// other scalar keeps its type. An aggregate has no default promotion, so
+    /// passing one is rejected instead of being converted silently.
+    fn promoteVariadic(self: *Sema, arg: *ast.Expr, ty: *Type) Error!*Type {
+        return switch (ty.*) {
+            .comptime_int => self.prims.i32,
+            .comptime_float => self.prims.f64,
+            .int => |info| blk: {
+                if (info.bits < 32) break :blk if (info.signed) self.prims.i32 else self.prims.u32;
+                break :blk ty;
+            },
+            .char => self.prims.u32,
+            .bool => self.prims.i32,
+            .enum_type => self.prims.i32,
+            .float => |bits| if (bits < 64) self.prims.f64 else ty,
+            .null_type => blk: {
+                try self.reporter.err("E0475", arg.span, "null passed to a variadic function needs an explicit pointer type", .{});
+                break :blk self.prims.invalid;
+            },
+            .slice => blk: {
+                try self.reporter.err("E0475", arg.span, "a slice cannot be passed to a variadic function; pass `.ptr` or `.len`", .{});
+                break :blk self.prims.invalid;
+            },
+            .struct_type, .array => blk: {
+                try self.reporter.err("E0475", arg.span, "an aggregate cannot be passed to a variadic function; pass a pointer to it", .{});
+                break :blk self.prims.invalid;
+            },
+            else => ty,
+        };
     }
 
     fn checkCast(self: *Sema, expr: *ast.Expr, cast: ast.Expr.Kind.Cast) Error!*Type {
@@ -2212,6 +2280,14 @@ const SemTest = struct {
     fn deinit(self: *SemTest) void {
         self.arena.deinit();
     }
+
+    /// The rendered name of a type the analyzer produced, using the same
+    /// `typeName` the diagnostics use, so a test can assert a promoted type
+    /// without duplicating the naming rules.
+    fn typeName(self: *SemTest, ty: *Type) []const u8 {
+        var sema = Sema.init(self.arena.allocator(), &self.reporter, &self.prims);
+        return sema.typeName(ty);
+    }
 };
 
 fn expectSemanticError(text: []const u8, code: []const u8) !void {
@@ -2363,6 +2439,83 @@ test "semantic accepts extern C function" {
         \\extern fn puts(s: *const u8) i32;
         \\fn main() i32 { return puts("hello"); }
     );
+}
+
+test "semantic accepts a variadic extern call and promotes its arguments" {
+    try expectClean(
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\fn main() i32 {
+        \\    let small: i8 = 7;
+        \\    let flag: bool = true;
+        \\    let ratio: f32 = 1.5;
+        \\    return printf("%d %d %f\\n", small, flag, ratio);
+        \\}
+    );
+}
+
+test "semantic promotes narrow integers, bools and f32 in variadic calls" {
+    // The promoted type is what the call passes, so the back end never has to
+    // guess: `f32` must widen to `f64` or `%f` would read a garbage double, and
+    // an `i8` must widen or the register stays half-filled. Reading the recorded
+    // `arg_types` is how the promotion contract is checked without executing C.
+    const cases = [_]struct { expr: []const u8, expected: []const u8 }{
+        .{ .expr = "small", .expected = "i32" },
+        .{ .expr = "flag", .expected = "i32" },
+        .{ .expr = "ratio", .expected = "f64" },
+        .{ .expr = "wide", .expected = "i64" },
+        .{ .expr = "byte", .expected = "u32" },
+        .{ .expr = "text", .expected = "*const u8" },
+        .{ .expr = "1", .expected = "i32" },
+        .{ .expr = "1.5", .expected = "f64" },
+    };
+    for (cases) |case| {
+        var buf: [512]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buf,
+            \\extern fn printf(format: *const u8, ...) i32;
+            \\fn main() i32 {{
+            \\    let small: i8 = 7;
+            \\    let flag: bool = true;
+            \\    let ratio: f32 = 1.5;
+            \\    let wide: i64 = 9;
+            \\    let byte: u8 = 3;
+            \\    let text: *const u8 = "hi";
+            \\    return printf("x", {s});
+            \\}}
+        , .{case.expr});
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        try testing.expect(!ctx.reporter.hasErrors());
+        const fn_decl = ctx.program.?.decls[1].kind.fn_decl;
+        const ret = fn_decl.body.?.stmts[6].kind.return_stmt.value.?;
+        const passed = ret.kind.call.arg_types;
+        try testing.expectEqual(@as(usize, 2), passed.len);
+        const name = ctx.typeName(passed[1]);
+        try testing.expectEqualStrings(case.expected, name);
+    }
+}
+
+test "semantic rejects aggregates, slices and null in variadic calls" {
+    try expectSemanticError(
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\struct Big { a: i32, b: i32 }
+        \\fn main() i32 { return printf("%d", Big { a: 1, b: 2 }); }
+    , "E0475");
+    try expectSemanticError(
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\fn main() i32 { return printf("%d", null); }
+    , "E0475");
+    // Calling with no arguments at all still violates the fixed parameters;
+    // calling with only them is legal C and stays accepted.
+    try expectSemanticError(
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\fn main() i32 { return printf(); }
+    , "E0446");
+    try expectSemanticError(
+        \\extern fn nope(...) i32;
+        \\fn main() i32 { return 0; }
+    , "E0474");
 }
 
 test "semantic rejects unknown identifier" {
