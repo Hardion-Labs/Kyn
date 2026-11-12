@@ -147,11 +147,19 @@ pub const Parser = struct {
             },
             .kw_export => {
                 _ = self.advance();
-                if (!self.check(.kw_fn)) {
-                    try self.reporter.err("E0203", self.peek().span, "expected 'fn' after 'export'", .{});
-                    return null;
+                if (self.check(.kw_fn)) return try self.parseFn(false, true);
+                // `export` also names a global variable's symbol, so a C object
+                // links against the spelling the declaration used.
+                if (self.check(.kw_const) or self.check(.kw_var) or self.check(.kw_let)) {
+                    const decl = (try self.parseGlobalVar()) orelse return null;
+                    switch (decl.kind) {
+                        .var_decl => |vd| vd.is_export = true,
+                        else => unreachable,
+                    }
+                    return decl;
                 }
-                return try self.parseFn(false, true);
+                try self.reporter.err("E0203", self.peek().span, "expected 'fn', 'const', 'var' or 'let' after 'export'", .{});
+                return null;
             },
             .kw_struct => return try self.parseStruct(),
             .kw_enum => return try self.parseEnum(),

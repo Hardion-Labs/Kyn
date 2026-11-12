@@ -1,0 +1,25 @@
+// Exported globals are C objects: the symbol is the source spelling, the
+// mutability decides `global` vs `constant`, and C reads and writes them
+// directly. C also calls back into a Kyn function that mutates one, so the
+// storage both sides see is proven to be the same object.
+struct Limits { lo: i32, hi: i32 }
+
+export var counter: i32 = 41;
+export let threshold: i32 = 7;
+export const limits: Limits = Limits { lo: 3, hi: 4 };
+export const max_u8: u8 = 200;
+
+extern fn c_verify_exported_globals() i32;
+
+export fn bump_counter(by: i32) i32 {
+    counter = counter + by;
+    return counter;
+}
+
+fn main() i32 {
+    if (c_verify_exported_globals() != 42) { return 1; }
+    // The C side left `counter` at 1 and then called `bump_counter(1)`; the
+    // Kyn write is visible back here because it is the same object.
+    if (counter != 2) { return 2; }
+    return 42;
+}

@@ -1,0 +1,5 @@
+// A bare array has no by-value C layout in Kyn: a C array parameter decays to
+// a pointer and an array object's spellings differ, so exporting one would
+// publish a symbol C reads at the wrong offsets. Declare a struct instead.
+export const table: [2]i32 = [1, 2];
+fn main() i32 { return 0; }

@@ -275,9 +275,15 @@ pub const Sema = struct {
                     const placeholder = try self.allocator.create(Type);
                     placeholder.* = .invalid;
                     const existed = self.moduleSymbol(decl.span.source_id, vd.name) != null;
-                    vd.sym = try self.declareGlobal(vd.name, .global, placeholder, decl.span, decl.is_public, false);
+                    // An exported global is link-visible, so its symbol is the
+                    // source spelling rather than the module-mangled one a
+                    // Kyn-only global gets.
+                    vd.sym = try self.declareGlobal(vd.name, .global, placeholder, decl.span, decl.is_public, vd.is_export);
                     if (!existed) {
-                        if (vd.sym) |sym| sym.mutable = vd.mutable;
+                        if (vd.sym) |sym| {
+                            sym.mutable = vd.mutable;
+                            sym.is_export = vd.is_export;
+                        }
                     }
                 },
             }
@@ -514,6 +520,19 @@ pub const Sema = struct {
             if (explicit_ty == null) {
                 vd.ty = self.prims.invalid;
                 if (vd.sym) |sym| sym.ty = self.prims.invalid;
+            }
+        }
+
+        // An exported global is a C object, so its type is a boundary the same
+        // way an exported function's parameter is: one the target cannot lay
+        // out would be read at the wrong offsets by the C side. Only aggregates
+        // need this filter. `void` is already rejected as storage by `E0411`,
+        // and a function value is a plain pointer, which C represents natively.
+        if (vd.is_export) {
+            if (vd.ty) |ty| {
+                if (ty.* != .invalid and ty.isAggregate() and self.boundaryClass(ty) == null) {
+                    try self.reporter.err("E0476", vd.ty_expr.?.span, "exported global '{s}' has a layout that is not supported by the current C ABI target", .{vd.name});
+                }
             }
         }
     }
@@ -1128,6 +1147,14 @@ pub const Sema = struct {
     fn applyLiteralType(self: *Sema, expr: *ast.Expr, from: *Type, to: *Type) Error!bool {
         _ = self;
         if (from.* != .comptime_int) return false;
+        // A literal above `i128`'s maximum has no `i128` spelling, so the
+        // unsigned magnitude is consulted first; only when the expression is
+        // not a bare literal does the signed path apply.
+        if (literalUnsignedValue(expr)) |magnitude| {
+            if (!to.intInfo().fitsUnsigned(magnitude)) return false;
+            expr.ty = to;
+            return true;
+        }
         const value = literalIntValue(expr) orelse return false;
         if (!fitsInt(to.intInfo(), value)) return false;
         expr.ty = to;
@@ -1875,6 +1902,16 @@ fn containsIncompleteByValue(ty: *Type) bool {
 
 fn fitsInt(info: types.IntInfo, value: i128) bool {
     return info.fits(value);
+}
+
+/// Extract a non-negative integer literal magnitude, which may exceed `i128`.
+/// Mirrors `literalIntValue` for the positive case only: a `u128` maximum is a
+/// legal `u128` literal but has no signed spelling.
+pub fn literalUnsignedValue(expr: *ast.Expr) ?u128 {
+    return switch (expr.kind) {
+        .int_lit => |lit| lit.value,
+        else => null,
+    };
 }
 
 /// Extract an integer literal value through unary minus/casts.
@@ -3163,6 +3200,47 @@ test "global enum and aggregate constants are accepted" {
         \\    return C as i32 + P.x + P.y + VALUES[0] + VALUES[1];
         \\}
     );
+}
+
+test "exported globals take the source name and a C-representable type" {
+    try expectClean(
+        \\struct Point { x: i32, y: i32 }
+        \\export var counter: i32 = 41;
+        \\export let threshold: i32 = 7;
+        \\export const origin: Point = Point { x: 0, y: 0 };
+        \\export const flags: u8 = 200;
+        \\fn main() i32 { counter = counter + 1; return counter + threshold; }
+    );
+
+    // A bare array has no by-value C layout, so it cannot be an exported
+    // object even though the same type is fine as a Kyn-only global.
+    try expectClean(
+        \\const table: [2]i32 = [1, 2];
+        \\fn main() i32 { return table[0]; }
+    );
+    try expectSemanticError(
+        \\export const table: [2]i32 = [1, 2];
+        \\fn main() i32 { return 0; }
+    , "E0476");
+}
+
+test "a u128 maximum literal is usable where the type is already u128" {
+    try expectClean(
+        \\fn main() i32 {
+        \\    let top: u128 = 340282366920938463463374607431768211455;
+        \\    if (top != 340282366920938463463374607431768211455) { return 1; }
+        \\    if (top < 18446744073709551615) { return 2; }
+        \\    return 0;
+        \\}
+    );
+
+    // One past the maximum does not fit any type.
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let big: u64 = 18446744073709551616;
+        \\    return 0;
+        \\}
+    , "E0426");
 }
 
 test "global initializer with a function call is rejected" {
