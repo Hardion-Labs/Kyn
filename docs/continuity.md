@@ -2252,11 +2252,18 @@ assumed feature.
   `zig fmt --check` clean; docs links 21; documented codes **131** (unchanged —
   `E0404` was already documented for the declaration case); robustness corpus
   902 clean; versions consistent at `0.1.0-alpha.5`.
+- Git, final for this increment: implementation commit `3fe9dce` and record
+  `d22c906` on `arena/ecb80055-kyn`, pushed before the turn ended; PR #39 → CI
+  green → merged as **`8028fb6`**; `main` re-validated in a fresh clone of
+  `8028fb6` (100/100 unit, 196/0 integration).
 - Not done, and not claimed: no sanitizer gate exists in this repo;
   `v0.1.0-alpha.5` release assets remain unattached (§38/§42); the Windows
   archive path was not re-exercised.
 - Next task: the callee side of variadics (`va_list` + an exported variadic), or
   the still-unscheduled type-system decision on unions/bitfields/packed structs.
+  A future sweep could extend to `kyn-build` target graphs (multiple targets,
+  `--target` selection, `sharedlib` runtime loading), which this increment only
+  touched for `staticlib` and exit codes.
 - Contract kept: no test was modified to pass; the new behaviour is pinned by
   one unit test and one fixture, and the sweep's negative results are recorded
   above so the next session does not repeat them.
