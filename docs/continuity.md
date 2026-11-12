@@ -20,7 +20,11 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§43):** exported globals
+- **Unreleased work on the current branch (§44):** raw pointer / integer /
+  function-value casts in both directions, and the `inttoptr` lowering they
+  needed (an integer-to-pointer cast was documented and accepted but reached the
+  back end as an internal error).
+- **Merged, `main` (`c001d05` .. `456ea85`, §43):** exported globals
   (`export var`/`export let`/`export const`, `E0476` guard) plus two
   pre-existing `u128`-constant defects fixed in the back end and in literal
   adaptation. Validated locally — 97/97 unit, 188/0 integration in Debug and
@@ -2052,3 +2056,68 @@ assumed feature.
   passing fixture or unit test, and the two defect fixes are pinned by
   `cabi_exported_wide_global` and the `u128` unit tests so a regression reopens
   a failure rather than a crash.
+
+## 44. Pointer, integer and function-value casts (on `arena/cdf27e39-kyn`)
+
+- Base: `main` at `456ea85`; `v0.1.0-alpha.5` remains the published baseline and
+  its tag has not moved. Chosen increment: the cast gap listed in `abi.md` §9
+  ("casts between a raw pointer and a function value") — the last mechanically
+  blocked item in that list, as opposed to the design decisions (unions,
+  bitfields, `va_list`) that stay unscheduled.
+- Why it is mechanical and not a design decision: a function value is already
+  one `ptr` at the ABI level (`types.Type.fn_ptr`, `llvm.typeString` → `"ptr"`),
+  an indirect call already names its own signature, and the null-call trap
+  already covers the result. So the cast is a change of *meaning*, not of
+  representation, and the backend needed a table entry, not new IR.
+- Design, kept deliberately asymmetric to match what the language already does:
+  a *pointer* casts to a function type (`ptr as fn(P) R`) — that is how a C
+  callback retrieved as `void *` becomes callable — while a *function name* is
+  written as a plain expression, with `as *T` (or `as usize`) naming which
+  pointer it is. `as` never converts between two signatures and never reinterprets
+  an aggregate as an address (`E0447`); the restriction already applied to `*T`
+  in `isPointerCast` and is now stated for the function side in
+  `sema.isFunctionPointerCast`.
+- Changes: `sema.checkCast` grew an `.fn_ptr` source arm and lets
+  pointer/integer sources reach a `fn_ptr` target (through
+  `sema.isFunctionPointerCast`, which reuses `isPointer`/`isInteger` rather than
+  restating a representation table); `backend.isSameRepresentation` states that
+  `.fn_ptr` and `.pointer` share one representation, so no instruction is
+  emitted for that pair; `backend.castKind` gained the pointer/function-value
+  source arm and — the actual defect — a destination-pointer arm.
+- **Pre-existing defect found and fixed:** `let p: *u8 = n as *u8;` with `n:
+  usize` was documented in `language-reference.md` §5.7 and accepted by the type
+  checker, but every compile failed with `E0605 internal: unsupported cast from
+  the semantic layer`, because `castKind` had no `to.isPointer()` arm even
+  though the emitter already knew `inttoptr`. Reproduced on a stashed clean tree
+  before being touched, so it is not introduced here; it blocked the integer half
+  of this increment and is now pinned by the new fixture.
+- Also checked and deliberately left alone: `let b: bool = x as bool` on an
+  `i32` is accepted, which is documented as an allowed numeric pair; it is
+  pre-existing, unrelated, and changing it would be a policy change rather than
+  a fix for this increment.
+- Files changed: `compiler/sema.zig` (cast policy + one unit test),
+  `compiler/backend/llvm.zig` (representation and lowering table), docs
+  (`abi.md`: new paragraph plus the §9 line removed, `language-reference.md`
+  §5.7 table rows and §7 line, `roadmap.md`, `README.md`, `CHANGELOG.md`), and
+  fixtures `abi/cabi_function_pointer_cast.{kyn,c,exit}` (C pointer → Kyn
+  function value → indirect call; Kyn function value → `*u8` → C calls it;
+  pointer returned by C; address ↔ integer round-trip; function value passed to
+  C as its own type), `errors/fn_ptr_cast_signature.{kyn,code}`,
+  `errors/aggregate_to_fn_ptr_cast.{kyn,code}`.
+- Validation from a clean cache: `zig build` OK; `zig build test` **98/98**
+  (97 → 98); integration **191/0** in Debug and ReleaseSafe (188 → 191: three new
+  fixtures); `zig fmt --check` clean; docs links 21; documented codes **130**
+  (unchanged — no new code was needed); robustness corpus 902 clean; versions
+  consistent at `0.1.0-alpha.5`. The Kyn-`main` fixture was also linked by hand
+  against `clang` and returns 42, and the documentation example in `abi.md` was
+  compiled to confirm it is accepted.
+- Rejected-behaviour checks (so nothing was loosened): `fn(i32) i32 as
+  fn(i64) i64`, `Pair as fn(i32) i32`, `fn_value as []const u8` and a
+  non-representable `*T` cast all still report `E0447`.
+- Not done, and not claimed: no sanitizer gate exists in this repo; the Windows
+  archive path was not re-exercised; `v0.1.0-alpha.5` release assets remain
+  unattached (§38/§42, `uploads.github.com` unreachable).
+- Next task: the callee side of variadics (`va_list` + an exported variadic), or
+  the still-unscheduled type-system decision on unions/bitfields/packed structs.
+- Contract kept: no test was modified to pass; the defect fix and both new cast
+  directions are pinned by fixtures, so a regression reopens a failure.

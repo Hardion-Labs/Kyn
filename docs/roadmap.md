@@ -9,6 +9,10 @@ is selected. Milestones below are directions, not release promises.
 
 ## After `v0.1.0-alpha.5` — on `main`, unreleased
 
+- Raw pointer / integer / function-value casts in both directions, plus the
+  `inttoptr` lowering they needed: an integer-to-pointer cast was documented and
+  accepted by the type checker but reached the back end as an internal error.
+
 - Exported globals: `export var`/`export let`/`export const` publish a C object
   under its source spelling, with mutability deciding writable vs read-only
   storage, and the type checked as an ABI boundary (`E0476`).
@@ -108,11 +112,13 @@ is selected. Milestones below are directions, not release promises.
   names a signature, a function name decays to a value in value position, the
   value can be stored in aggregates, passed to and received from C, compared with
   `null`, and called indirectly (with a null-call trap). A direct call keeps
-  calling the symbol. What is not implemented: casting between a raw pointer and
-  a function value, and function values as *aggregate members at the C boundary*
-  are covered indirectly (they are one `ptr` leaf) rather than by a dedicated
-  classifier — a struct of only function pointers travels as an aggregate like
-  any other and follows the existing eightbyte rules.
+  calling the symbol. A raw pointer, an integer address and a function value
+  cast between each other in every direction (`ptr` is the one representation),
+  which is how a C callback handed out as `void *` becomes callable; `as` never
+  converts between two signatures. Function values as *aggregate members at the
+  C boundary* are covered indirectly (they are one `ptr` leaf) rather than by a
+  dedicated classifier — a struct of only function pointers travels as an
+  aggregate like any other and follows the existing eightbyte rules.
 - Variadic `extern` declarations are implemented: `...` after at least one fixed
   parameter, with the C default argument promotions applied to the trailing
   arguments and aggregates, slices and bare `null` rejected. What remains
