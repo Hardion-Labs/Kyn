@@ -1,0 +1,6 @@
+// The entry point's result becomes the process exit status, which the C runtime
+// reads as an `int`. A `f64` would leave the status meaningless, so the
+// signature is checked where the entry point is recognised.
+fn main() f64 {
+    return 1.5;
+}

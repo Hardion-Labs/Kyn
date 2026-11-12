@@ -1,0 +1,6 @@
+// `argv` is the C `char **`. A single pointer would let the program index into
+// the string table as if it were one string, so the second parameter is checked
+// rather than being passed whatever the register holds.
+fn main(argc: i32, argv: *u8) i32 {
+    return argc;
+}
