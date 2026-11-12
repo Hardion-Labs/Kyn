@@ -10,6 +10,7 @@ test {
     _ = @import("lexer.zig");
     _ = @import("ast.zig");
     _ = @import("parser.zig");
+    _ = @import("target.zig");
     _ = @import("types.zig");
     _ = @import("sema.zig");
     _ = @import("analyzer.zig");

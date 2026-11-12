@@ -4,6 +4,7 @@ const std = @import("std");
 const source = @import("source.zig");
 const diagnostics = @import("diagnostics.zig");
 const driver = @import("driver.zig");
+const target_mod = @import("target.zig");
 const ast = @import("ast.zig");
 
 const version = "0.1.0-alpha.4";
@@ -39,6 +40,8 @@ const usage_text =
     \\  -o <path>          Output path
     \\  --profile <name>   debug | safe | release | fast (default: safe)
     \\  --cc <path>        C compiler used for assembly/linking (default: clang)
+    \\  --target <triple>  Code-generation target, e.g. x86_64-linux-gnu (default: native).
+    \\                     Only x86_64 Linux lowers aggregate C ABI boundaries.
     \\  --keep-ir          Keep the generated .ll file
     \\  --                 Pass the remaining arguments to the program (run)
     \\  -h, --help         Show this help
@@ -52,6 +55,7 @@ const Options = struct {
     output: ?[]const u8 = null,
     profile: driver.Profile = .safe,
     cc: []const u8 = "clang",
+    target: ?[]const u8 = null,
     keep_ir: bool = false,
     program_args: []const []const u8 = &.{},
 };
@@ -93,12 +97,36 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     }
 
+    // Resolve the target once, so an unusable triple is a clean CLI error
+    // rather than a confusing failure from the external assembler.
+    const target = blk: {
+        if (opts.target) |text| {
+            break :blk target_mod.parse(arena, text) catch |err| {
+                var err_buffer: [512]u8 = undefined;
+                var err_writer: std.Io.File.Writer = .init(.stderr(), io, &err_buffer);
+                switch (err) {
+                    error.InvalidTarget => try err_writer.interface.print("kyn: unknown target '{s}'; expected a triple such as x86_64-linux-gnu\n", .{text}),
+                    else => try err_writer.interface.print("kyn: cannot use target '{s}': {s}\n", .{ text, @errorName(err) }),
+                }
+                try err_writer.interface.flush();
+                return 2;
+            };
+        }
+        break :blk target_mod.native(arena) catch |err| {
+            var err_buffer: [512]u8 = undefined;
+            var err_writer: std.Io.File.Writer = .init(.stderr(), io, &err_buffer);
+            try err_writer.interface.print("kyn: cannot determine the native target: {s}\n", .{@errorName(err)});
+            try err_writer.interface.flush();
+            return 2;
+        };
+    };
+
     const path = opts.file.?;
     var src: source.Source = undefined;
     var reporter: diagnostics.Reporter = undefined;
     var program: ?*ast.Program = null;
 
-    const result = driver.compile(arena, io, path, opts.profile, &src, &reporter, &program) catch |err| {
+    const result = driver.compile(arena, io, path, opts.profile, target, &src, &reporter, &program) catch |err| {
         try out.print("kyn: internal compiler error: {s}\n", .{@errorName(err)});
         try out.flush();
         return 70;
@@ -134,6 +162,11 @@ pub fn main(init: std.process.Init) !u8 {
 
     var clang_args: std.ArrayList([]const u8) = .empty;
     try clang_args.append(arena, ll_target);
+    // The module carries no triple or datalayout: the assembler overrides both
+    // from its own `-target`, so this flag is what actually selects the
+    // machine code. It is passed for every command, including the native one,
+    // so the code path is identical whatever the target is.
+    try clang_args.appendSlice(arena, &.{ "-target", target.triple });
     switch (opts.command) {
         .emit_obj => {
             const obj_path = opts.output orelse try std.fmt.allocPrint(arena, "{s}.o", .{stem});
@@ -202,6 +235,12 @@ fn parseArgs(arena: std.mem.Allocator, args: []const []const u8) !?ParseResult {
             index += 1;
             if (index >= args.len) return error.MissingCompiler;
             options.cc = args[index];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--target")) {
+            index += 1;
+            if (index >= args.len) return error.MissingTarget;
+            options.target = args[index];
             continue;
         }
         if (std.mem.eql(u8, arg, "--keep-ir")) {

@@ -11,6 +11,22 @@ integer members, and prebuilt release installers.
 
 ### Added
 
+- `kync --target <triple>` selects the code-generation target for `emit-obj`,
+  `build` and `run`. The triple uses Zig's spelling (`x86_64-linux-gnu`); the
+  vendor-qualified spelling Clang and GCC print is accepted and normalised, and
+  an unparseable triple is a `kyn: unknown target` error with exit status 2.
+  The flag is passed to the external assembler, because the emitted module
+  carries no triple or datalayout and an assembler overrides both silently from
+  its own `-target` — so the IR cannot direct code generation. The same IR
+  therefore yields an `ELF64` `x86-64` or `AArch64` object depending only on
+  that flag, which the integration suite verifies by reading `e_machine` from
+  the produced object.
+- A target without the System V aggregate ABI rejects an aggregate crossing
+  `extern`/`export` with `E0473` instead of lowering the host convention for
+  another machine. Scalar boundaries and non-`extern` code cross-compile
+  unchanged. The backend and the type checker read the target from one place:
+  the previous build-target constant was removed, because a second source of
+  truth would let a cross-compilation lower the wrong convention silently.
 - C ABI support on `x86_64` Linux for a struct whose only member is a
   sixteen-byte integer. `{ a: i128 }` fills both eightbytes, so the System V
   leaves make it one 16-byte INTEGER and it now travels as `i128`, matching

@@ -1650,5 +1650,72 @@ branch history; this increment does not redo them.
   cross-compilation targets and the remaining `SSE`-class fallbacks per the
   roadmap.
 
+## 39. Compilation-target increment (in progress on `arena/679dcf12-kyn`)
+
+- Scope: the roadmap asked to *specify cross-compilation targets* before
+  exposing further C ABI layouts. `v0.1.0-alpha.4` was already published, so the
+  uploader blocker on its archives is not actionable from here (see §38): the
+  sandbox still cannot reach `uploads.github.com` (`HTTP 000`).
+- Measurement first, because the design depended on it. The emitted module
+  carries **no** `target triple` and **no** `target datalayout`, and an
+  assembler silently overrides both from its own `-target`: a deliberately
+  big-endian `datalayout` written into a module was discarded and the output
+  came back little-endian `x86_64`. So a triple in the IR cannot direct code
+  generation. What does is the `-target` the external assembler receives — the
+  same IR compiled with `-target aarch64-linux-gnu` produced a valid
+  `ELF64`/`AArch64` object. This is why the design passes the flag through
+  instead of pretending the IR is authoritative, and why an earlier attempt to
+  fix a `clang` "overriding the module target triple" warning by writing the
+  triple into the module changed nothing.
+- Implementation: new `compiler/target.zig` holds `Target` (parsed query plus
+  the triple as written), `parse` (accepts Zig's spelling and normalises the
+  vendor-qualified `x86_64-unknown-linux-gnu` that `std.Target.Query.parse`
+  rejects as an unknown OS), `native`, `cpuArch`, `osTag` and
+  `supportsSystemVAbi`. `compiler/main.zig` gains `--target`, resolves it once,
+  reports an unusable triple as `kyn: unknown target ...` on **stderr** with
+  exit 2, and appends `-target <triple>` to every assembler invocation.
+- One source of truth: `aggregateBoundaryClass` (which read the *build* target
+  through `builtin`) was removed and replaced by
+  `aggregateBoundaryClassFor(ty, systemv)`. `Sema.target_supports_c_abi` and
+  `Lowering.target_supports_c_abi` are set from the resolved target by the
+  driver. Keeping both would have let a cross-compilation lower the host
+  convention silently — exactly the failure this increment exists to prevent.
+- Contract: a target that is not `x86_64` Linux rejects an aggregate crossing
+  `extern`/`export` with `E0473`; scalar boundaries and all non-`extern` code
+  cross-compile unchanged. Verified by a discriminating probe (one `{ i32, i32 }`
+  pair: 2 diagnostics for `aarch64-linux-gnu`, 0 for `x86_64-linux-gnu`).
+- Tests: four unit tests in `target.zig` (spellings, the System V predicate
+  across five triples, rejection of unusable triples, native round-trip) —
+  unit total 79 → **83**. Five integration checks in a new "compilation targets"
+  section: cross-compiles to aarch64 (reads `e_machine` at ELF offset 18 for
+  `b700`), non-System V rejects, System V accepts the same boundary,
+  vendor-qualified spelling accepted, unknown target rejected. Integration
+  169 → **174**.
+- Mutation-checked, and the method note matters more than the result: the first
+  attempts appeared to pass while proving nothing, because the mutation left the
+  build **failing** (`unused function parameter`) and the previous binary
+  answered the probe. Always assert `zig build` returned 0 before believing a
+  mutation result. With a valid mutation (`_ = self;` and a hard-coded `true`),
+  the build succeeds and aarch64 starts accepting the boundary, so the
+  integration check fails as intended.
+- Docs: `abi.md` gains §8 "Compilation targets" (mechanism, spelling, the
+  single-source-of-truth rule, and the `E0473` contract) with the old list
+  renumbered to §9 and §1 noting the target restriction; `roadmap.md` replaces
+  the "specify cross-compilation targets" task with what is now implemented and
+  what is still unspecified (linking a cross-compiled executable needs a target
+  sysroot and linker; per-target ABI variants would be a new classifier);
+  `build-system.md` §7 clarifies that `kyn.build` itself has no per-target
+  setting; `CHANGELOG.md` under `[Unreleased]`.
+- Validation: `zig build` OK; `zig build test` **83/83**; integration **174/0**
+  in Debug and ReleaseSafe; `zig fmt --check` clean; `check_docs_links.py`
+  21 files; `check_diagnostic_docs.py` 127 codes; robustness corpus 902 clean.
+- Limitations: `run` with a cross target builds for another machine and cannot
+  execute locally, so `--target` mainly matters for `emit-obj` and `build`.
+  Linking a cross-compiled executable (as opposed to an object) is not
+  implemented. `kyn-build` has no per-target setting.
+- Next task: the remaining `SSE`/`SSEUP` aggregate classes (for example
+  `{ f32, f32, f32, f32, f32 }`, which stays `sret`), then per-target ABI
+  variants if a second C ABI is ever specified.
+
 Explicit module re-export syntax remains a language-design decision, not an
 assumed feature.

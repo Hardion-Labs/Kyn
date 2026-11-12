@@ -246,7 +246,10 @@ kyn-build              # build a Kyn/C/Zig project described by kyn.build
 
 - variables, expressions, conditionals or templating in `kyn.build`;
 - multiple build files, includes or target inheritance;
-- cross-compilation flags beyond passing a custom `--cc`/`--zig`;
+- cross-compilation flags in `kyn.build` itself. `kync --target <triple>`
+  selects the code-generation target, but the build file has no per-target
+  setting yet, so a cross build has to go through `kync` directly or through a
+  custom `--cc`/`--zig`;
 - parallel builds and partial-target dependency graphs;
 - header dependency scanning;
 - install rules, packaging, test targets or run targets;

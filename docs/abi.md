@@ -98,6 +98,11 @@ extern fn free(ptr: *u8);
   `{ i32, double }`. Larger supported structs use hidden `byval`/`sret`
   pointers. Slice boundaries match a C struct `{ T *ptr; size_t len; }`.
 - Only the x86_64 System V calling convention is supported in v0.1.
+- The C aggregate ABI is defined for the `x86_64` Linux target only. Compiling
+  for another target with `--target` is supported, but an aggregate passing
+  through `extern`/`export` is then rejected with `E0473` instead of being
+  lowered with the host convention. Scalar boundaries and all non-`extern`
+  code cross-compile unchanged.
 - Variadic declarations are not supported yet. Declare a fixed prototype that
   matches the arguments you actually pass, or write a C wrapper.
 
@@ -325,7 +330,39 @@ nm hello.o
 clang hello.o -o hello
 ```
 
-## 8. Not supported in v0.1
+## 8. Compilation targets
+
+`kync --target <triple>` selects the machine code produced by `emit-obj`,
+`build` and `run`. The triple uses Zig's spelling (`x86_64-linux-gnu`,
+`aarch64-linux-gnu`, `riscv64-linux-gnu`); the vendor-qualified spelling Clang
+and GCC print (`x86_64-unknown-linux-gnu`) is accepted and normalised, and an
+unparseable triple is a `kyn: unknown target` error with exit status 2 rather
+than a confusing failure from the assembler.
+
+The mechanism is worth stating because it constrains the design. The emitted
+module carries **no `target triple` and no `target datalayout`**: an assembler
+consuming such a module overrides the layout from its own `-target`, and it does
+so silently — a deliberately big-endian `datalayout` written into the module is
+discarded. So the IR cannot direct code generation, and the compiler does not
+pretend otherwise: `--target` is passed to the external assembler, which is what
+actually selects the machine code. One IR therefore compiles to `ELF64`
+`x86-64` or `ELF64` `AArch64` objects depending only on that flag, which the
+integration suite verifies by reading `e_machine` from the produced object.
+
+The target is resolved once, validated, and then carried explicitly to the two
+consumers that need it:
+
+- the type checker, which decides whether an aggregate has a C ABI at all
+  (see §1) — there is deliberately no code path that consults the *build*
+  target, because two sources of truth would let a cross-compilation lower the
+  host convention silently;
+- the external assembler, through `-target`.
+
+`run` with a cross target produces an object for another machine and is not
+executable locally; `--target` therefore mainly matters for `emit-obj` and
+`build`.
+
+## 9. Not supported in v0.1
 
 - variadic extern functions;
 - bare fixed-size array parameters and returns by value (C decays them to a

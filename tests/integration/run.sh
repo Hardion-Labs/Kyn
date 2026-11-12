@@ -224,6 +224,69 @@ else
     bad "emit-obj" "$(cat "$TMP/emit-obj.stderr")"
 fi
 
+echo "compilation targets"
+
+# The module carries no triple or datalayout, so the external assembler decides
+# the machine code from `-target`. These checks pin the observable consequences.
+target_obj="$TMP/target-aarch64.o"
+target_machine=""
+if "$KYNC" emit-obj "$ROOT/tests/integration/cases/hello.kyn" --target aarch64-linux-gnu \
+    -o "$target_obj" >/dev/null 2>"$TMP/target-aarch64.stderr" && [ -s "$target_obj" ]; then
+    # e_machine lives at offset 18 of an ELF64 header: 0x00b7 is AArch64.
+    target_machine=$(od -An -tx1 -j18 -N2 "$target_obj" | tr -d ' \n')
+fi
+if [ "$target_machine" = "b700" ]; then
+    ok "cross-compiles to aarch64"
+else
+    bad "cross-compiles to aarch64" "$(cat "$TMP/target-aarch64.stderr")"
+fi
+
+# A target that is not x86_64 Linux has no System V aggregate ABI here, so an
+# aggregate across the C boundary must be diagnosed instead of lowered wrongly.
+# The probe uses one shape the x86_64 classifier accepts, so the only variable
+# is the target: rejected here, accepted there.
+target_probe="$TMP/target-probe.kyn"
+cat >"$target_probe" <<'EOF'
+struct Pair { a: i32, b: i32 }
+extern fn take(v: Pair) Pair;
+fn main() i32 { return 0; }
+EOF
+
+target_reject="$TMP/target-reject.stderr"
+status=0
+"$KYNC" check "$target_probe" --target aarch64-linux-gnu >/dev/null 2>"$target_reject" || status=$?
+if [ "$status" -ne 0 ] && grep -qF "error[E0473]" "$target_reject"; then
+    ok "non-SystemV target rejects aggregate C boundaries"
+else
+    bad "non-SystemV target rejects aggregate C boundaries" "$(cat "$target_reject")"
+fi
+
+status=0
+"$KYNC" check "$target_probe" --target x86_64-linux-gnu \
+    >/dev/null 2>"$TMP/target-accept.stderr" || status=$?
+if [ "$status" -eq 0 ]; then
+    ok "System V target accepts the same boundary"
+else
+    bad "System V target accepts the same boundary" "$(cat "$TMP/target-accept.stderr")"
+fi
+
+scalar_obj="$TMP/target-scalar-aarch64.o"
+if "$KYNC" emit-obj "$ROOT/tests/integration/cases/hello.kyn" --target x86_64-unknown-linux-gnu \
+    -o "$scalar_obj" >/dev/null 2>"$TMP/target-vendor.stderr" && [ -s "$scalar_obj" ]; then
+    ok "accepts the vendor-qualified spelling"
+else
+    bad "accepts the vendor-qualified spelling" "$(cat "$TMP/target-vendor.stderr")"
+fi
+
+status=0
+"$KYNC" emit-obj "$ROOT/tests/integration/cases/hello.kyn" --target bogus-linux-gnu \
+    -o "$TMP/target-bogus.o" >"$TMP/target-bogus.stdout" 2>"$TMP/target-bogus.stderr" || status=$?
+if [ "$status" -eq 2 ] && grep -qF "unknown target" "$TMP/target-bogus.stderr"; then
+    ok "rejects an unknown target"
+else
+    bad "rejects an unknown target" "$(cat "$TMP/target-bogus.stderr")"
+fi
+
 echo "interop (Kyn + C + Zig)"
 
 fixture_dir="$ROOT/tests/integration/abi"
