@@ -39,6 +39,14 @@ Exported globals, and two constant-representation fixes.
 
 ### Fixed
 
+- `kyn-build` now hashes the C headers a target includes, transitively. Editing
+  a header used to leave the previous object in place and print `up to date`, so
+  the build reported success while the binary still ran the old code — the
+  documented caveat is gone rather than restated. Quoted includes are resolved
+  the way the C compiler resolves them (the including file's directory first,
+  then `include_dirs`); angle-bracket includes name system headers and are not
+  followed. `examples/` and existing projects rebuild only when something they
+  actually include changes.
 - A struct initializer naming the same field twice is now `E0404`. The
   documentation has always required "every field specified exactly once", but
   the type checker accepted the repetition and let the last value win, so

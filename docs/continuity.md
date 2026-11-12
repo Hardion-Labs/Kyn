@@ -20,9 +20,13 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§46):** a struct initializer that
-  repeats a field is now `E0404` — the documented "specified exactly once" rule
-  was unenforced and the last value silently won.
+- **Unreleased work on the current branch (§47):** `kyn-build` now hashes the
+  transitive quoted C headers of a target, so editing a header rebuilds instead
+  of silently leaving a stale binary (a documented caveat that was a
+  correctness bug).
+- **Merged (`8028fb6` .. `c87a197`, §46):** a struct initializer that repeats a
+  field is now `E0404` — the documented "specified exactly once" rule was
+  unenforced and the last value silently won.
 - **Merged (`7ddd626` .. `f50733a`, §45):** the `argc`/`argv` entry point — already delivered correctly by the C ABI but undocumented, untested,
   and unconstrained: any `main` signature passed the type checker. Now
   documented, covered by a fixture with program arguments, and checked
@@ -2267,3 +2271,66 @@ assumed feature.
 - Contract kept: no test was modified to pass; the new behaviour is pinned by
   one unit test and one fixture, and the sweep's negative results are recorded
   above so the next session does not repeat them.
+
+## 47. `kyn-build` hashes transitive C headers (on `arena/a236b746-kyn`)
+
+- Base: `main` at `c87a197`; `v0.1.0-alpha.5` remains the published baseline.
+  This increment follows the direction §46 recorded (`kyn-build` target graphs),
+  narrowed to the one item there that was a **correctness** problem rather than
+  a missing feature.
+- Swept first, and cleared: `sharedlib` targets produce a loadable `.so` whose
+  exported symbol C can resolve and call (checked by linking a C program against
+  it with `-rpath`), multiple targets in one build file, `--target` selection
+  skipping the others, `--clean`, `--force`, and selective invalidation (edit
+  one target's source, only that target rebuilds). Build-file errors exit 2 and
+  compile failures exit 3.
+- **Defect found and fixed:** editing a C header did not invalidate the target.
+  The digest covered `c_sources` and `include_dirs` but never the headers those
+  sources include, so `kyn-build` printed `up to date` and left the previous
+  object linked — a build that reports success while the binary runs old code.
+  `docs/build-system.md` listed this as a known limitation, but a stale binary is
+  a correctness failure, not a performance trade-off, so it was fixed rather
+  than restated.
+- Design: `hashCIncludes` mirrors the existing `hashKynImports` — a `visited`
+  set of resolved absolute paths for once-only traversal, a `\x00`-separated
+  marker before each entry so `a.h`/`ab.h` cannot collide, and recursion into
+  every newly seen header. Resolution matches the C compiler's search order for
+  quoted includes: the including file's directory first, then the target's
+  `include_dirs`. Only `"..."` is followed; an angle-bracket include names a
+  system header, which belongs to the toolchain whose version is not part of the
+  digest either. A header named only inside a `//` comment or a string literal is
+  not followed, because `parseQuotedInclude` requires `#` as the first
+  non-whitespace byte — the same rule the preprocessor applies.
+- `parseQuotedInclude` accepts `#include` and `#  include` (the preprocessor
+  accepts both) and rejects an empty name. A missing header is left to the
+  compiler's diagnostic instead of being reported by the digest walk, so a build
+  that would fail anyway does not fail earlier and differently.
+- Files changed: `build-system/main.zig` (digest hook, `hashCIncludes`,
+  `parseQuotedInclude`, `resolveInclude`), `tests/integration/run.sh` (new
+  `transitive C header invalidates build cache` check: two-level quoted include,
+  edit the inner header, expect a rebuild and the new value, then an idle run
+  expecting `up to date`), docs (`build-system.md` §3.1 step and the limitation
+  removed, `roadmap.md`, `README.md`, `CHANGELOG.md`).
+- The new integration check was **proven to measure the fix**: reverting only
+  `build-system/main.zig` (keeping the test) makes it FAIL, and restoring the fix
+  makes it pass. That negative control is why the check is trusted.
+- Validation from a clean cache: `zig build` OK; `zig build test` **100/100**
+  (unchanged — the build tool has no unit-test harness of its own); integration
+  **197/0** in Debug and ReleaseSafe (196 → 197); `zig fmt --check` clean; docs
+  links 21; documented codes 131 (unchanged — no diagnostic was added);
+  robustness corpus 902 clean; versions consistent at `0.1.0-alpha.5`.
+  Adversarial include shapes were checked by hand: `#  include`, a commented-out
+  directive, and an `#include` inside a string literal neither crash nor
+  over-invalidate.
+- Remaining known cache limitations, documented and unchanged: the Kyn
+  compiler's own version is not in the digest (only its path); Zig's transitive
+  imports are not hashed; builds are sequential; there is no dependency graph
+  between targets.
+- Not done, and not claimed: no sanitizer gate exists in this repo;
+  `v0.1.0-alpha.5` release assets remain unattached (§38/§42); the Windows
+  archive path was not re-exercised.
+- Next task: the callee side of variadics (`va_list` + an exported variadic), or
+  the still-unscheduled type-system decision on unions/bitfields/packed structs.
+- Contract kept: no test was modified to pass; the one existing assertion about
+  headers was deleted from the docs because the behaviour now matches the
+  stronger statement.
