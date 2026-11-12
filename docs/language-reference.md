@@ -708,9 +708,35 @@ fn main() i32 {
 }
 ```
 
-The return value becomes the process exit status. `fn main()` without a return
-type is accepted by the language but will not match the C `main` signature
-expected by the linker; use `i32` for executables.
+The return value becomes the process exit status.
+
+Because `main` is the function the C runtime calls, its signature is checked
+rather than assumed — the loader passes `argc` and the argument vector, and reads
+an `int` back, so a shape it cannot satisfy is `E0477`:
+
+```kyn
+fn main() i32 { ... }
+fn main(argc: i32) i32 { ... }
+fn main(argc: i32, argv: **u8) i32 { ... }
+fn main(argc: i32, argv: **const u8) i32 { ... }
+```
+
+- The return type is `i32`. A `f64` or `void` would make the exit status
+  meaningless (`E0477`).
+- `argc` is `i32`: the C `int` the loader passes. `u64` and other widths are
+  rejected rather than read from the wrong half of a register.
+- `argv` is `**u8` — the C `char **` — or `**const u8` when the program does not
+  write through it. `argv[argc]` is the null terminator, so the vector is
+  readable up to and including it.
+- At most two parameters: a third would read a register the loader never set.
+- Only the *unmarked* `main` of the root module is the entry point. An
+  `export fn main` or an `extern fn main` is an ordinary function with C
+  linkage, and a library target may expose a `main` of any shape; neither is
+  checked, because neither is what the loader calls.
+
+Command-line arguments reach a `run` invocation after `--`, and the integration
+suite covers them with a `.args` fixture file (one argument per line, empty lines
+meaningful).
 
 ## 7. Unsupported constructs
 

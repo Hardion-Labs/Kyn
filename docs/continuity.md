@@ -20,7 +20,12 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§44):** raw pointer / integer /
+- **Unreleased work on the current branch (§45):** the `argc`/`argv` entry
+  point — already delivered correctly by the C ABI but undocumented, untested,
+  and unconstrained: any `main` signature passed the type checker. Now
+  documented, covered by a fixture with program arguments, and checked
+  (`E0477`).
+- **Merged (`d2a20d2` .. `eee8a50`, §44):** raw pointer / integer /
   function-value casts in both directions, and the `inttoptr` lowering they
   needed (an integer-to-pointer cast was documented and accepted but reached the
   back end as an internal error).
@@ -2130,3 +2135,72 @@ assumed feature.
   the still-unscheduled type-system decision on unions/bitfields/packed structs.
 - Contract kept: no test was modified to pass; the defect fix and both new cast
   directions are pinned by fixtures, so a regression reopens a failure.
+
+## 45. The `argc`/`argv` entry point, and its checked signature (on `arena/0c7eb404-kyn`)
+
+- Base: `main` at `eee8a50`; `v0.1.0-alpha.5` remains the published baseline.
+  §9 of `abi.md` now lists only design decisions (unions, bitfields, packed
+  structs, `va_list`, non-System-V conventions) plus two documented ceilings
+  (bare array parameters, C-only runtime support), so this increment was chosen
+  from probing documented contracts rather than from that list.
+- How it was found, which is the reusable part: the remaining work is not
+  visible as a TODO, so the contracts in the docs and the actual behaviour were
+  compared by probe. Scoping, block shadowing, same-scope duplicate locals,
+  loop `break`/`continue`, nested loops, aggregate copy semantics with nested
+  aliasing through `*T`, large-aggregate returns, `getenv`, and exit-status
+  propagation all behaved exactly as documented. The entry point did not.
+- Two findings, one of them a real defect:
+  1. `argc`/`argv` already work — `fn main(argc: i32, argv: **u8) i32` receives
+     the vector from the C runtime, `argv[argc] == null`, empty arguments and
+     `argv[0]` mutation all behave correctly — but **nothing documented it and
+     nothing tested it**, so it was an undocumented capability with no contract.
+  2. **Any `main` signature was accepted.** `fn main() f64`, `fn main(x: f64)`,
+     `fn main(argc: i32, argv: *u8)`, `fn main(argc: i32, argv: **u8, envp:
+     **u8)` and `fn main() void` all passed the type checker and then linked.
+     The language reference even said a return-type-less `main` "is accepted by
+     the language but will not match the C `main` signature expected by the
+     linker" — the consequence was documented instead of diagnosed, which is
+     the kind of silent ABI mismatch this compiler diagnoses everywhere else.
+- Design: `main` is checked where its signature is resolved (`sema.
+  resolveSignature` → `sema.checkEntryPoint`), against what the C runtime can
+  actually pass and read: `i32` return, at most `argc: i32` and `argv: **u8`
+  (or `**const u8`). Rejections are `E0477`. Deliberately *not* checked: an
+  `extern fn main` (a C declaration, not a definition), an `export fn main` and
+  a non-root module's `main` — none of them is what the loader calls, and a
+  library target may legitimately expose a `main` of another shape. `argc: u64`
+  is rejected rather than read from the wrong half of a register, and a third
+  parameter is rejected rather than reading a register the loader never set.
+- `isArgvType` states the `**u8` shape once, next to the other type predicates,
+  instead of open-coding a two-level pointer walk at the check site.
+- Test harness: `tests/integration/run.sh` gained a minimal `.args` convention —
+  a file beside the case, one argument per line, because the suite had no way to
+  pass program arguments at all. Empty lines are meaningful (an empty argument),
+  a missing file means no arguments, and the `--` separator is only inserted
+  when there are arguments, so every existing case is byte-for-byte unaffected.
+- Files changed: `compiler/sema.zig` (entry-point check, `isArgvType`, one unit
+  test), `tests/integration/run.sh` (`.args`), docs
+  (`language-reference.md` §6 rewritten as a contract, `abi.md` §2 note,
+  `diagnostics.md` `E0477`, `roadmap.md`, `README.md`, `CHANGELOG.md`), fixtures
+  `cases/argv.{kyn,args,exit}` (argc, the null terminator, two argument lengths,
+  one of them empty) and `errors/main_{bad_return,bad_argv,too_many_params}
+  .{kyn,code}`.
+- Validation from a clean cache: `zig build` OK; `zig build test` **99/99**
+  (98 → 99); integration **195/0** in Debug and ReleaseSafe (191 → 195: one
+  positive case plus three negative ones); `zig fmt --check` clean; docs links
+  21; documented codes **131** (130 → 131, `E0477`); robustness corpus 902
+  clean; versions consistent at `0.1.0-alpha.5`. The four accepted signatures in
+  the rewritten documentation section were each compiled, so the doc matches the
+  code; the `.args` path was exercised by `run.sh` (`ok argv`) and by hand with
+  an empty argument.
+- Behaviour change worth naming: `fn main()` without a return type is now
+  `E0477` instead of being accepted with a documented caveat. No fixture,
+  example or test depended on the old permissiveness (the two `diagnostics.zig`
+  tests that use such a string only render diagnostics and never compile it).
+- Not done, and not claimed: no sanitizer gate exists in this repo; `envp` is
+  not passed to `main` (C's third parameter) — a program that needs the
+  environment calls `getenv`, which works; the Windows archive path was not
+  re-exercised; `v0.1.0-alpha.5` assets remain unattached (§38/§42).
+- Next task: the callee side of variadics (`va_list` + an exported variadic), or
+  the still-unscheduled type-system decision on unions/bitfields/packed structs.
+- Contract kept: no test was modified to pass; the new behaviour is pinned by
+  one unit test, one positive fixture and three negative ones.
