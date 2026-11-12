@@ -9,6 +9,9 @@ is selected. Milestones below are directions, not release promises.
 
 ## After `v0.1.0-alpha.5` — on `main`, unreleased
 
+- `kyn-build` hashes transitive quoted C headers, so editing a header rebuilds
+  instead of silently leaving a stale binary.
+
 - A struct initializer that repeats a field is `E0404`; the documented "exactly
   once" rule was previously unenforced and the last value won.
 

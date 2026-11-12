@@ -206,6 +206,14 @@ fn buildTarget(
     for (target.c_sources.items) |source| {
         hasher.update(source);
         try hashFile(arena, io, &hasher, project_dir, source);
+        // A header is an input too: editing one used to leave the previous
+        // object in place and report "up to date", which is a stale binary
+        // rather than a slow build. Resolved the way the C compiler resolves
+        // it — quoted includes relative to the including file first, then the
+        // target's include_dirs — so the digest follows the real dependency,
+        // not a guess at it.
+        var includes = std.StringHashMap(void).init(arena);
+        try hashCIncludes(arena, io, &hasher, project_dir, try std.fs.path.resolve(arena, &.{ project_dir, source }), target.include_dirs.items, &includes);
     }
     for (target.zig_sources.items) |source| {
         hasher.update(source);
@@ -423,6 +431,73 @@ fn hashKynImports(
         hasher.update(imported);
         try hashKynImports(arena, io, hasher, imported, visited, true);
     }
+}
+
+/// Reads `#include` directives out of a C source or header and hashes every
+/// header reachable from it, transitively. Only the `"..."` form is followed:
+/// an angle-bracket include names a system header, which belongs to the
+/// toolchain rather than to the project.
+fn hashCIncludes(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    hasher: *std.crypto.hash.sha2.Sha256,
+    project_dir: []const u8,
+    path: []const u8,
+    search_dirs: []const []const u8,
+    visited: *std.StringHashMap(void),
+) !void {
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(64 * 1024 * 1024)) catch |err| {
+        // A missing header is the compiler's diagnostic to report, not ours: a
+        // build that would fail anyway must not fail earlier and differently.
+        std.debug.print("kyn-build: cannot read C include '{s}': {s}\n", .{ path, @errorName(err) });
+        return error.FileNotFound;
+    };
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        const include = parseQuotedInclude(line) orelse continue;
+        const resolved = try resolveInclude(arena, io, project_dir, path, include, search_dirs);
+        if (visited.contains(resolved)) continue;
+        try visited.put(resolved, {});
+        hasher.update("CInclude\x00");
+        hasher.update(resolved);
+        try hashFile(arena, io, hasher, ".", resolved);
+        try hashCIncludes(arena, io, hasher, project_dir, resolved, search_dirs, visited);
+    }
+}
+
+/// Extracts the header name from a `#include "..."` line, or null for any other
+/// line. Leading whitespace and `#  include` are both accepted, as the
+/// preprocessor accepts them.
+fn parseQuotedInclude(line: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trimStart(u8, line, " \t");
+    if (trimmed.len == 0 or trimmed[0] != '#') return null;
+    const rest = std.mem.trimStart(u8, trimmed[1..], " \t");
+    if (!std.mem.startsWith(u8, rest, "include")) return null;
+    const after = std.mem.trimStart(u8, rest["include".len..], " \t");
+    if (after.len < 2 or after[0] != '"') return null;
+    const end = std.mem.indexOfScalar(u8, after[1..], '"') orelse return null;
+    if (end == 0) return null;
+    return after[1 .. 1 + end];
+}
+
+/// The first existing candidate among the including file's own directory and
+/// the target's `include_dirs`, matching the compiler's search order.
+fn resolveInclude(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    project_dir: []const u8,
+    including_path: []const u8,
+    include: []const u8,
+    search_dirs: []const []const u8,
+) ![]const u8 {
+    const including_dir = std.fs.path.dirname(including_path) orelse project_dir;
+    const first = try std.fs.path.resolve(arena, &.{ including_dir, include });
+    if (fileExists(io, first)) return first;
+    for (search_dirs) |dir| {
+        const candidate = try std.fs.path.resolve(arena, &.{ project_dir, dir, include });
+        if (fileExists(io, candidate)) return candidate;
+    }
+    return first;
 }
 
 fn fileExists(io: std.Io, path: []const u8) bool {

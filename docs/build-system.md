@@ -115,11 +115,13 @@ For each selected target:
    - profile;
    - each Kyn/C/Zig source path and its full content;
    - each transitive `.kyn` import path and full content;
+   - each transitive quoted C header reachable from the C sources;
    - `cflags`, `include_dirs`, `libs`, `lib_dirs`;
    - the `kync`, `cc` and `zig` executable paths.
 2. Compare the digest with `build/<target>/.kyn-stamp`. If it matches and the
    output exists, print `up to date` and skip the target. `--force` disables
-   this.
+   this. The digest covers the transitive `.kyn` imports and the transitive
+   quoted C headers as well, so a change to either rebuilds.
 3. Compile Kyn sources with `kync emit-obj` into `build/<target>/kyn-<n>.o`.
 4. Compile C sources with `<cc> -c ... -fPIC -fno-strict-aliasing` plus the
    profile flags and `-I` entries, into `build/<target>/c-<n>.o`.
@@ -165,10 +167,19 @@ The cache is content-based, not timestamp-based:
 - `--force` rebuilds regardless;
 - `--clean` deletes the entire `build/` directory before the build.
 
+The digest follows real dependencies, not just listed files:
+
+- every transitive `.kyn` import (resolved by parsing, not by guessing), and
+- every C header reachable from a `c_sources` file through `#include "..."`,
+  transitively, resolved the way the C compiler resolves it — the including
+  file's own directory first, then the target's `include_dirs`. Angle-bracket
+  includes name system headers and are not followed: they belong to the
+  toolchain, whose version is not part of the digest either.
+
+Editing any of those rebuilds the target; editing nothing keeps `up to date`.
+
 Limitations of the current cache:
 
-- C headers included by `c_sources` are **not** hashed. Editing a header does
-  not trigger a rebuild; use `--force` or touch/change a listed source.
 - The Kyn compiler's own version is not part of the digest, only its path.
 - Zig's transitive imports are not hashed; only listed `zig_sources`.
 - Builds are sequential; there is no parallel job scheduling.
