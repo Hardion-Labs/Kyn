@@ -225,6 +225,7 @@ pub const Lowering = struct {
             .params = params,
             .ret = ret_ty,
             .linkage = linkage,
+            .variadic = fd.is_variadic,
             .sret = ret_class.eql(.memory),
             .sret_type = sret_info,
         };
@@ -1210,6 +1211,20 @@ pub const Lowering = struct {
         return result;
     }
 
+    /// Lowers a call argument and converts it to the type the call passes. A
+    /// variadic argument is already the promoted value of its expression, so
+    /// only a genuine representation change emits a conversion.
+    fn lowerArgument(self: *Lowering, expr: *ast.Expr, from: *types.Type, to: *types.Type) Error!ir.Value {
+        const value = try self.lowerExpr(expr);
+        if (types.Type.eql(from, to)) return value;
+        if (from.* == .invalid or to.* == .invalid) return value;
+        if (isSameRepresentation(from, to)) return value;
+        const kind = castKind(from, to) orelse return value;
+        const dst = try self.reg(to);
+        try self.emit(.{ .cast = .{ .dst = dst, .kind = kind, .from = from, .to = to, .value = value } });
+        return .{ .reg = dst };
+    }
+
     fn lowerCall(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!ir.Value {
         const callee_sym = switch (call.callee.kind) {
             .ident => |ident| ident.sym,
@@ -1262,12 +1277,18 @@ pub const Lowering = struct {
             try byval_list.append(self.allocator, null);
         }
 
-        for (call.args) |arg| {
-            const ty = arg.ty orelse try self.simpleType(.invalid);
+        for (call.args, 0..) |arg, arg_index| {
+            // The type the argument is passed as: the declared parameter type for
+            // a fixed parameter, the promoted type for a variadic one. Lowering
+            // the expression and then converting to that type keeps the C
+            // default argument promotions in one place (the analyzer) while the
+            // emitted value always matches the type the call site declares.
+            const expressed = arg.ty orelse try self.simpleType(.invalid);
+            const ty = if (arg_index < call.arg_types.len) call.arg_types[arg_index] else expressed;
             const class_tag = self.aggregateBoundaryParam(ty);
             switch (class_tag) {
                 .none => {
-                    try args_list.append(self.allocator, try self.lowerExpr(arg));
+                    try args_list.append(self.allocator, try self.lowerArgument(arg, expressed, ty));
                     try types_list.append(self.allocator, ty);
                     try byval_list.append(self.allocator, null);
                 },
@@ -2178,6 +2199,13 @@ pub const Emitter = struct {
             if (function.linkage == .declaration) {
                 try writer.print("declare {s} @{s}(", .{ try self.typeString(function.ret), function.name });
                 try self.emitParameters(writer, function);
+                // The trailing marker is what makes the declaration variadic to
+                // LLVM; without it a call carrying extra arguments would not
+                // match this declaration.
+                if (function.variadic) {
+                    if (function.params.len > 0) try writer.writeAll(", ");
+                    try writer.writeAll("...");
+                }
                 try writer.writeAll(")\n");
             } else {
                 try self.emitFunction(writer, function);
@@ -2819,4 +2847,60 @@ test "lowering open-ended slices, slice.ptr and C ABI small global aggregates" {
     try testing.expect(std.mem.indexOf(u8, ll, ", align 8") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "@llvm.memcpy.p0.p0.i64") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "call i32 @take_small(i32 ") != null);
+}
+
+test "lowering declares a variadic extern and passes promoted arguments" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `flag` is a `bool` (one byte) and `ratio` an `f32`; both must reach the
+    // call as `i32` and `double`. A `bool` that stayed `i1` would leave the
+    // register half-defined, and an `f32` that stayed `float` would be read by
+    // `%f` as a double, so the emitted argument types are the contract.
+    const text =
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\fn main() i32 {
+        \\    let flag: bool = true;
+        \\    let ratio: f32 = 1.5;
+        \\    return printf("%d %f", flag, ratio);
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // Without the trailing marker LLVM rejects a call that carries more
+    // arguments than the declaration lists.
+    try testing.expect(std.mem.indexOf(u8, ll, "declare i32 @printf(ptr %arg100000, ...)") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "call i32 @printf(ptr ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, ", i32 ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, ", double ") != null);
+    // No half-width or half-filled argument survives to the call site.
+    try testing.expect(std.mem.indexOf(u8, ll, "call i32 @printf(ptr %t0, i1 ") == null);
+    try testing.expect(std.mem.indexOf(u8, ll, ", float ") == null);
 }

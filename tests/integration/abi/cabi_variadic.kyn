@@ -1,0 +1,33 @@
+// A variadic `extern` declaration passes its fixed parameters exactly as
+// declared and its trailing arguments through the C default promotions:
+// `i8` and `bool` widen to `i32`, `u8` widens to `u32`, `f32` widens to
+// `f64`, and `i64` and a pointer travel unchanged. The C side formats the same
+// arguments and compares the resulting strings, so the fixture fails if either
+// direction of the promotion disagrees.
+extern fn printf(format: *const u8, ...) i32;
+extern fn snprintf(buffer: *u8, size: u64, format: *const u8, ...) i32;
+extern fn c_format_expected() i32;
+extern fn c_verify_buffer(text: *const u8) i32;
+
+fn main() i32 {
+    let small: i8 = 5;
+    let byte: u8 = 250;
+    let flag: bool = true;
+    let ratio: f32 = 0.5;
+    let wide: i64 = 9000000000;
+    let text: *const u8 = "kyn";
+
+    let written: i32 = snprintf(&g_buffer[0], 64, "%d/%d/%d/%.1f/%ld/%s",
+        small, byte, flag, ratio, wide, text);
+    if (written != 26) { return 1; }
+    if (c_verify_buffer(&g_buffer[0]) != 11) { return 2; }
+    if (c_format_expected() != 0) { return 3; }
+
+    // Exactly the fixed parameters and nothing else is also a legal call.
+    let printed: i32 = printf("%s\n", &g_buffer[0]);
+    if (printed != 27) { return 4; }
+
+    return 12;
+}
+
+var g_buffer: [64]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];

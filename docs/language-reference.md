@@ -99,13 +99,15 @@ Supported escapes in strings and characters: `\n`, `\r`, `\t`, `\0`, `\\`,
 ### 1.7 Operators and punctuation
 
 ```
-( ) { } [ ] , ; : . -> @
+( ) { } [ ] , ; : . .. ... -> @
 + - * / % & | ^ ~ ! = == != < <= > >= << >>
 += -= *= /= %= &= |= ^= <<= >>=
 && ||
 ```
 
-`@` is lexed but has no grammar rule in v0.1.
+`..` is the range operator of a slice expression and `...` the variadic marker
+of an `extern` declaration; the three-dot form is its own token, never a `..`
+followed by a `.`. `@` is lexed but has no grammar rule in v0.1.
 
 ## 2. Types
 
@@ -281,6 +283,26 @@ export fn zig_mul(a: i32, b: i32) i32 {
 - `export fn` defines a function with external linkage under its Kyn name.
 - `fn main` also has external linkage, so the native linker can find it.
 - All other Kyn functions have internal linkage.
+
+An `extern` declaration may end its parameter list with `...`, which declares a
+C variadic function and lets a call pass extra arguments after the fixed ones:
+
+```kyn
+extern fn printf(format: *const u8, ...) i32;
+
+fn main() i32 {
+    let count: i32 = 3;
+    return printf("count=%d\n", count);
+}
+```
+
+At least one fixed parameter must precede `...`, and only `extern` may be
+variadic: a Kyn-defined function has a fixed signature, so a body or an
+`export` is rejected. The trailing arguments go through the C default argument
+promotions (`i8`/`bool`/`enum` → `i32`, `u8`/`u16` → `u32`, `f32` → `f64`;
+`i64`, `u64`, `f64` and pointers unchanged), and an aggregate, a slice or a
+bare `null` is rejected rather than passed in a form the callee would misread.
+See [the ABI guide](abi.md#variadic-declarations) for the full contract.
 
 ### 3.3 Structs
 
@@ -654,7 +676,8 @@ The following are rejected or simply not part of v0.1:
 - `defer`, `errdefer`, exceptions, closures, lambdas;
 - const-polymorphic slice constructors and additional slice ergonomics;
 - generics, traits, interfaces, operator overloading;
-- variadic functions and variadic `extern` declarations;
+- variadic Kyn functions (a variadic declaration must be `extern`; see
+  [the ABI guide](abi.md#variadic-declarations));
 - arrays as value parameters/returns; aggregates containing floating-point
   fields across `extern`/`export` boundaries;
 - indirect calls and first-class function values;

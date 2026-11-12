@@ -1,0 +1,4 @@
+extern fn printf(format: *const u8, ...) i32;
+fn main() i32 {
+    return printf("%p\n", null);
+}

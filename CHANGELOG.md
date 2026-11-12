@@ -27,6 +27,24 @@ integer members, and prebuilt release installers.
   unchanged. The backend and the type checker read the target from one place:
   the previous build-target constant was removed, because a second source of
   truth would let a cross-compilation lower the wrong convention silently.
+- Variadic `extern` declarations: `extern fn printf(format: *const u8, ...) i32;`
+  now parses, type-checks and links, so C functions with a trailing unspecified
+  argument list are callable from Kyn. The trailing arguments go through the C
+  default argument promotions — `i8`/`i16`/`bool`/`enum` → `i32`, `u8`/`u16` →
+  `u32`, `f32` → `f64`, with `i64`/`u64`/`f64`/pointers unchanged — and the call
+  passes exactly that promoted type, so `%f` reads the `double` it expects and a
+  narrow integer fills its register. The fixed parameters keep their declared
+  types and aggregate classification. An aggregate, a fixed array or a slice in
+  the variadic tail is rejected (`E0475`), as is a bare `null`, because none has
+  a default promotion and each would arrive in a form the callee never agreed
+  to; calling with only the fixed parameters remains legal. A variadic
+  declaration must be `extern` and must have at least one fixed parameter
+  (`E0474`), since a Kyn body and an `export` both have a fixed signature and
+  would have to receive an argument list of unknown shape. `...` is its own
+  token, so `..` ranges are unaffected. Integration fixture `cabi_variadic`
+  compares Kyn's formatting against C's own `snprintf` for the same arguments,
+  and the promotion guard is mutation-checked at the unit and integration level.
+
 - C ABI support on `x86_64` Linux for a struct whose only member is a
   sixteen-byte integer. `{ a: i128 }` fills both eightbytes, so the System V
   leaves make it one 16-byte INTEGER and it now travels as `i128`, matching

@@ -82,8 +82,13 @@ Milestones below are directions, not release promises.
 ## Next direction
 
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
-- Complete System V C ABI coercions for the remaining `SSE`/`SSEUP` aggregate
-  classes before exposing those layouts across `extern`/`export`.
+- Variadic `extern` declarations are implemented: `...` after at least one fixed
+  parameter, with the C default argument promotions applied to the trailing
+  arguments and aggregates, slices and bare `null` rejected. What remains
+  unaddressed is the *callee* side — defining a variadic function in Kyn for C
+  to call — together with `va_list`, which would need a language-level handle
+  and its own ABI type. Variadic Kyn functions and `export`ed variadics stay
+  rejected (`E0474`).
 - Cross-compilation targets are specified and implemented at the
   code-generation level: `kync --target <triple>` reaches the external
   assembler, which is what selects the machine code, and the type checker

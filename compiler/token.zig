@@ -67,6 +67,7 @@ pub const Kind = enum {
     colon,
     dot,
     dotdot,
+    ellipsis,
     arrow,
     at,
 
@@ -227,6 +228,7 @@ pub fn describe(kind: Kind) []const u8 {
         .colon => "':'",
         .dot => "'.'",
         .dotdot => "'..'",
+        .ellipsis => "'...'",
         .arrow => "'->'",
         .at => "'@'",
         .plus => "'+'",
