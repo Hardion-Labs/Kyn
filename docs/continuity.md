@@ -2326,11 +2326,18 @@ assumed feature.
   compiler's own version is not in the digest (only its path); Zig's transitive
   imports are not hashed; builds are sequential; there is no dependency graph
   between targets.
+- Git, final for this increment: implementation commit `dbe5f53` and record
+  `1d2ff00` on `arena/a236b746-kyn`, pushed before the turn ended; PR #41 → CI
+  green → merged as **`b3df054`**; `main` re-validated in a fresh clone of
+  `b3df054` (100/100 unit, 197/0 integration).
 - Not done, and not claimed: no sanitizer gate exists in this repo;
   `v0.1.0-alpha.5` release assets remain unattached (§38/§42); the Windows
   archive path was not re-exercised.
 - Next task: the callee side of variadics (`va_list` + an exported variadic), or
   the still-unscheduled type-system decision on unions/bitfields/packed structs.
+  Another `kyn-build` candidate is hashing Zig's transitive imports and folding
+  the compiler's version into the digest — both are performance/correctness
+  questions of a smaller order than the one fixed here.
 - Contract kept: no test was modified to pass; the one existing assertion about
   headers was deleted from the docs because the behaviour now matches the
   stronger statement.
