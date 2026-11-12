@@ -399,6 +399,49 @@ EOF
     else
         bad "transitive Kyn import invalidates build cache" "$(cat "$TMP/import-build-first.log" "$TMP/import-build-second.log")"
     fi
+
+    # A C header is an input like any other: editing one has to rebuild, or the
+    # build reports success while running the previous object.
+    header_project="$TMP/header-build"
+    mkdir -p "$header_project/src" "$header_project/inc"
+    cat >"$header_project/kyn.build" <<'EOF'
+project "header-cache"
+target "header-cache" {
+    kind: "exe"
+    sources: ["src/main.kyn"]
+    c_sources: ["src/value.c"]
+    include_dirs: ["inc"]
+}
+EOF
+    cat >"$header_project/src/main.kyn" <<'EOF'
+extern fn c_value() i32;
+fn main() i32 { return c_value(); }
+EOF
+    printf '#include "inner.h"\n#define OUTER INNER\n' >"$header_project/inc/outer.h"
+    printf '#define INNER 21\n' >"$header_project/inc/inner.h"
+    # Two levels of quoting: the source includes outer.h, which includes inner.h.
+    printf '#include "outer.h"\nint c_value(void) { return OUTER; }\n' >"$header_project/src/value.c"
+    status=0
+    "$KYNBUILD" --file "$header_project/kyn.build" --kync "$KYNC" >"$TMP/header-build-first.log" 2>&1 || status=$?
+    header_status=0
+    "$header_project/build/header-cache/header-cache" >/dev/null 2>&1 || header_status=$?
+    # Editing the transitively included header must invalidate the target.
+    printf '#define INNER 22\n' >"$header_project/inc/inner.h"
+    status_after_header=0
+    "$KYNBUILD" --file "$header_project/kyn.build" --kync "$KYNC" >"$TMP/header-build-second.log" 2>&1 || status_after_header=$?
+    header_status_after=0
+    "$header_project/build/header-cache/header-cache" >/dev/null 2>&1 || header_status_after=$?
+    # And a build with nothing changed must still be skipped.
+    status_idle=0
+    "$KYNBUILD" --file "$header_project/kyn.build" --kync "$KYNC" >"$TMP/header-build-third.log" 2>&1 || status_idle=$?
+    if [ "$status" -eq 0 ] && [ "$header_status" -eq 21 ] \
+        && [ "$status_after_header" -eq 0 ] && [ "$header_status_after" -eq 22 ] \
+        && grep -q "building" "$TMP/header-build-second.log" \
+        && [ "$status_idle" -eq 0 ] && grep -q "up to date" "$TMP/header-build-third.log"; then
+        ok "transitive C header invalidates build cache"
+    else
+        bad "transitive C header invalidates build cache" "$(cat "$TMP/header-build-first.log" "$TMP/header-build-second.log" "$TMP/header-build-third.log")"
+    fi
 else
     bad "kyn+c+zig build" "$(cat "$build_log")"
 fi
