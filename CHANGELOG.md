@@ -4,10 +4,10 @@ All notable changes to Kyn are documented here. The project uses semantic
 versioning with explicit pre-release identifiers. No source or ABI stability is
 promised between alpha releases.
 
-## [0.1.0-alpha.4] - 2026-11-10
+## [0.1.0-alpha.5] - 2026-11-12
 
-System V aggregate classification by scalar leaves, fixed-array and 16-byte
-integer members, and prebuilt release installers.
+Explicit code-generation targets, variadic `extern` declarations and
+first-class function values.
 
 ### Added
 
@@ -59,6 +59,21 @@ integer members, and prebuilt release installers.
   token, so `..` ranges are unaffected. Integration fixture `cabi_variadic`
   compares Kyn's formatting against C's own `snprintf` for the same arguments,
   and the promotion guard is mutation-checked at the unit and integration level.
+
+### Fixed
+
+- `CHANGELOG.md` recorded the three increments above under `[0.1.0-alpha.4]`,
+  a section that is already tagged and published. The tag predates them, so a
+  reader of the published release would have been told that `--target`,
+  variadic `extern` declarations and function values ship in a version that
+  does not contain them. They now live under the version that does.
+
+## [0.1.0-alpha.4] - 2026-11-10
+
+System V aggregate classification by scalar leaves, fixed-array and 16-byte
+integer members, and prebuilt release installers.
+
+### Added
 
 - C ABI support on `x86_64` Linux for a struct whose only member is a
   sixteen-byte integer. `{ a: i128 }` fills both eightbytes, so the System V

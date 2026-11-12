@@ -1,11 +1,23 @@
 # Kyn roadmap
 
-`v0.1.0-alpha.4` is the current principal release:
-https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4
+`v0.1.0-alpha.5` is the current principal release:
+https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.5
 
-Subsequent work builds from that published toolchain. No `alpha.5` or
-`beta.1` pre-release artifacts exist and no next version number is selected.
-Milestones below are directions, not release promises.
+`v0.1.0-alpha.4` remains published and untouched. Subsequent work builds from
+the `alpha.5` toolchain. No `beta.1` artifact exists and no next version number
+is selected. Milestones below are directions, not release promises.
+
+## v0.1.0-alpha.5 — published preview
+
+- Explicit code-generation targets: `kync --target <triple>` reaches the
+  external assembler, which is what selects the machine code, and a target
+  without the System V aggregate ABI refuses an aggregate boundary (`E0473`)
+  instead of lowering the host convention for another machine.
+- Variadic `extern` declarations, with the C default argument promotions applied
+  to the trailing arguments and aggregates, slices and bare `null` rejected
+  (`E0474`/`E0475`).
+- First-class function values (`fn(P) R`) and indirect calls, with a null-call
+  trap and signatures compared structurally in diagnostics.
 
 ## v0.1.0-alpha.2 — published preview
 

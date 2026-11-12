@@ -7,7 +7,7 @@ const driver = @import("driver.zig");
 const target_mod = @import("target.zig");
 const ast = @import("ast.zig");
 
-const version = "0.1.0-alpha.4";
+const version = "0.1.0-alpha.5";
 
 const Command = enum {
     check,

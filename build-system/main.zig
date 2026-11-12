@@ -23,7 +23,7 @@ const diagnostics_mod = compiler_frontend.diagnostics;
 const lexer_mod = compiler_frontend.lexer;
 const parser_mod = compiler_frontend.parser;
 
-const version = "0.1.0-alpha.4";
+const version = "0.1.0-alpha.5";
 
 const Kind = enum {
     exe,
