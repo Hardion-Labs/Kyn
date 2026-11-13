@@ -93,6 +93,12 @@ pub const StructDecl = struct {
     /// A `packed struct`/`packed union`: no padding between members and an
     /// alignment of 1, which is what makes it cross the C ABI by memory.
     is_packed: bool = false,
+    /// `align(N)`: the aggregate is at least `N`-aligned, and its size is rounded
+    /// up to a multiple of it. Zero means absent. It never *lowers* an alignment,
+    /// matching C's `aligned` attribute, and it wins over `packed` when the two
+    /// disagree because the maximum of the two requirements is what both the
+    /// measured layout and the emitted type use.
+    explicit_align: u32 = 0,
     ty: ?*Type = null,
     sym: ?*symbol.Symbol = null,
 };

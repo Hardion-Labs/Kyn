@@ -1,0 +1,51 @@
+// `align(N)` raises an aggregate's alignment and rounds its size up to a
+// multiple of it; it never lowers either, and it wins over `packed` because the
+// maximum of the two requirements is what both the layout and the emitted type
+// use. Each check is worth one; the expected exit is 8.
+align(16) struct Wide { c: u8 }
+align(2) struct Unchanged { c: u8, i: i32 }
+align(4) packed struct Both { c: u8, i: i32 }
+packed struct Tight { c: u8, i: i32 }
+
+fn main() i32 {
+    var score: i32 = 0;
+
+    var w: Wide = Wide { c: 3 };
+    if (w.c == 3) { score += 1; }
+
+    var u: Unchanged = Unchanged { c: 1, i: 2 };
+    if (u.c == 1 && u.i == 2) { score += 1; }
+
+    // `packed` removes the inter-member padding; `align(4)` still rounds the
+    // aggregate, so a 5-byte shape becomes 8 while `i` stays at byte 1.
+    var b: Both = Both { c: 4, i: 5 };
+    if (b.c == 4 && b.i == 5) { score += 1; }
+    var t: Tight = Tight { c: 6, i: 7 };
+    if (t.c == 6 && t.i == 7) { score += 1; }
+
+    // Two differently aligned locals must not disturb each other's contents.
+    w.c = 8;
+    if (w.c == 8 && u.i == 2) { score += 1; }
+
+    // An aligned aggregate nested in another keeps its own alignment.
+    var pair: Pair = Pair { first: w, second: 9 };
+    if (pair.first.c == 8 && pair.second == 9) { score += 1; }
+
+    // A union takes the same treatment: `align(16)` raises both its size and its
+    // alignment above what its widest member (`i32`) gives.
+    var s: Small = Small { i: 11 };
+    if (s.i == 11) { score += 1; }
+
+    // A global of an aligned type needs an initializer for the padding member
+    // too, or the emitted constant has the wrong number of elements.
+    if (global_a.c == 12) { score += 1; }
+
+    return score;
+}
+
+struct Pair { first: Wide, second: i32 }
+
+align(16) union Small { c: u8, i: i32 }
+
+align(32) struct Alone { c: u8 }
+var global_a: Alone = Alone { c: 12 };

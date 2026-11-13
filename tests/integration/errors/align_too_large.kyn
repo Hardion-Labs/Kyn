@@ -1,0 +1,4 @@
+// 8192 is beyond the 4096-byte maximum, which is already far past any target's
+// widest useful alignment.
+align(8192) struct Huge { c: u8 }
+fn main() i32 { return 0; }

@@ -567,6 +567,16 @@ struct formed by its members, and a packed aggregate always by memory.**
   removed.
 - Reading a union member other than the live one is undefined behaviour, as in
   C; the language has no tag and does not claim to check it.
+- **An `align(N)` aggregate** keeps the class its members would have — the
+  alignment changes the size and the alignment, not the transport — so a 16-byte
+  `align(16) { u8 }` still travels by memory. Measured against clang for the same
+  two shapes: `align(16) { char }` is `size=16, align=16` and
+  `packed, aligned(4) { char; int }` is `size=8, align=4`; `cabi_align` prints
+  both from the C side and compares them with what Kyn emits, and checks at
+  run time that a Kyn local really is on a 16-byte boundary rather than merely
+  typed as one. Passing an `align(N)` aggregate **by value** to C is refused by
+  `E0473` like any other aggregate parameter, because the classifier does not
+  take the explicit alignment into account; that is a stated limitation.
 
 ## 11. Bitfields at the boundary
 
@@ -576,7 +586,7 @@ A bitfield is not an `i3` leaf at the ABI level. Measured: clang passes
 Kyn therefore records a bitfield run as one leaf of the storage unit's width,
 and uses each field's own width only for the masking that reads and writes it.
 
-- Layout is the deterministic rule of `language-reference.md` §3.7: a unit of 1,
+- Layout is the deterministic rule of `language-reference.md` §3.8: a unit of 1,
   2, 4 or 8 bytes, no field straddling a boundary of its own unit width.
 - **C compatibility is the narrow, stated subset:** widths summing to at most 8
   bits, no non-bitfield member, matched against the C struct that declares each

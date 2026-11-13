@@ -158,6 +158,9 @@ unsupported construct or an internal compiler invariant violation.
 | `E0487` | a union member is a bitfield; overlapping runs have no defined bit positions |
 | `E0488` | an aggregate has a member with no known size (internal consistency check) |
 | `E0489` | a bitfield run would need a storage unit overlapping bytes already emitted; the layout is refused rather than emitted in a form that disagrees with it |
+| `E0490` | `align(` is not followed by an integer |
+| `E0491` | an alignment is not a power of two, or is larger than 4096 |
+| `E0492` | `align(N)` is not attached to a `struct` or `union` declaration |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

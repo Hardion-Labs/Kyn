@@ -1,0 +1,4 @@
+// `align(N)` is a modifier, so it takes its meaning from the aggregate that
+// follows it. On anything else there is nothing to align.
+align(8) enum Color: u8 { Red }
+fn main() i32 { return 0; }

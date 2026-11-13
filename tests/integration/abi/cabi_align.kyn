@@ -1,0 +1,19 @@
+align(16) struct A { c: u8 }
+align(4) packed struct C { c: u8, i: i32 }
+
+extern fn c_entry() i32;
+
+fn misalign(p: *A, n: u64) u64 {
+    return (p as u64) & (n - 1);
+}
+
+fn main() i32 {
+    var a: A = A { c: 7 };
+    var c: C = C { c: 1, i: 2 };
+    var score: i32 = 0;
+    // The local must actually be 16-aligned, not merely typed as such.
+    if (misalign(&a, 16) == 0) { score += 1; }
+    if (a.c == 7) { score += 1; }
+    if (c.c == 1 && c.i == 2) { score += 1; }
+    return score * 10 + c_entry();
+}

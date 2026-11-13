@@ -143,6 +143,12 @@ pub const StructInfo = struct {
     /// A `packed struct`/`packed union`: members are not aligned and the
     /// aggregate's alignment is 1.
     is_packed: bool = false,
+    /// `align(N)` on the declaration, or 0. It only ever *raises* the aggregate's
+    /// alignment, and it wins over `packed` because the maximum of the two is what
+    /// both the measured layout and the emitted type use. Recorded on the type so
+    /// the emitter can annotate the definition and the allocas without repeating
+    /// the computation.
+    explicit_align: u32 = 0,
     /// Unique backend identifier; `name` remains the source-level spelling.
     llvm_name: []const u8 = "",
     owner_module_id: u32 = 0,

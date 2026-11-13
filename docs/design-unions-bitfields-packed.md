@@ -1,10 +1,9 @@
 # Design: unions, bitfields and packed structs
 
-Status: **implemented (§55 and §56).** Unions, packed structs and bitfields are
-all implemented end to end, with ABI fixtures for each. `align(N)` — the fourth
-idea this document considered — is deliberately **not** implemented and remains
-out of scope; §10 records what landed, and §4.1 was corrected against measurement
-during the bitfield increment.
+Status: **implemented (§55, §56 and §57).** Unions, packed structs, bitfields and
+explicit `align(N)` are all implemented end to end, with ABI fixtures for each.
+§7 was corrected against measurement during the alignment increment, §4.1 during
+the bitfield one; §10 records what landed.
 
 This document decides the three aggregate extensions `abi.md` §9 lists as
 unsupported, in the order they should be built.
@@ -299,7 +298,7 @@ packed struct Packet {
 `packed` is a modifier on `struct` (and on `union`), placed before the keyword.
 There is no `@repr`, no `align(N)` attribute, and no per-field attribute syntax
 in this increment: one modifier, one meaning — *no padding between members and
-alignment 1*. Explicit alignment is designed in §7 but not built here.
+alignment 1*. Explicit alignment is also supported -- see §7.
 
 Measured: `struct __attribute__((packed)) { char c; int i; }` is `size=5,
 align=1, offsetof(i)=1`, and clang emits `%struct.P = type <{ i8, i32 }>`.
@@ -340,15 +339,99 @@ align=1, offsetof(i)=1`, and clang emits `%struct.P = type <{ i8, i32 }>`.
 never reach layout with a member whose width it cannot express. No existing code
 changes meaning, so nothing is renumbered.
 
-## 7. Explicit alignment (designed, not built)
+## 7. Explicit alignment (built in §57)
 
-The same modifier slot admits `align(N)` on a field and on a type. It is
-**deliberately excluded from this increment** because it interacts with packed
-in a way that needs its own rules (`packed` + `align(4)` must round the member
-or the aggregate, and C's rule is that `align` *increases* and packed
-*decreases*, so the maximum wins). Building the three features above without it,
-behind one flag each, keeps each step testable; adding `align(N)` afterwards is
-then a fourth flag with its own diagnostics, not a redesign.
+`align(N)` is a modifier on a **declaration**, in the same slot as `packed` and
+in either order (`align(16) packed struct` and `packed align(16) struct` are the
+same declaration). Field-level `_Alignas`-style annotation is **not** part of the
+language: a field's alignment is its type's, and a field that needs more is a
+field of an aligned type. That keeps one rule instead of two and is why §7's
+"on a field and on a type" is narrowed here.
+
+`align` is not a keyword. The parser recognises it only as an identifier
+followed by `(`, so a variable or a function may still be named `align`.
+
+### 7.1 The rule, measured
+
+The design's stated rule -- "`align` *increases*, `packed` *decreases*, so the
+maximum wins" -- is **right about alignment and incomplete about size**. Measured
+with `zig cc` on this target (`.scratch/al.c`):
+
+| C form | size | align |
+|---|---|---|
+| `struct A { char c; } __attribute__((aligned(16)))` | 16 | 16 |
+| `struct B { char c; int i; } __attribute__((aligned(2)))` | **8** | **4** |
+| `struct C { char c; int i; } __attribute__((packed, aligned(4)))` | **8** | **4** |
+| `struct P { char c; int i; } __attribute__((packed))` | 5 | 1 |
+| `struct D { char c; _Alignas(16) int i; }` | 32 | 16, `off(i)`=16 |
+| `struct E { _Alignas(8) char c; int i; }` | 8 | 8, `off(i)`=4 |
+
+The two corrections to the design's sentence:
+
+1. **A smaller-than-natural `align(N)` is ignored, not an error.** `B` keeps
+   alignment 4 and size 8; the `aligned(2)` does nothing. So `align` is a floor on
+   the aggregate's alignment, never a cap --------------------------------------------------------- `align_ = max(align_, N)`.
+2. **`packed` and `align` compose; neither replaces the other.** `C` has no
+   interior padding (`i` sits at byte 1) *and* alignment 4 *and* size 8 -- the
+   maximum wins on alignment, packing still decides the offsets, and the size is
+   then rounded up to the alignment. The design's "maximum wins" alone would have
+   suggested the packing was cancelled.
+
+So the implemented rule is:
+
+- per-member offsets: exactly as without `align(N)` -- `packed` removes the
+  inter-member padding, an ordinary aggregate keeps it;
+- aggregate alignment: `max(natural alignment, N)`, and 1 when `packed` and no
+  `align`;
+- size: the members' end rounded up to that alignment.
+
+### 7.2 Emitting it
+
+LLVM derives a struct's alignment from its members, so the annotation alone
+would not honour `align(16)` on `{ i8 }`. The emitted definition gets a trailing
+`[k x i8]` member whose length brings the type's size up to a multiple of the
+alignment, which is the same rule as the layout and is what makes LLVM align the
+type to it. Measured against clang, the emitted text is identical:
+
+```
+clang: %struct.A = type { i8, [15 x i8] }     kyn: identical
+clang: %struct.C = type <{ i8, i32 }>          -- packed+aligned(4), 5 bytes
+```
+
+`C` is the one place the two differ **in text but not in meaning**: LLVM gives
+`<{ i8, i32 }>` size 5 and alignment 1, so Kyn emits `<{ i8, i32, [3 x i8] }>`
+(8 bytes), which carries the measured 8/4. clang relies on the `align` on the
+*global/alloca* to get there instead; an emitted *type* has no such slot, so the
+padding is the only way to say it. Both agree on every measured `sizeof` and
+`_Alignof`, which is what the ABI fixture checks.
+
+`alloca` and `byval` also needed the alignment: `addLocal` used to reserve padding
+and annotate it `max(alignment, 8)`, and `llvmAlignmentOfType` computed the
+maximum of a struct's field alignments, which ignores `packed` and `align(N)`.
+The latter now **delegates to `aggregateLayoutGuess`** rather than re-deriving the
+rule, which removes the second implementation that the packed increment had left
+in place.
+
+### 7.3 Diagnostics
+
+| Code | When |
+|---|---|
+| `E0490` | `align(` is not followed by an integer |
+| `E0491` | the value is not a power of two, or exceeds 4096 |
+| `E0492` | `align(N)` does not precede a `struct` or `union` |
+
+There is deliberately **no** diagnostic for an alignment below the natural one:
+C ignores it and so does Kyn, and rejecting it would refuse a declaration whose
+meaning is well defined. `align(0)` is rejected as not a power of two.
+
+### 7.4 What is not covered
+
+A field-level annotation, an alignment that changes the *ABI class* of an
+aggregate (all forms measured here stay `.memory` or keep their natural class),
+and per-target values other than this one. An aligned aggregate passed by value
+to C is still refused by the existing `E0473`, because the classifier does not
+take `align(N)` into account; that is a stated limitation, not a silent
+disagreement.
 
 ## 8. Out of scope
 
@@ -416,6 +499,38 @@ has followed.
    `language-reference.md` §3.3/§3.4 gain the union, the bitfield width types and
    the `packed` modifier; `diagnostics.md` gains `E0481`–`E0484`; `roadmap.md`,
    `README.md` and `CHANGELOG.md` record the change.
+
+### What landed in §57 (explicit alignment)
+
+- **A fourth flag, exactly as this document predicted.** `StructInfo.explicit_align`
+  (0 = absent) threaded parser → AST → resolver → `placeFields` → emitter, with no
+  change to the union/packed/bitfield paths.
+- **§7's rule was corrected against measurement, in two ways.** `align(N)` below
+  the natural alignment is *ignored*, not an error (`aligned(2)` on a 4-aligned
+  struct leaves 8/4), and `packed`+`align` *compose*: packing still removes the
+  interior padding while the alignment is the maximum of the two and the size is
+  rounded up to it (`packed, aligned(4)` on `{char,int}` is 8/4, with `i` at byte
+  1). "The maximum wins" is right about alignment and incomplete about size.
+- **A second layout implementation was removed, not extended.**
+  `llvmAlignmentOfType` computed a struct's alignment as the maximum over its
+  *fields*, which ignores `packed` and `align(N)`; it now calls
+  `aggregateLayoutGuess`, so there is one rule again.
+- **Two emitter bugs were found by the extreme cases and fixed.** A global of an
+  aligned type emitted a constant with the wrong number of elements (the trailing
+  padding member had no initializer, rejected by the LLVM parser), and a union
+  took no padding at all, so `align(16) union { char; int }` came out 4 bytes
+  instead of 16. Both now have assertions in `cases/align_layout`.
+- **The emitted type is text-identical to clang's for the ordinary cases**
+  (`{ i8, [15 x i8] }` for `align(16) { u8 }`). It differs for
+  `packed`+`align(N)`, where clang writes `<{ i8, i32 }>` and puts `align 4` on the
+  global/alloca; Kyn writes `<{ i8, i32, [3 x i8] }>`. Both measure 8/4, and an
+  emitted *type* has no annotation slot, so the padding is the only available
+  spelling -- §7.2 states why rather than hiding it.
+- **The ABI fixture compares against C on both sides.** `cabi_align` prints
+  `sizeof`/`_Alignof` from the C translation unit for the same two shapes and
+  checks that a Kyn local really is 16-aligned at runtime (not merely typed so),
+  exiting 30. Passing an aligned aggregate *by value* to C still trips the
+  existing `E0473`; that limitation is now stated in §7.4 instead of implied.
 
 ### What landed in §56 (bitfields)
 
