@@ -161,6 +161,7 @@ unsupported construct or an internal compiler invariant violation.
 | `E0490` | `align(` is not followed by an integer |
 | `E0491` | an alignment is not a power of two, or is larger than 4096 |
 | `E0492` | `align(N)` is not attached to a `struct` or `union` declaration |
+| `E0493` | a name promoted out of an anonymous member collides with another field of the same aggregate |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

@@ -42,6 +42,15 @@ aggregate_decl = [ aggregate_modifier , { aggregate_modifier } ] ,
                  ( "struct" | "union" ) , identifier ,
                  "{" , [ field_list ] , "}" ;
 
+(* A field is either named, or an inline aggregate with no name -- an anonymous
+   member, whose own field names promote into this aggregate. Only an aggregate
+   may be anonymous: a bare type with no name declares nothing. *)
+field = identifier , ":" , type
+      | anonymous_member ;
+
+anonymous_member = [ "packed" ] , ( "struct" | "union" ) ,
+                   "{" , [ field_list ] , "}" ;
+
 (* `packed` and `align(N)` may appear in either order, and at most once each.
    `align` is not a keyword: it is an identifier immediately followed by "(" ,
    recognised only in this position, so a variable may still be named `align`.

@@ -217,6 +217,7 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ✅ Variadic `extern` and `export` functions | C default promotions out; context-typed `va_arg()` in |
 | ✅ Unions and packed structs | Overlapping members, no tag; `packed` removes padding and forces the memory class at the C ABI |
 | ✅ Bitfields | Width in the type (`u3`), packed storage units, C-compatible subset stated in `abi.md` §11 |
+| ✅ Anonymous members | Inline `struct`/`union` with no name; its field names promote, transitively |
 | ✅ Explicit alignment | `align(N)` raises an aggregate's alignment, rounds its size, composes with `packed`, and crosses the C ABI by value |
 | ❌ Indirect calls and first-class function values | Planned |
 | ✅ Fixed-array dynamic indexes | Bounds-checked at runtime; trap on out-of-range |

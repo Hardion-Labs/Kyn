@@ -372,6 +372,106 @@ pub const Sema = struct {
         return if (info.is_union) "union" else "struct";
     }
 
+    /// Resolves a field name the way C resolves a member of a struct with
+    /// anonymous members: the name is matched against the aggregate's own fields
+    /// first, and then -- when the aggregate holds an anonymous member -- inside
+    /// it, transitively. `path` receives the chain of field indices to walk, which
+    /// is one element for an ordinary field and more for a promoted one.
+    ///
+    /// Promotion is a *lookup* rule, not a layout one: measured against clang, an
+    /// anonymous member occupies its own space (a 4-aligned `{ int x; struct {
+    /// int y; char z; }; }` puts `y` at byte 4 and `z` at 8, size 12) and its
+    /// leaves stay where they are for the ABI. Only the name moves.
+    ///
+    /// Returns null when no field matches, so the caller reports its own
+    /// diagnostic with the position it has.
+    fn resolveFieldPath(
+        self: *Sema,
+        info: *types.StructInfo,
+        name: []const u8,
+        path: *std.ArrayList(u32),
+    ) Error!?*types.Field {
+        return resolveFieldPathStatic(self.allocator, info, name, path);
+    }
+
+    /// Whether every field of an anonymous member is covered by one of the names
+    /// the initializer wrote. Recursive, because promotion is transitive.
+    fn anonymousMemberComplete(
+        self: *Sema,
+        member_ty: *types.Type,
+        written: []ast.Expr.Kind.InitField,
+    ) Error!bool {
+        if (member_ty.* != .struct_type) return true;
+        // A union member is never "complete": naming one of its fields is what
+        // makes that one live, exactly as for a union declared directly. Its own
+        // count rule (`E0485`) is checked where the member is written, so there is
+        // nothing to require here.
+        if (member_ty.struct_type.is_union) return true;
+        for (member_ty.struct_type.fields) |field| {
+            const covered = blk: {
+                if (field.name.len == 0) {
+                    break :blk try self.anonymousMemberComplete(field.ty, written);
+                }
+                for (written) |w| {
+                    if (std.mem.eql(u8, w.name, field.name)) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!covered) return false;
+        }
+        return true;
+    }
+
+    /// Reports a collision between a name promoted out of the anonymous member at
+    /// `anon_index` and any other name visible at the enclosing level -- a sibling
+    /// field, or a name promoted by another anonymous member. Returns false when a
+    /// collision was reported, so the caller skips the layout: a type whose field
+    /// names are ambiguous has no well-defined member set to lay out.
+    fn checkPromotedNames(self: *Sema, info: *types.StructInfo, anon_span: Span, anon_index: usize) Error!bool {
+        const member_ty = info.fields[anon_index].ty;
+        if (member_ty.* != .struct_type) return true;
+        var ok = true;
+        for (member_ty.struct_type.fields) |promoted| {
+            if (promoted.name.len == 0) continue;
+            for (info.fields, 0..) |other, other_index| {
+                if (other_index == anon_index) continue;
+                if (other.name.len > 0) {
+                    if (std.mem.eql(u8, other.name, promoted.name)) {
+                        try self.reporter.err("E0493", anon_span, "anonymous member's field '{s}' collides with another field of '{s}'", .{ promoted.name, info.name });
+                        ok = false;
+                        break;
+                    }
+                    continue;
+                }
+                // Another anonymous member: its own promoted names count too, and
+                // only the earlier one is compared so a pair is reported once.
+                if (other_index > anon_index) continue;
+                if (other.ty.* != .struct_type) continue;
+                for (other.ty.struct_type.fields) |sibling| {
+                    if (sibling.name.len == 0) continue;
+                    if (std.mem.eql(u8, sibling.name, promoted.name)) {
+                        try self.reporter.err("E0493", anon_span, "anonymous member's field '{s}' collides with another field of '{s}'", .{ promoted.name, info.name });
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) break;
+            }
+            if (!ok) break;
+        }
+        return ok;
+    }
+
+    /// True when `ty` has at least one anonymous member, i.e. when the promoted
+    /// names of `ty` are not just its own field names.
+    fn hasAnonymousMembers(ty: *types.Type) bool {
+        if (ty.* != .struct_type) return false;
+        for (ty.struct_type.fields) |field| {
+            if (field.name.len == 0) return true;
+        }
+        return false;
+    }
+
     fn resolveStruct(self: *Sema, sd: *ast.StructDecl) Error!void {
         const info = sd.ty.?.struct_type;
         if (info.complete) return;
@@ -388,10 +488,15 @@ pub const Sema = struct {
         // every later, perfectly valid type in a file with one bad line.
         var unusable = false;
         for (sd.fields, 0..) |*field, i| {
-            if (seen.contains(field.name)) {
-                try self.reporter.err("E0404", field.span, "duplicate field '{s}' in {s} '{s}'", .{ field.name, self.aggregateLabel(info), sd.name });
-            } else {
-                try seen.put(field.name, {});
+            // An anonymous member has no name of its own, so it cannot collide --
+            // its *promoted* names can, and that is checked below once every
+            // member's type is known.
+            if (field.name.len > 0) {
+                if (seen.contains(field.name)) {
+                    try self.reporter.err("E0404", field.span, "duplicate field '{s}' in {s} '{s}'", .{ field.name, self.aggregateLabel(info), sd.name });
+                } else {
+                    try seen.put(field.name, {});
+                }
             }
             const ty = try self.resolveType(field.ty_expr);
             if (containsIncompleteByValue(ty)) {
@@ -402,6 +507,17 @@ pub const Sema = struct {
             fields[i] = .{ .name = field.name, .ty = ty, .index = @intCast(i) };
         }
         info.fields = fields;
+        // A promoted name may not collide with anything at its level, its own
+        // declaration included: measured, clang rejects `struct S { int a;
+        // struct { int a; }; }` with "member of anonymous struct redeclares
+        // 'a'". Without this the second name would be silently unreachable, since
+        // lookup returns the outermost match.
+        if (!unusable) {
+            for (sd.fields, 0..) |field, i| {
+                if (field.name.len != 0) continue;
+                if (!try self.checkPromotedNames(info, field.span, i)) unusable = true;
+            }
+        }
         // If a field's type could not be resolved the aggregate has no layout to
         // compute, and walking it would recurse through the unfinished member --
         // a by-value cycle is exactly the case `E0403` above reported. Placement
@@ -852,6 +968,27 @@ pub const Sema = struct {
                 };
                 break :blk resolved;
             },
+            .inline_aggregate => |sd| blk: {
+                // An anonymous member's type lives only here, so it is resolved
+                // directly. Its generated LLVM name gets a per-declaration
+                // discriminator from the declaration's own span, which keeps two
+                // identical anonymous aggregates in one file distinct types
+                // without inventing a name a program could collide with.
+                const info = try self.allocator.create(types.StructInfo);
+                info.* = .{
+                    .name = "",
+                    .llvm_name = try std.fmt.allocPrint(self.allocator, "__kyn_anon_{d}_{d}", .{ sd.span.source_id, sd.span.start }),
+                    .owner_module_id = sd.span.source_id,
+                    .is_public = false,
+                    .is_union = sd.is_union,
+                    .is_packed = sd.is_packed,
+                };
+                const ty = try self.allocator.create(Type);
+                ty.* = .{ .struct_type = info };
+                sd.ty = ty;
+                try self.resolveStruct(sd);
+                break :blk ty;
+            },
             .pointer => |p| blk: {
                 const elem = try self.resolveType(p.elem);
                 break :blk try types.makePointer(self.allocator, elem, p.is_const);
@@ -966,7 +1103,7 @@ pub const Sema = struct {
             .slice => |slice| try self.checkSlice(expr, slice, expected),
             .field => |*field| try self.checkField(expr, field),
             .index => |index| try self.checkIndex(expr, index),
-            .struct_init => |struct_init| try self.checkStructInit(expr, struct_init),
+            .struct_init => |*struct_init| try self.checkStructInit(expr, struct_init),
             .array_lit => |elements| try self.checkArrayLiteral(expr, elements, expected),
         };
         var final_ty = ty;
@@ -1673,15 +1810,15 @@ pub const Sema = struct {
             try self.reporter.err("E0465", field.base.span, "field access requires an lvalue or a pointer", .{});
         }
         const info = struct_ty.struct_type;
-        for (info.fields) |struct_field| {
-            if (std.mem.eql(u8, struct_field.name, field.name)) {
-                field.field_index = struct_field.index;
-                if (!self.isTypeAccessible(struct_field.ty, expr.span.source_id)) {
-                    try self.reporter.err("E0467", expr.span, "field type is private to another module", .{});
-                    return self.prims.invalid;
-                }
-                return struct_field.ty;
+        var path: std.ArrayList(u32) = .empty;
+        if (try self.resolveFieldPath(info, field.name, &path)) |struct_field| {
+            field.field_index = struct_field.index;
+            field.field_path = try path.toOwnedSlice(self.allocator);
+            if (!self.isTypeAccessible(struct_field.ty, expr.span.source_id)) {
+                try self.reporter.err("E0467", expr.span, "field type is private to another module", .{});
+                return self.prims.invalid;
             }
+            return struct_field.ty;
         }
         try self.reporter.err("E0453", expr.span, "struct '{s}' has no field '{s}'", .{ info.name, field.name });
         return self.prims.invalid;
@@ -1707,7 +1844,7 @@ pub const Sema = struct {
         };
     }
 
-    fn checkStructInit(self: *Sema, expr: *ast.Expr, initializer: ast.Expr.Kind.StructInit) Error!*Type {
+    fn checkStructInit(self: *Sema, expr: *ast.Expr, initializer: *ast.Expr.Kind.StructInit) Error!*Type {
         const ty = try self.resolveType(initializer.type_expr);
         if (ty.* == .invalid) {
             for (initializer.fields) |field| _ = try self.checkExpr(field.value, null);
@@ -1721,12 +1858,15 @@ pub const Sema = struct {
         const info = ty.struct_type;
         var assigned = try self.allocator.alloc(bool, info.fields.len);
         @memset(assigned, false);
+        var written_names = std.StringHashMap(void).init(self.allocator);
 
         for (initializer.fields) |*field| {
             var found = false;
-            for (info.fields) |struct_field| {
-                if (std.mem.eql(u8, struct_field.name, field.name)) {
+            var path: std.ArrayList(u32) = .empty;
+            if (try self.resolveFieldPath(info, field.name, &path)) |struct_field| {
+                {
                     field.index = struct_field.index;
+                    field.field_path = try path.toOwnedSlice(self.allocator);
                     if (!self.isTypeAccessible(struct_field.ty, expr.span.source_id)) {
                         try self.reporter.err("E0467", field.span, "field type is private to another module", .{});
                     }
@@ -1734,15 +1874,20 @@ pub const Sema = struct {
                     // repeated name would otherwise be accepted with the last
                     // value silently winning. The same diagnosis `E0404` covers
                     // a duplicate *declaration* field, so one code means one
-                    // thing.
-                    if (assigned[struct_field.index]) {
+                    // thing. The bookkeeping is by *written name*, not by the
+                    // resolved field index: a promoted name and a sibling of the
+                    // anonymous member it came out of can share an index in their
+                    // own aggregates, so an index alone cannot tell them apart.
+                    if (written_names.contains(field.name)) {
                         try self.reporter.err("E0404", field.span, "duplicate field '{s}' in initializer for struct '{s}'", .{ field.name, info.name });
+                    } else {
+                        try written_names.put(field.name, {});
                     }
+                    const top_index = field.field_path[0];
+                    assigned[top_index] = true;
                     const value_ty = try self.checkExpr(field.value, struct_field.ty);
                     try self.requireAssignable(struct_field.ty, field.value, value_ty, true);
-                    assigned[struct_field.index] = true;
                     found = true;
-                    break;
                 }
             }
             if (!found) {
@@ -1763,11 +1908,21 @@ pub const Sema = struct {
             return ty;
         }
         for (info.fields, 0..) |struct_field, i| {
-            if (!assigned[i]) {
-                try self.reporter.err("E0458", expr.span, "missing field '{s}' in initializer for struct '{s}'", .{
-                    struct_field.name, info.name,
-                });
+            // An anonymous member is never named directly: it is complete when
+            // every one of its own field names was given. This is checked before
+            // `assigned[i]`, which only records that *some* promoted name was
+            // written -- one of them is enough to set it, so it cannot stand in
+            // for the member being complete.
+            if (struct_field.name.len == 0) {
+                if (!try self.anonymousMemberComplete(struct_field.ty, initializer.fields)) {
+                    try self.reporter.err("E0458", expr.span, "missing a field of the anonymous member in initializer for struct '{s}'", .{info.name});
+                }
+                continue;
             }
+            if (assigned[i]) continue;
+            try self.reporter.err("E0458", expr.span, "missing field '{s}' in initializer for struct '{s}'", .{
+                struct_field.name, info.name,
+            });
         }
         return ty;
     }
@@ -3210,6 +3365,155 @@ test "a union reports itself as a union, not a struct" {
         \\union Loop { inner: Loop }
         \\fn main() i32 { return 0; }
     , "E0403");
+}
+
+/// `resolveFieldPath` as a free function, for callers that have an allocator but
+/// no analyzer yet -- the tests resolve paths on a type that has already been
+/// analyzed.
+fn resolveFieldPathStatic(
+    allocator: std.mem.Allocator,
+    info: *types.StructInfo,
+    name: []const u8,
+    path: *std.ArrayList(u32),
+) Error!?*types.Field {
+    for (info.fields) |*field| {
+        if (field.name.len == 0) continue;
+        if (std.mem.eql(u8, field.name, name)) {
+            try path.append(allocator, field.index);
+            return field;
+        }
+    }
+    for (info.fields) |*field| {
+        if (field.name.len != 0) continue;
+        const member = field.ty;
+        if (member.* != .struct_type) continue;
+        const before = path.items.len;
+        try path.append(allocator, field.index);
+        if (try resolveFieldPathStatic(allocator, member.struct_type, name, path)) |found| return found;
+        path.shrinkRetainingCapacity(before);
+    }
+    return null;
+}
+
+/// Byte offset of the member a resolved path lands on. Walks the same offsets
+/// `placeFields` computed, so a test asserting an offset asserts the layout rather
+/// than a second copy of the rule.
+fn pathByteOffset(ty: *Type, path: []const u32) ?u64 {
+    var current_ty = ty;
+    var offset: u64 = 0;
+    for (path) |index| {
+        if (current_ty.* != .struct_type) return null;
+        const info = current_ty.struct_type;
+        var cursor: u64 = 0;
+        var found = false;
+        for (info.fields, 0..) |field, i| {
+            const member = aggregateLayoutGuess(field.ty) orelse return null;
+            if (info.is_union) {
+                if (i == index) {
+                    offset += 0;
+                    current_ty = field.ty;
+                    found = true;
+                    break;
+                }
+                continue;
+            }
+            if (!info.is_packed) cursor = std.mem.alignForward(u64, cursor, member.align_);
+            if (i == index) {
+                offset += cursor;
+                current_ty = field.ty;
+                found = true;
+                break;
+            }
+            cursor += member.size;
+        }
+        if (!found) return null;
+    }
+    return offset;
+}
+
+test "an anonymous member occupies its own space and promotes its names" {
+    // Measured against clang:
+    //   struct P { int x; struct { int y; char z; }; } -> 12/4, y at 4, z at 8
+    //   struct Q { char c; struct { short s; }; int i; } -> 8/4, s at 2, i at 4
+    //   struct T { struct { struct { int b; } }; } -> 4/4, b at 0 (transitive)
+    const cases = [_]struct {
+        decl: []const u8,
+        name: []const u8,
+        size: u64,
+        alignment: u64,
+        fields: []const u64,
+        // The offsets of the promoted names, in the order listed below.
+        promoted: []const struct { name: []const u8, offset: u64 },
+    }{
+        .{
+            .decl = "struct P { x: i32, struct { y: i32, z: i8 } }",
+            .name = "P",
+            .size = 12,
+            .alignment = 4,
+            // The anonymous member is a real aggregate: { i32, i8 } is 8 bytes with
+            // its own trailing padding, which is why z lands at 8 and the whole is 12.
+            .fields = &.{ 4, 8 },
+            .promoted = &.{ .{ .name = "y", .offset = 4 }, .{ .name = "z", .offset = 8 } },
+        },
+        .{
+            .decl = "struct Q { c: u8, struct { s: i16 }, i: i32 }",
+            .name = "Q",
+            .size = 8,
+            .alignment = 4,
+            .fields = &.{ 1, 2, 4 },
+            .promoted = &.{.{ .name = "s", .offset = 2 }},
+        },
+        .{
+            .decl = "struct T { struct { struct { b: i32 } } }",
+            .name = "T",
+            .size = 4,
+            .alignment = 4,
+            .fields = &.{4},
+            .promoted = &.{.{ .name = "b", .offset = 0 }},
+        },
+    };
+    for (cases) |case| {
+        const text = try std.fmt.allocPrint(testing.allocator, "{s}\nfn main() i32 {{ return 0; }}\n", .{case.decl});
+        defer testing.allocator.free(text);
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) return error.UnexpectedDiagnostic;
+        const ty = ctx.typeNamed(case.name) orelse return error.MissingStructType;
+        const layout = aggregateLayoutGuess(ty) orelse return error.MissingLayout;
+        if (layout.size != case.size or layout.align_ != case.alignment) {
+            std.debug.print("{s}: expected {d}/{d}, got {d}/{d}\n", .{
+                case.name, case.size, case.alignment, layout.size, layout.align_,
+            });
+            return error.UnexpectedDiagnostic;
+        }
+        // The anonymous member is a field of its own with the size and alignment
+        // its own fields give it -- promotion moves the name, never the storage.
+        for (case.fields, 0..) |expected_size, i| {
+            const member = aggregateLayoutGuess(ty.struct_type.fields[i].ty) orelse return error.MissingLayout;
+            if (member.size != expected_size) {
+                std.debug.print("{s}: field {d} expected size {d}, got {d}\n", .{ case.name, i, expected_size, member.size });
+                return error.UnexpectedDiagnostic;
+            }
+        }
+        // And the promoted name resolves to a path that lands on the offset the
+        // measured C layout gives it.
+        for (case.promoted) |entry| {
+            var path: std.ArrayList(u32) = .empty;
+            defer path.deinit(testing.allocator);
+            const found = (try resolveFieldPathStatic(testing.allocator, ty.struct_type, entry.name, &path)) orelse {
+                std.debug.print("{s}: '{s}' did not resolve\n", .{ case.name, entry.name });
+                return error.UnexpectedDiagnostic;
+            };
+            const offset = pathByteOffset(ty, path.items) orelse return error.MissingLayout;
+            if (offset != entry.offset) {
+                std.debug.print("{s}.{s}: expected offset {d}, got {d}\n", .{ case.name, entry.name, entry.offset, offset });
+                return error.UnexpectedDiagnostic;
+            }
+            _ = found;
+        }
+    }
 }
 
 test "an align(N) aggregate's data end and register are measured from the data" {

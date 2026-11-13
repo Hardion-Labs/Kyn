@@ -158,7 +158,9 @@ is selected. Milestones below are directions, not release promises.
   its members, bitfield widths live in the type (`u3`) rather than in a colon
   syntax, and `align(N)` raises an alignment and rounds the size without ever
   lowering either. All four quarters are implemented, and the C-compatible
-  bitfield subset is stated in the document.
+  bitfield subset is stated in the document. The design's out-of-scope list has
+  shrunk by one: **anonymous members** (`struct { ... }` with no name, whose field
+  names promote) are implemented too.
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
 - First-class function values and indirect calls are implemented: `fn(P) R`
   names a signature, a function name decays to a value in value position, the

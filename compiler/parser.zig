@@ -320,6 +320,85 @@ pub const Parser = struct {
         return value;
     }
 
+    /// Parses an anonymous member -- an inline `struct`/`union` with no name --
+    /// and appends it with an empty name. Returns false when the anonymous
+    /// aggregate itself failed to parse, so the caller can resynchronise instead
+    /// of looping on the same token.
+    fn parseAnonymousMember(self: *Parser, fields: *std.ArrayList(ast.StructField)) Error!bool {
+        var is_packed = false;
+        if (self.check(.kw_packed)) {
+            _ = self.advance();
+            is_packed = true;
+        }
+        const is_union = self.check(.kw_union);
+        _ = self.advance(); // `struct` or `union`
+        const start_span = self.peek().span;
+        if (!try self.expect(.l_brace, "to begin an anonymous member's body")) return false;
+
+        var inner: std.ArrayList(ast.StructField) = .empty;
+        if (!try self.parseFieldList(&inner)) return false;
+
+        // The anonymous member is represented as a field whose type is an inline
+        // aggregate declaration with no name of its own, so that the layout,
+        // placement, ABI walk and code generation all treat it as the storage it
+        // is -- only name lookup knows it is special.
+        const inline_decl = try self.allocator.create(ast.StructDecl);
+        inline_decl.* = .{
+            .span = Span.join(start_span, self.peek().span),
+            .name = "",
+            .fields = try inner.toOwnedSlice(self.allocator),
+            .is_union = is_union,
+            .is_packed = is_packed,
+            .explicit_align = 0,
+        };
+        const ty_expr = try self.allocator.create(ast.TypeExpr);
+        ty_expr.* = .{ .span = inline_decl.span, .kind = .{ .inline_aggregate = inline_decl } };
+        try fields.append(self.allocator, .{
+            .span = inline_decl.span,
+            .name = "",
+            .ty_expr = ty_expr,
+        });
+        return true;
+    }
+
+    /// The body of a `struct`/`union`, after the opening brace. Returns false on
+    /// an unrecoverable parse error so nested callers can stop.
+    fn parseFieldList(self: *Parser, fields: *std.ArrayList(ast.StructField)) Error!bool {
+        while (!self.check(.r_brace) and !self.check(.eof)) {
+            const before = self.pos;
+            if (self.check(.kw_struct) or self.check(.kw_union) or self.check(.kw_packed)) {
+                if (!try self.parseAnonymousMember(fields)) return false;
+                if (!self.match(.comma)) break;
+                continue;
+            }
+            if (!self.check(.identifier)) {
+                try self.reporter.err("E0208", self.peek().span, "expected field name, found {s}", .{token.describe(self.peek().kind)});
+                self.synchronize(.comma);
+                _ = self.match(.comma);
+                if (self.pos == before) break;
+                continue;
+            }
+            const field_name = self.advance();
+            if (!try self.expect(.colon, "after field name")) {
+                self.synchronize(.comma);
+                _ = self.match(.comma);
+                continue;
+            }
+            const ty_expr = (try self.parseType()) orelse {
+                self.synchronize(.comma);
+                _ = self.match(.comma);
+                continue;
+            };
+            try fields.append(self.allocator, .{
+                .span = Span.join(field_name.span, ty_expr.span),
+                .name = field_name.lexeme,
+                .ty_expr = ty_expr,
+            });
+            if (!self.match(.comma)) break;
+        }
+        return try self.expect(.r_brace, "to close struct body");
+    }
+
     fn parseStruct(self: *Parser, is_union: bool, is_packed: bool, explicit_align: u32) !?*ast.Decl {
         const start = self.peek().span;
         const keyword: token.Kind = if (is_union) .kw_union else .kw_struct;
@@ -332,34 +411,7 @@ pub const Parser = struct {
 
         var fields: std.ArrayList(ast.StructField) = .empty;
         if (try self.expect(.l_brace, "to begin struct body")) {
-            while (!self.check(.r_brace) and !self.check(.eof)) {
-                const before = self.pos;
-                if (!self.check(.identifier)) {
-                    try self.reporter.err("E0208", self.peek().span, "expected field name, found {s}", .{token.describe(self.peek().kind)});
-                    self.synchronize(.comma);
-                    _ = self.match(.comma);
-                    if (self.pos == before) break;
-                    continue;
-                }
-                const field_name = self.advance();
-                if (!try self.expect(.colon, "after field name")) {
-                    self.synchronize(.comma);
-                    _ = self.match(.comma);
-                    continue;
-                }
-                const ty_expr = (try self.parseType()) orelse {
-                    self.synchronize(.comma);
-                    _ = self.match(.comma);
-                    continue;
-                };
-                try fields.append(self.allocator, .{
-                    .span = Span.join(field_name.span, ty_expr.span),
-                    .name = field_name.lexeme,
-                    .ty_expr = ty_expr,
-                });
-                if (!self.match(.comma)) break;
-            }
-            _ = try self.expect(.r_brace, "to close struct body");
+            _ = try self.parseFieldList(&fields);
         }
 
         const struct_decl = try self.allocator.create(ast.StructDecl);

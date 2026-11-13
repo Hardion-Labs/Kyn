@@ -7,11 +7,20 @@ promised between alpha releases.
 ## [Unreleased]
 
 Exported globals, the callee side of variadics, the aggregate extensions
-(unions, packed structs, bitfields, explicit alignment), and three representation
-fixes (two constants and the signed-division minimum).
+(unions, packed structs, bitfields, explicit alignment, anonymous members), and
+three representation fixes (two constants and the signed-division minimum).
 
 ### Added
 
+- An inline `struct { ... }` or `union { ... }` with no name is an **anonymous
+  member**: it occupies its own space and its field names promote into the
+  enclosing aggregate, transitively. `struct Packet { kind: u8, struct { length:
+  u32 } }` is read and initialized as `p.length`, and the promoted name resolves to
+  a path of field indices so a write lands in the member it came out of. Measured
+  against clang for layout (`y` at 4, `z` at 8, size 12) and for the C ABI (an
+  anonymous member is transparent to the classifier, unlike a named nested one). A
+  promoted name colliding with a sibling is `E0493`, as in C; a struct-shaped
+  anonymous member must still have every promoted field initialized (`E0458`).
 - An aggregate with an explicit `align(N)` now crosses the C ABI **by value**;
   `E0473` used to refuse every one of them. Measured against clang: the
   sixteen-byte limit is the *padded* size, an eightbyte that holds no data

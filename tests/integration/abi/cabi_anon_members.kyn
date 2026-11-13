@@ -1,0 +1,18 @@
+struct P { x: i32, struct { y: i32, z: i8 } }
+struct Q { c: u8, struct { s: i16 }, i: i32 }
+
+extern fn echo_p(v: P) P;
+extern fn echo_q(v: Q) Q;
+extern fn report() i32;
+
+fn main() i32 {
+    var score: i32 = 0;
+    var p: P = P { x: 11, y: 22, z: 33 };
+    var rp: P = echo_p(p);
+    if (rp.x == 11 && rp.y == 22 && rp.z == 33) { score += 1; }
+    var q: Q = Q { c: 1, s: 2, i: 3 };
+    var rq: Q = echo_q(q);
+    if (rq.c == 1 && rq.s == 2 && rq.i == 3) { score += 1; }
+    var rep: i32 = report();
+    return score * 10 + rep;
+}
