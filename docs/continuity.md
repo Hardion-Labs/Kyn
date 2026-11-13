@@ -3087,3 +3087,69 @@ assumed feature.
   of design §4.1 (`E0482`/`E0483`), a bitfield run as one leaf of the storage
   unit's width in the classifier, and mask-and-shift access in the backend — then
   `align(N)` as a fourth flag.
+
+## 56. Bitfields implemented (on `arena/b79eca8b-kyn`)
+
+- Base: `main` at `f690e98` (which carries §55). This increment completes the
+  third aggregate extension from `docs/design-unions-bitfields-packed.md`: the
+  width lives in the type, an adjacent run packs into one storage unit, and the
+  backend reads and writes it with shifts and masks. `align(N)` stays out of scope
+  and is not claimed anywhere.
+- **The design was wrong in two places, and measurement caught both.** §4.1 said
+  the layout picks "the smallest unit that holds the field's width", citing
+  `Mix` = 4 bytes. Measured: `Mix` is 4 only because its declared type is
+  `unsigned`; the same shape with `unsigned char` members is **3** bytes. The rule
+  also implied a growing run takes a wider *common* unit, which would put `c` at
+  bit 8 in `{u3, u5, u12}`; byte-level measurement (`ff 00 ff 0f`) puts it at bit
+  **16**, because a field never straddles a boundary of its own width. §4.1 now
+  carries the cursor rule and the byte measurements that fix it, labelled as a
+  correction.
+- **The C-compatible subset was narrowed, not widened.** §4.2 claimed "widths
+  summing to at most 32 bits". That holds only for C's `unsigned a:3`, whose unit
+  is 4 bytes; a bare width's unit is 1 byte for `{u3, u5}`, measured as C's
+  `unsigned char` form. The subset is now widths summing to at most 8 bits with no
+  non-bitfield member, and the fixture compares **bytes**, not sizes — because
+  `{u3, u5, u12}` agrees with C on size (4/2) while disagreeing on contents, which
+  is exactly the agreement a size-only fixture would have reported as success.
+- **One shape is refused rather than guessed.** `{a: u31, b: u33}` needs an
+  8-byte unit beginning at byte 3, inside bytes the first unit already owns. C
+  fuses the runs into one 8-byte unit; Kyn does not implement that rule and emits
+  `E0489` instead of a type that disagrees with its own layout. Stated in
+  `abi.md` §11, `language-reference.md` §3.7 and `safety-model.md` §3.
+- **One layout walk, not two.** An earlier draft had `placeFields` computing
+  positions while `aggregateLayoutGuess` computed sizes — the exact split that lets
+  a bitfield's size and its bit offset drift apart. There is now one cursor walk
+  that produces both, stores them on the `StructInfo`, and is the only thing the
+  emitter, the classifier and `field_ptr` read. `sizeInBytes` already delegated to
+  it from §55.
+- **The emitted type is built from units, not fields.** A run collapses into one
+  integer and a gap becomes an explicit `[N x i8]` padding member, so LLVM's own
+  layout reproduces the byte positions the cursor computed. Emitting one member
+  per source field gave every bitfield its own byte and made the IR disagree with
+  `aggregateLayoutGuess` — found by dumping `%struct = type` for `{u3, u5}` and
+  seeing `{ i3, i5 }`.
+- **Three defects found by testing the edge cases, all fixed:**
+  (1) a by-value recursive struct crashed in `placeFields` because placement ran
+  before the recursion check and walked the unfinished member — placement is now
+  skipped for a declaration that failed, tracked with a per-declaration flag so an
+  unrelated error elsewhere in the file cannot suppress a valid type's layout;
+  (2) `aggregateLayoutGuess` did not know `fn_type`/`fn_ptr`, so a struct of
+  function pointers reported `E0488` and broke `function_pointers` and
+  `cabi_function_pointer`;
+  (3) `emitConstant` emitted one initializer per declared field while the type has
+  emitted members, so a global aggregate failed to assemble — it now emits by
+  emitted member, shifting and masking bitfield values and zeroing padding.
+- **Gate:** unit **134/134** (was 132), integration **217/0** in Debug and
+  ReleaseSafe (was 210: `cabi_bitfields`, `bitfield_wide_units`,
+  `bitfield_semantics`, and four error fixtures), 902 robustness cases, `zig fmt`
+  clean, 23 documentation links, **139** documented codes (`E0486`–`E0489`),
+  versions `0.1.0-alpha.5`.
+- **Unallocated on purpose:** `E0481`–`E0483` from the design's §10 step list were
+  never used. The bitfield cases needed three different diagnostics, and reserving
+  numbers before the checks existed would have been a guess;
+  `check_diagnostic_docs.py` enforces that `diagnostics.md` lists exactly what the
+  compiler can emit.
+- Next task: `align(N)`, the one idea of the design still unimplemented — a fourth
+  flag beside `is_union`/`is_packed` that overrides an aggregate's alignment, with
+  the same treatment: measure clang's `_Alignas`, state the rule, refuse what the
+  emitted type cannot mirror.

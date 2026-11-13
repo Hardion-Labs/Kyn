@@ -1,0 +1,13 @@
+struct Wire { kind: u3, tag: u5 }
+struct Sub { a: u3, b: u5, c: u12 }
+
+extern fn c_probe() i32;
+
+fn main() i32 {
+    var w: Wire = Wire { kind: 5, tag: 21 };
+    var s: Sub = Sub { a: 7, b: 31, c: 4095 };
+    var score: i32 = 0;
+    if (w.kind == 5 && w.tag == 21) { score += 1; }
+    if (s.a == 7 && s.b == 31 && s.c == 4095) { score += 1; }
+    return score * 10 + c_probe();
+}

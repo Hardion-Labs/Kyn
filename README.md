@@ -216,7 +216,8 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
 | ✅ Variadic `extern` and `export` functions | C default promotions out; context-typed `va_arg()` in |
 | ✅ Unions and packed structs | Overlapping members, no tag; `packed` removes padding and forces the memory class at the C ABI |
-| ❌ Bitfields | Designed; width types (`u3`) not implemented |
+| ✅ Bitfields | Width in the type (`u3`), packed storage units, C-compatible subset stated in `abi.md` §11 |
+| ❌ Explicit alignment | `align(N)` designed, not implemented |
 | ❌ Indirect calls and first-class function values | Planned |
 | ✅ Fixed-array dynamic indexes | Bounds-checked at runtime; trap on out-of-range |
 | ✅ Integer division and remainder | Zero divisor traps; signed `INT_MIN / -1` traps |

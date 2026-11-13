@@ -1,0 +1,37 @@
+// Bitfields are packed by declaration order, not one byte per field. Each check
+// below is worth one; the expected exit is 8.
+//
+// `Wire` is 1 byte (8 bits fit one unit), `Three` is 4 bytes because 12 bits
+// starting at bit 8 would straddle bit 16, and writing one field must leave its
+// neighbours untouched.
+struct Wire { kind: u3, tag: u5 }
+struct Three { a: u3, b: u5, c: u12 }
+struct Signed { small: i3, rest: i5 }
+
+fn main() i32 {
+    var score: i32 = 0;
+
+    var w: Wire = Wire { kind: 5, tag: 21 };
+    if (w.kind == 5) { score += 1; }
+    if (w.tag == 21) { score += 1; }
+
+    var t: Three = Three { a: 7, b: 31, c: 4095 };
+    if (t.a == 7 && t.b == 31) { score += 1; }
+    if (t.c == 4095) { score += 1; }
+
+    // A write to one field must not disturb the others in the same unit.
+    t.b = 1;
+    if (t.a == 7 && t.c == 4095) { score += 1; }
+    if (t.b == 1) { score += 1; }
+
+    // A signed bitfield sign-extends on read.
+    var s: Signed = Signed { small: -1, rest: -16 };
+    if (s.small == -1 && s.rest == -16) { score += 1; }
+
+    // The same widths declared in separate structs have the same layout rules, so
+    // a struct built from a value copies the bits rather than the fields.
+    var copy: Three = t;
+    if (copy.a == 7 && copy.b == 1 && copy.c == 4095) { score += 1; }
+
+    return score;
+}

@@ -41,6 +41,11 @@ parameter      = identifier , ":" , type ;
 aggregate_decl = [ "packed" ] , ( "struct" | "union" ) , identifier ,
                  "{" , [ field_list ] , "}" ;
 
+(* A field type may be an integer of any width 1..128, written u<N> or i<N>.
+   Those are not keywords: they are recognised where a type is expected, so an
+   identifier such as `u1x` is unaffected. A width that is not a whole number of
+   bytes makes the field a bitfield, which packs into a storage unit. *)
+
 field_list     = field , { "," , field } , [ "," ] ;
 
 field          = identifier , ":" , type ;

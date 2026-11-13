@@ -538,10 +538,9 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
   supported by the selected target/classifier (including a struct whose only
   field is a slice and singleton `enum` members with 1-bit backings)
   (`E0473`);
-- bitfields and explicit alignment — designed but not implemented: see
-  [the aggregate-extensions design](design-unions-bitfields-packed.md), which
-  measures the layout and the ABI shape of each and orders the work. Unions and
-  packed structs are implemented; see §10;
+- explicit alignment — designed but not implemented: see
+  [the aggregate-extensions design](design-unions-bitfields-packed.md).
+  Unions, packed structs and bitfields are implemented; see §10 and §11;
 - calling conventions other than `x86_64` Linux System V;
 - linking against Kyn-specific runtime support (there is none yet).
 
@@ -568,3 +567,29 @@ struct formed by its members, and a packed aggregate always by memory.**
   removed.
 - Reading a union member other than the live one is undefined behaviour, as in
   C; the language has no tag and does not claim to check it.
+
+## 11. Bitfields at the boundary
+
+A bitfield is not an `i3` leaf at the ABI level. Measured: clang passes
+`struct Wire { unsigned kind:3; unsigned tag:5; }` as one `i32`, not as an `i8`
+— the transport unit is the **storage unit**, and the members merge inside it.
+Kyn therefore records a bitfield run as one leaf of the storage unit's width,
+and uses each field's own width only for the masking that reads and writes it.
+
+- Layout is the deterministic rule of `language-reference.md` §3.7: a unit of 1,
+  2, 4 or 8 bytes, no field straddling a boundary of its own unit width.
+- **C compatibility is the narrow, stated subset:** widths summing to at most 8
+  bits, no non-bitfield member, matched against the C struct that declares each
+  member `unsigned char`. In that subset `{u3, u5}` is one byte and `{u4, u6}` is
+  two, byte-for-byte identical to C — covered by `cabi_bitfields`, whose C side
+  both writes and reads the value.
+- A wider run is laid out by the same rules and is deterministic, but is **not**
+  claimed to match C. Measured: `{u3, u5, u12}` is 4 bytes at alignment 2 in both
+  languages, yet C's `unsigned` spelling puts `c` at bit 8 while Kyn (and C's
+  `unsigned short` spelling) puts it at bit 16. Agreement on *size* alone would
+  therefore have hidden a disagreement about *contents*, which is why the subset
+  is the 8-bit one and not "anything up to 32 bits".
+- `E0489` refuses a run whose unit would overlap bytes already emitted. C accepts
+  `{a: u31, b: u33}` by making both runs share one 8-byte unit; Kyn does not claim
+  that rule and rejects the shape rather than emitting a type that disagrees with
+  its own layout.

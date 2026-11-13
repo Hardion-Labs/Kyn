@@ -1,0 +1,6 @@
+// 31 bits fill a 4-byte unit; the next 33 would need an 8-byte unit beginning at
+// byte 3, inside the bytes the first unit already owns. Two emitted members that
+// overlap cannot be expressed, so the layout is refused rather than emitted in a
+// form that disagrees with it.
+struct D { a: u31, b: u33 }
+fn main() i32 { return 0; }

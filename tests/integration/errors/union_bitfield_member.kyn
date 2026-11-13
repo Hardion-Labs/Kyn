@@ -1,0 +1,4 @@
+// A union's members overlap, so two overlapping bitfield runs would have no
+// defined bit positions. Rejected rather than given a rule that would be a guess.
+union Odd { a: u3, b: u5 }
+fn main() i32 { return 0; }

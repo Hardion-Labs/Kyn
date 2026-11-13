@@ -1,10 +1,10 @@
 # Design: unions, bitfields and packed structs
 
-Status: **partly implemented (§55).** Unions and packed structs are implemented
-end to end (steps 1–4 of §10 for those two, with their fixtures); bitfields are
-not, because their storage-unit packing is the one genuinely new algorithm here
-and it needs the `uN`/`iN` width types first. §10 of this document records what
-landed and what remains.
+Status: **implemented (§55 and §56).** Unions, packed structs and bitfields are
+all implemented end to end, with ABI fixtures for each. `align(N)` — the fourth
+idea this document considered — is deliberately **not** implemented and remains
+out of scope; §10 records what landed, and §4.1 was corrected against measurement
+during the bitfield increment.
 
 This document decides the three aggregate extensions `abi.md` §9 lists as
 unsupported, in the order they should be built.
@@ -175,31 +175,51 @@ Why this way and not the C colon syntax:
    the cheaper change in both places it touches.
 
 Packing rules, stated in the form that will be implemented and then **checked
-against clang** rather than assumed. The layout keeps a *current unit*
-`(offset, bits_used, unit_width)`:
+against clang** rather than assumed. The layout keeps a *bit cursor*
+`(offset, bits_used, unit_width)` where `unit_width` is one of 8/16/32/64:
 
-1. The unit width of a field is the smallest of `u8`/`u16`/`u32`/`u64` that can
-   hold its declared width.
-2. If the current unit has the same width and `bits_used + width <= unit_width`,
-   the field is appended at `bits_used`; otherwise a new unit opens at the next
-   offset aligned to `unit_width`.
-3. A field never crosses a unit boundary.
-4. A non-bitfield member **closes** the current unit and advances the offset by
-   its own layout; a later bitfield opens a new unit at the next aligned offset.
-   Measured: `struct Mix { unsigned a:3; char c; unsigned b:5; }` is 4 bytes, so
-   the second run reuses the space inside the closed unit's alignment rather
-   than each run starting a fresh 4-byte block.
+1. A bitfield that names no storage type takes a unit width of 8/16/32/64 — the
+   smallest of those that can hold its width. A bitfield whose field type is
+   itself a fixed-width integer (`u8`, `u16`, …) takes that type's width. This is
+   the one place the declared type changes the *layout* rather than only the
+   access, and it is what separates C's `unsigned a:3` (a 4-byte unit) from its
+   `unsigned char a:3` (a 1-byte unit).
+2. **A bitfield never straddles a boundary of its own unit size.** It is placed at
+   `bits_used` if it fits before the next such boundary, otherwise the cursor
+   jumps forward to that boundary. Note what this does *not* say: the field is not
+   pushed into a new unit of its own width. Measured: `{u3, u5, u12}` places `c`
+   at **bit 16**, not at bit 8, because 12 bits starting at 8 would straddle bit
+   16. So the run's layout is `(0, 8)`, `(3, 8)`, `(16, 16)` — the unit widths
+   differ within one run and the aggregate's alignment is the largest of them.
+3. A non-bitfield member **closes the cursor** to the end of the storage its unit
+   occupies. A later bitfield then resumes inside that same unit when bits remain
+   (measured: `{a:3, char c, b:5}` puts `b` at bit 16 and the aggregate is 4
+   bytes, not the 3 a fresh unit would give) and otherwise starts a new one.
+4. An `iN` bitfield is signed and sign-extends on read; a `uN` zero-extends.
+   Widths are the declared ones, so a run may mix them.
 
 The measured answers that fix these rules:
 
-| C declaration | size | what it pins |
+| C declaration | size, align | what it pins |
 | --- | --- | --- |
-| `struct Wire { unsigned k:3; unsigned t:5; }` | 4, align 4 | two fields share one `u32` unit |
-| `struct A { unsigned a:20; unsigned b:20; }` | 8 | 40 bits do not fit, so a second unit opens |
-| `struct B { unsigned char a:4; unsigned char b:6; }` | 2 | 10 bits exceed a `u8`, so it spills to a second `u8` |
-| `struct D { unsigned a:31; unsigned b:2; }` | 8 | 33 bits exceed a `u32` |
-| `struct Mix { unsigned a:3; char c; unsigned b:5; }` | 4 | a non-bitfield member does not reserve a fresh block |
-| `struct C { unsigned a:3; double d; unsigned b:5; }` | 24, off(d)=8 | a double forces alignment 8, so the run restarts after it |
+| `struct Wire { unsigned k:3; unsigned t:5; }` | 4, 4 | two fields share one 4-byte unit |
+| `struct B1c { unsigned char k:3; unsigned char t:5; }` | 1, 1 | the same with a 1-byte unit: 8 bits fit in one byte |
+| `struct A { unsigned a:20; unsigned b:20; }` | 8, 4 | 20+20 straddles bit 32, so `b` moves to bit 32 |
+| `struct B { unsigned char a:4; unsigned char b:6; }` | 2, 1 | 10 bits straddle bit 8, so `b` moves to bit 8 |
+| `struct D { unsigned a:31; unsigned b:2; }` | 8, 4 | 33 bits straddle bit 32 |
+| `struct K { unsigned char a:3; char c; unsigned short b:12; }` | 4, 2 | a run that grows after a non-bitfield member resumes at bit 16, and the alignment is the largest unit in the run (2), not the last field's |
+| `struct MixChar { unsigned char a:3; char c; unsigned char b:5; }` | 3, 1 | a non-bitfield member does not open a fresh block: `b` resumes in the same 1-byte unit after `c` |
+| `struct Mix { unsigned a:3; char c; unsigned b:5; }` | 4, 4 | the same shape in a 4-byte unit: `b` resumes there too, and the 4-byte unit is what raises the alignment |
+| `struct C { unsigned a:3; double d; unsigned b:5; }` | 24, 8, `d` at 8 | a `double` forces alignment 8 and leaves 3 bytes that the cursor does not reuse |
+
+**Correction to an earlier version of this document.** It claimed the unit width
+of a field is "the smallest of `u8`/`u16`/`u32`/`u64` that can hold its declared
+width" and cited `Mix` = 4 as confirming it. Two things were wrong. First, `Mix`
+is 4 bytes because its declared type is `unsigned`, a 4-byte unit — with
+`unsigned char` members the same shape is 3 bytes, measured. Second, the rule
+implied a run grows by taking a wider *common* unit, which would put `c` at bit 8
+in `{u3, u5, u12}`; the measured position is bit 16, because a field never
+straddles the boundary of its own width. Rule 2 above is the measured one.
 
 Reading a bitfield yields the field's own type, sign-extended when `iN` and
 zero-extended when `uN`; writing it masks to the width and leaves the other bits
@@ -216,11 +236,31 @@ It claims:
 - **a documented, deterministic layout**, identical on every target (a pure
   function of the declared widths);
 - **a C-compatible subset**, measured and stated: adjacent members whose widths
-  sum to at most 32 bits, all unsigned or all signed, in declaration order. That
-  is measured against clang on this target — `struct Sub { unsigned a:3; unsigned
-  b:5; unsigned c:12; }` is `%struct.Sub = type { i32 }` and passes as one `i32`,
-  which is exactly what rules 1–3 in §4.1 produce — and it is covered by a
-  fixture whose C side both produces and reads back the value.
+  sum to at most 32 bits, all unsigned or all signed, in declaration order, and
+  **summing to at most 8 bits to be C compatible as a whole**. The 8-bit ceiling
+  is not arbitrary — it is the correction of this document's earlier claim.
+  `struct Sub { unsigned a:3; unsigned b:5; unsigned c:12; }` is `{ i32 }` and
+  passes as one `i32` only because each member's declared type is `unsigned`, a
+  4-byte unit. Kyn declares the width without a storage type, so `a:u3;b:u5` is a
+  1-byte unit (measured: C's `unsigned char a:3; unsigned char b:5` is 1 byte,
+  align 1), and any run whose widths sum past 8 bits would take a wider unit than
+  the C struct it is compared with. Measured: `{ u3, u5 }` is 1 byte where
+  `{ unsigned, unsigned }` is 4.
+  The compatible subset is therefore: **one run, widths summing to at most 8,
+  no non-bitfield member in the aggregate** — matched against the C struct that
+  declares each member `unsigned char`, which is the only C spelling whose units
+  are the widths themselves. It is covered by a fixture whose C side both
+  produces and reads back the value.
+  Measured confirmation of the second half of the subset: `{u3, u5, u12}` in Kyn
+  is 4 bytes at align 2, and C's `{unsigned char a:3; unsigned char b:5;
+  unsigned short c:12;}` is also 4 at align 2 **but places `c` at bit 16 like the
+  rule above while a C `unsigned`-typed run places it at bit 8**, so the byte
+  contents agree only in the documented subset. The two agree on size in both
+  cases, which is why the size table was not enough to find this.
+  Everything from 9 to 32 bits is deterministic and documented but **not** C
+  compatible, and the design says so rather than implying otherwise.
+  (A future `align(N)` or a `packed` bitfield unit could widen this subset; it is
+  out of scope here and is not claimed.)
 
 Anything outside the subset is still laid out deterministically (the rules above
 are total), but a Kyn↔C boundary that depends on it is outside what the project
@@ -377,6 +417,38 @@ has followed.
    the `packed` modifier; `diagnostics.md` gains `E0481`–`E0484`; `roadmap.md`,
    `README.md` and `CHANGELOG.md` record the change.
 
+### What landed in §56 (bitfields)
+
+- **Steps 1, 2, 3, 4 and 5 for bitfields.** `uN`/`iN` widths 1..128 resolved where
+  a type is expected (`E0486` outside that range); `isBitfield` recognising a
+  width that is not a whole number of bytes; `placeFields` laying out a run on a
+  bit cursor *and* emitting one integer per run plus explicit padding for gaps;
+  `bit_extract`/`bit_insert` in the IR, so a read is a load plus two shifts and a
+  write is a load, mask, shift, and store; `E0487` for a union bitfield member and
+  `E0489` for a layout the emitted type cannot mirror.
+- **Two errors in §4.1 were corrected against measurement, not argued away.**
+  (1) The rule was said to pick "the smallest unit that holds the field's width"
+  and cited `Mix` = 4 as confirming it; `Mix` is 4 only because its declared type
+  is `unsigned`, and the same shape with `unsigned char` members is 3. (2) The
+  rule implied a growing run takes a wider *common* unit, which would put `c` at
+  bit 8 in `{u3, u5, u12}`; the measured position is bit 16, because a field never
+  straddles a boundary of its own width. §4.1 now states the cursor rule and lists
+  the byte-level measurements that fix it.
+- **The C-compatible subset was narrowed after measuring why the old one was
+  wrong.** §4.2 claimed "widths summing to at most 32 bits"; that hold only
+  because C's `unsigned a:3` uses a 4-byte unit, which the bare-width spelling
+  does not. The subset is now widths summing to at most 8 bits with no
+  non-bitfield member, matched against C's `unsigned char` spelling.
+  `{u3, u5, u12}` agrees with C on *size* (4 bytes, alignment 2) while disagreeing
+  on *contents*, which is exactly the kind of agreement that would have hidden a
+  bug; the fixture compares bytes, not sizes.
+- **One shape this increment refuses.** `{a: u31, b: u33}` needs an 8-byte unit
+  starting at byte 3, overlapping bytes the first unit already owns. C accepts it
+  by fusing the runs into one 8-byte unit; Kyn does not implement that rule and
+  reports `E0489` instead of emitting a type that disagrees with its own layout.
+  This is stated in `abi.md` §11, `language-reference.md` §3.7 and
+  `safety-model.md` §3 rather than being left for a reader to discover.
+
 ### What landed in §55
 
 - **Step 1 (type model):** `StructInfo.is_union` / `is_packed`, the union branch
@@ -405,9 +477,14 @@ has followed.
   through Kyn's own field access and compared against C's offsets at bytes 1 and
   4 of a packed struct and byte 8 of a nested union; exit 15), plus three error
   fixtures and five unit tests.
-- **Not landed:** bitfields (the storage-unit rule of §4.1, `uN`/`iN` width
-  types, `E0482`/`E0483`) and `align(N)`. `E0481`–`E0483` remain unallocated in
-  `diagnostics.md` because no program can reach them yet.
+- **Not landed in §55:** bitfields and `align(N)`; both are now covered — bitfields
+  in §56 below, `align(N)` not at all. The four codes §10 reserved for this work
+  (`E0481`–`E0483`) were **never allocated**: `E0403` already covers the union
+  recursion case, and the bitfield cases needed three different diagnostics
+  (`E0486` width out of range, `E0487` union member, `E0489` unrepresentable
+  layout), so reserving numbers before the checks existed would have been a guess.
+  `diagnostics.md` documents the codes the compiler can actually emit, which is
+  what `check_diagnostic_docs.py` enforces.
 
 ## 11. How this document was checked before being published
 

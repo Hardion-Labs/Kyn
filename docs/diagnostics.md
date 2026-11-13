@@ -154,6 +154,10 @@ unsupported construct or an internal compiler invariant violation.
 | `E0480` | `va_arg` used outside a variadic function |
 | `E0484` | `packed` modifier is not attached to a `struct` or `union` declaration |
 | `E0485` | a union initializer does not name exactly one member |
+| `E0486` | an integer type width is out of range (`u0`, `u200`); the width is 1 to 128 |
+| `E0487` | a union member is a bitfield; overlapping runs have no defined bit positions |
+| `E0488` | an aggregate has a member with no known size (internal consistency check) |
+| `E0489` | a bitfield run would need a storage unit overlapping bytes already emitted; the layout is refused rather than emitted in a form that disagrees with it |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

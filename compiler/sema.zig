@@ -382,6 +382,10 @@ pub const Sema = struct {
 
         var fields = try self.allocator.alloc(types.Field, sd.fields.len);
         var seen = std.StringHashMap(void).init(self.allocator);
+        // Whether *this* declaration failed, as opposed to an earlier one in the
+        // same file: a global "any error so far" check would skip the layout of
+        // every later, perfectly valid type in a file with one bad line.
+        var unusable = false;
         for (sd.fields, 0..) |*field, i| {
             if (seen.contains(field.name)) {
                 try self.reporter.err("E0404", field.span, "duplicate field '{s}' in {s} '{s}'", .{ field.name, self.aggregateLabel(info), sd.name });
@@ -391,11 +395,44 @@ pub const Sema = struct {
             const ty = try self.resolveType(field.ty_expr);
             if (containsIncompleteByValue(ty)) {
                 try self.reporter.err("E0403", field.span, "{s} '{s}' contains itself by value", .{ self.aggregateLabel(info), sd.name });
+                unusable = true;
             }
             field.ty = ty;
             fields[i] = .{ .name = field.name, .ty = ty, .index = @intCast(i) };
         }
         info.fields = fields;
+        // If a field's type could not be resolved the aggregate has no layout to
+        // compute, and walking it would recurse through the unfinished member --
+        // a by-value cycle is exactly the case `E0403` above reported. Placement
+        // is skipped and the aggregate stays incomplete, which every consumer
+        // already treats as "not layoutable".
+        if (unusable) {
+            info.resolving = false;
+            return;
+        }
+        if (info.is_union) {
+            // A union's members overlap, so two runs would have no defined bit
+            // positions: there is no layout to give them. Rejected here rather
+            // than given a rule that would be a guess.
+            for (info.fields) |f| {
+                if (isBitfield(f.ty)) {
+                    try self.reporter.err("E0487", sd.span, "a union member cannot be a bitfield: overlapping runs would have no defined bit positions", .{});
+                    break;
+                }
+            }
+        }
+        // Placement is part of resolution because it walks the same fields the
+        // checks above just saw, and because every later consumer -- the emitter,
+        // the classifier, `field_ptr` -- reads `info.placed`.
+        placeFields(self.allocator, info) catch |err| switch (err) {
+            error.UnknownLayout => {
+                try self.reporter.err("E0488", sd.span, "aggregate '{s}' has a member with no known size", .{info.name});
+            },
+            error.UnrepresentableBitfield => {
+                try self.reporter.err("E0489", sd.span, "aggregate '{s}' has a bitfield layout the emitted type cannot mirror: a run would overlap storage already emitted", .{info.name});
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
         info.resolving = false;
         info.complete = true;
     }
@@ -771,6 +808,15 @@ pub const Sema = struct {
         const ty: *Type = switch (te.kind) {
             .name => |name| blk: {
                 if (self.primitiveByName(name)) |prim| break :blk prim;
+                // `u3`/`i7` are not keywords: a type name is the only place they
+                // can appear, so they are recognised here rather than in the
+                // lexer, where reserving every `u<digits>` spelling would also
+                // steal ordinary identifiers such as `u1x`.
+                if (types.parseIntWidthName(name)) |width| {
+                    if (try self.prims.intOfWidth(width.bits, width.signed)) |width_ty| break :blk width_ty;
+                    try self.reporter.err("E0486", te.span, "integer type '{s}' has no valid width: the width must be 1 to {d}", .{ name, types.max_int_bits });
+                    break :blk self.prims.invalid;
+                }
                 const resolved = if (std.mem.indexOfScalar(u8, name, '.')) |dot| blk2: {
                     const alias = name[0..dot];
                     const member = name[dot + 1 ..];
@@ -1999,7 +2045,7 @@ pub const Sema = struct {
             .void => "void",
             .bool => "bool",
             .char => "char",
-            .int => |info| info.name(),
+            .int => |info| info.nameAlloc(self.allocator),
             .float => |bits| if (bits == 32) "f32" else "f64",
             .abi_vec2_f32 => "<internal ABI vector>",
             .abi_v2f32_f32 => "<internal ABI pair>",
@@ -2410,32 +2456,87 @@ fn eightbyteRegister(leaf: EightbyteLeaf) ?EightbyteRegister {
     return .i64;
 }
 
+/// A bitfield is an integer narrower than a byte, or one that is not a whole
+/// number of bytes. Such a type exists only as a struct field: it has no storage
+/// of its own, so `aggregateLayoutGuess` gives it no size and every other
+/// consumer has to go through the run layout instead.
+pub fn isBitfield(ty: *Type) bool {
+    return switch (ty.*) {
+        // Only a width that is not a whole number of bytes is a bitfield. `u64`
+        // and `u128` are ordinary members: they have their own storage, their own
+        // alignment, and calling them bitfields would claim they can share a unit
+        // with a neighbour. A `u3`..`u63` field always fits one of the 1/2/4/8-byte
+        // units, so a run never asks for a unit wider than 8 bytes.
+        .int => |info| info.bits % 8 != 0 and info.bits < 64,
+        else => false,
+    };
+}
+
+/// Whether a struct's bitfield layout is representable. A run whose cursor is not
+/// at the start of its unit would need an emitted integer starting mid-block,
+/// which LLVM cannot express without moving the members after it; rather than
+/// emit a type that disagrees with `aggregateLayoutGuess`, the aggregate is
+/// rejected with `E0489`.
+pub fn bitfieldLayoutIsRepresentable(info: types.StructInfo) bool {
+    var bits: u64 = 0;
+    var emitted_bytes: u64 = 0;
+    for (info.fields) |field| {
+        const field_layout = aggregateLayoutGuess(field.ty) orelse return false;
+        if (!isBitfield(field.ty)) {
+            bits = std.mem.alignForward(u64, bits, 8);
+            const start = if (info.is_packed) bits / 8 else std.mem.alignForward(u64, bits / 8, field_layout.align_);
+            emitted_bytes = @max(emitted_bytes, start + field_layout.size);
+            bits = emitted_bytes * 8;
+            continue;
+        }
+        const width: u64 = field.ty.int.bits;
+        const unit = bitfieldUnitWidth(field.ty);
+        if (!info.is_packed) {
+            const boundary = unit * 8;
+            if ((bits % boundary) + width > boundary) bits = std.mem.alignForward(u64, bits, boundary);
+        }
+        const field_byte = bits / 8;
+        // The unit must start on a byte the field does reach: an aligned block
+        // that begins at or before it, or the next block when it does not fit.
+        const block_end = std.mem.alignForward(u64, field_byte + 1, unit);
+        if ((bits + width + 7) / 8 > block_end) return false;
+        const unit_start = block_end - unit;
+        if (unit_start > emitted_bytes) return false;
+        emitted_bytes = @max(emitted_bytes, block_end);
+        bits += width;
+    }
+    return true;
+}
+
+/// The width of the storage unit a bitfield sits in: the smallest of 8/16/32/64
+/// that holds its width. This is the unit whose boundaries the field may not
+/// straddle, and the alignment it contributes to the aggregate.
+/// The smallest of 8/16/32/64 bits that holds `bits`, as a unit width in bytes.
+fn bitfieldUnitWidthForBits(bits: u64) u64 {
+    if (bits <= 8) return 1;
+    if (bits <= 16) return 2;
+    if (bits <= 32) return 4;
+    return 8;
+}
+
+pub fn bitfieldUnitWidth(ty: *Type) u64 {
+    const bits: u64 = switch (ty.*) {
+        .int => |info| info.bits,
+        else => 8,
+    };
+    if (bits <= 8) return 1;
+    if (bits <= 16) return 2;
+    if (bits <= 32) return 4;
+    return 8;
+}
+
 pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
     return switch (ty.*) {
         .slice => .{ .size = 16, .align_ = 8 },
-        .struct_type => |info| blk: {
-            var size: u64 = 0;
-            var align_: u64 = 1;
-            for (info.fields) |field| {
-                const field_layout = aggregateLayoutGuess(field.ty) orelse return null;
-                if (info.is_union) {
-                    // Members overlap: every one starts at offset 0, the aggregate
-                    // is as large as its largest member and as aligned as its most
-                    // aligned one. One branch instead of a parallel layout pass.
-                    size = @max(size, field_layout.size);
-                    align_ = @max(align_, field_layout.align_);
-                    continue;
-                }
-                if (!info.is_packed) size = std.mem.alignForward(u64, size, field_layout.align_);
-                size += field_layout.size;
-                align_ = @max(align_, field_layout.align_);
-            }
-            // A packed aggregate has alignment 1 by definition, and its size
-            // already ends on a member boundary because nothing was rounded.
-            if (info.is_packed) break :blk .{ .size = size, .align_ = 1 };
-            size = std.mem.alignForward(u64, size, align_);
-            break :blk .{ .size = size, .align_ = align_ };
-        },
+        .struct_type => |info| if (info.layout.align_ != 0) .{
+            .size = info.layout.size,
+            .align_ = info.layout.align_,
+        } else null,
         .array => |info| blk: {
             // A fixed array is `len` element copies, aligned to its element.
             // No size cap here: an aggregate wider than 16 bytes is still a
@@ -2449,12 +2550,183 @@ pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
         },
         .bool => .{ .size = 1, .align_ = 1 },
         .char => .{ .size = 4, .align_ = 4 },
-        .int => |info| .{ .size = @intCast(info.bits / 8), .align_ = @intCast(@min(@as(u64, info.bits / 8), 16)) },
+        // A width that is not a whole number of bytes still occupies a whole
+        // number of them; `u3` is one byte of storage, as a bitfield member.
+        .int => |info| .{
+            .size = @intCast((info.bits + 7) / 8),
+            .align_ = @intCast(@min(@as(u64, (info.bits + 7) / 8), 16)),
+        },
         .float => |bits| .{ .size = @intCast(bits / 8), .align_ = @intCast(bits / 8) },
         .pointer => .{ .size = 8, .align_ = 8 },
+        // A function type has no storage of its own; in an aggregate it is a
+        // pointer to the code, which is what its lowering produces.
+        .fn_type, .fn_ptr => .{ .size = 8, .align_ = 8 },
         .enum_type => |info| aggregateLayoutGuess(info.backing),
         else => null,
     };
+}
+
+/// `UnknownLayout` never escapes `resolveStruct`: it is turned into `E0488` at
+/// the one call site, because an unknown layout is a program error the reporter
+/// owns, not an internal failure.
+pub const PlaceError = error{ OutOfMemory, UnknownLayout, UnrepresentableBitfield };
+
+/// Lays out `info` once: the bit cursor produces the byte position of every
+/// member **and** the emitted LLVM members (bitfield runs collapse into a unit,
+/// gaps become explicit padding). Doing it in one pass is not an optimisation but
+/// a correctness property: a separate placement pass is exactly how a bitfield's
+/// size and its bit offset drift apart.
+pub fn placeFields(allocator: std.mem.Allocator, info: *types.StructInfo) PlaceError!void {
+    if (info.complete) return;
+    var bits: u64 = 0;
+    var align_: u64 = 1;
+    var emitted: std.ArrayList(*Type) = .empty;
+    var emitted_bytes: u64 = 0;
+    const placed = allocator.alloc(types.Placed, info.fields.len) catch return error.OutOfMemory;
+    // The emitted unit the cursor is currently filling, and its width in bits.
+    var run_index: ?u32 = null;
+    var run_unit_bits: u64 = 0;
+    // Where the open packed run began, in bits, so its unit can be widened while
+    // the fields' offsets inside it stay where they are.
+    var run_bit_start: ?u64 = null;
+
+    for (info.fields, 0..) |field, i| {
+        const field_layout = aggregateLayoutGuess(field.ty) orelse return error.UnknownLayout;
+        if (info.is_union) {
+            placed[i] = .{ .emitted_index = 0, .storage_ty = field.ty };
+            bits = @max(bits, field_layout.size * 8);
+            align_ = @max(align_, field_layout.align_);
+            continue;
+        }
+
+        if (!isBitfield(field.ty)) {
+            bits = std.mem.alignForward(u64, bits, 8);
+            const byte_offset = bits / 8;
+            const start = if (info.is_packed) byte_offset else std.mem.alignForward(u64, byte_offset, field_layout.align_);
+            if (start > emitted_bytes) {
+                emitted.append(allocator, try paddingType(allocator, start - emitted_bytes)) catch return error.OutOfMemory;
+                emitted_bytes = start;
+            }
+            run_index = null;
+            run_unit_bits = 0;
+            run_bit_start = null;
+            placed[i] = .{ .emitted_index = @intCast(emitted.items.len), .storage_ty = field.ty };
+            emitted.append(allocator, field.ty) catch return error.OutOfMemory;
+            emitted_bytes = start + field_layout.size;
+            bits = emitted_bytes * 8;
+            if (!info.is_packed) align_ = @max(align_, field_layout.align_);
+            continue;
+        }
+
+        const width: u64 = field.ty.int.bits;
+        const unit = bitfieldUnitWidth(field.ty);
+        if (info.is_packed) {
+            // A packed run inserts nothing between fields, so its unit has to
+            // cover the whole run: it may not straddle a field any more than an
+            // aligned one may, but it also may not leave a gap. The run's unit is
+            // therefore widened to the run's total width, which is 1, 2, 4 or 8
+            // bytes because a bitfield is narrower than 64 bits.
+            const run_start = run_bit_start orelse bits;
+            const run_width = (bits - run_start) + width;
+            const wide_unit = bitfieldUnitWidthForBits(run_width);
+            align_ = 1;
+            if (run_index == null or run_unit_bits != wide_unit * 8) {
+                const start = run_start / 8;
+                if (start > emitted_bytes) {
+                    emitted.append(allocator, try paddingType(allocator, start - emitted_bytes)) catch return error.OutOfMemory;
+                    emitted_bytes = start;
+                }
+                run_index = @intCast(emitted.items.len);
+                run_unit_bits = wide_unit * 8;
+                run_bit_start = run_start;
+                emitted.append(allocator, try storageUnitType(allocator, wide_unit)) catch return error.OutOfMemory;
+                emitted_bytes = @max(emitted_bytes, start + wide_unit);
+            } else if ((bits + width + 7) / 8 > emitted_bytes) {
+                // The run outgrew the unit that was opened for it. Re-laying the
+                // run out from its start is what keeps the fields' bit offsets
+                // unchanged as the unit grows, which is exactly the rule measured
+                // for `{u3, u5, u12}` on the aligned path.
+                const start = run_bit_start.? / 8;
+                const reunit = bitfieldUnitWidthForBits(bits + width - run_bit_start.?);
+                emitted.items[run_index.?] = try storageUnitType(allocator, reunit);
+                run_unit_bits = reunit * 8;
+                emitted_bytes = @max(emitted_bytes, start + reunit);
+            }
+            placed[i] = .{
+                .emitted_index = run_index.?,
+                .storage_ty = try storageUnitType(allocator, run_unit_bits / 8),
+                .bit_offset = @intCast(bits - run_bit_start.?),
+            };
+            bits += width;
+            continue;
+        }
+        // Rule 2 of the design: a field never straddles a boundary of its own unit
+        // width, so when it would the cursor jumps to that boundary.
+        const boundary = unit * 8;
+        if ((bits % boundary) + width > boundary) bits = std.mem.alignForward(u64, bits, boundary);
+        align_ = @max(align_, unit);
+        // The unit is an emitted integer, so it begins where LLVM will put it: at
+        // the start of the aligned block that holds the field's first byte. That
+        // is the rule C uses, and it is why `c` in `{u3, u5, u12}` lands at bit 16
+        // rather than 8 -- bits 8..19 do not fit the 2-byte block starting at byte
+        // 0, so the field moves to the block starting at byte 2.
+        const field_byte = bits / 8;
+        const block_end = std.mem.alignForward(u64, field_byte + 1, unit);
+        const field_end_byte = (bits + width + 7) / 8;
+        const unit_start = if (field_end_byte <= block_end) block_end - unit else block_end;
+        // Two emitted members may not overlap, so a unit that would begin inside
+        // already-emitted storage is only usable while the field still fits there.
+        // Otherwise the aggregate is rejected rather than given a layout the
+        // emitted type cannot mirror.
+        if (unit_start < emitted_bytes and field_end_byte > emitted_bytes) return error.UnrepresentableBitfield;
+        std.debug.assert(bits >= unit_start * 8);
+        const reuses_run = run_index != null and run_unit_bits == unit * 8 and
+            (bits + width + 7) / 8 <= emitted_bytes;
+        if (!reuses_run) {
+            if (unit_start > emitted_bytes) {
+                emitted.append(allocator, try paddingType(allocator, unit_start - emitted_bytes)) catch return error.OutOfMemory;
+                emitted_bytes = unit_start;
+            }
+            run_index = @intCast(emitted.items.len);
+            run_unit_bits = unit * 8;
+            emitted.append(allocator, try storageUnitType(allocator, unit)) catch return error.OutOfMemory;
+            emitted_bytes = @max(emitted_bytes, unit_start + unit);
+        }
+        placed[i] = .{
+            .emitted_index = run_index.?,
+            .storage_ty = try storageUnitType(allocator, unit),
+            .bit_offset = @intCast(bits - unit_start * 8),
+        };
+        bits += width;
+    }
+
+    var size = (bits + 7) / 8;
+    if (info.is_packed) {
+        info.layout = .{ .size = size, .align_ = 1 };
+    } else {
+        size = std.mem.alignForward(u64, size, align_);
+        info.layout = .{ .size = size, .align_ = align_ };
+    }
+    // The emitted members must reach exactly the size the cursor computed, or the
+    // two disagree about how many bytes the aggregate has.
+    if (emitted_bytes > size) return error.UnrepresentableBitfield;
+    info.placed = placed;
+    info.emitted = emitted.toOwnedSlice(allocator) catch return error.OutOfMemory;
+}
+
+/// The integer type a storage unit of `bytes` is emitted as.
+fn storageUnitType(allocator: std.mem.Allocator, bytes: u64) !*Type {
+    const ty = try allocator.create(Type);
+    ty.* = .{ .int = .{ .bits = @intCast(bytes * 8), .signed = false } };
+    return ty;
+}
+
+/// `[len]u8`, used to make a gap an explicit member of the emitted type.
+fn paddingType(allocator: std.mem.Allocator, len: u64) !*Type {
+    const elem = try storageUnitType(allocator, 1);
+    const ty = try allocator.create(Type);
+    ty.* = .{ .array = .{ .elem = elem, .len = @intCast(len) } };
+    return ty;
 }
 
 pub fn isConstInitializer(expr: *ast.Expr) bool {
@@ -2553,6 +2825,23 @@ const SemTest = struct {
     fn typeName(self: *SemTest, ty: *Type) []const u8 {
         var sema = Sema.init(self.arena.allocator(), &self.reporter, &self.prims);
         return sema.typeName(ty);
+    }
+
+    /// The analyzed type declared under `name`. Looked up by name rather than by
+    /// elimination over the declaration list: a table-driven test may declare a
+    /// helper type of its own, and "the one that is not the helper" silently
+    /// picks the wrong declaration the moment a case declares two.
+    fn typeNamed(self: *SemTest, name: []const u8) ?*Type {
+        const decls = self.program.?.decls;
+        for (decls) |decl| {
+            switch (decl.kind) {
+                .struct_decl => |sd| {
+                    if (std.mem.eql(u8, sd.name, name)) return sd.ty;
+                },
+                else => {},
+            }
+        }
+        return null;
     }
 };
 
@@ -2857,6 +3146,80 @@ test "a union reports itself as a union, not a struct" {
         \\union Loop { inner: Loop }
         \\fn main() i32 { return 0; }
     , "E0403");
+}
+
+test "a bitfield run that the emitted type cannot mirror is rejected" {
+    // `{u31, u33}`: 31 bits fill a 4-byte unit, and the next 33 bits would need an
+    // 8-byte unit beginning at byte 3 -- inside the bytes the first unit already
+    // owns. LLVM cannot express two overlapping members, so the aggregate is
+    // rejected with a diagnostic instead of being given a layout the emitted type
+    // would silently disagree with. C accepts this shape and makes the two runs
+    // share one 8-byte unit; Kyn does not claim that rule, so it says so.
+    var ctx: SemTest = undefined;
+    try ctx.init("struct D { a: u31, b: u33 }\nfn main() i32 { return 0; }\n");
+    defer ctx.deinit();
+    try ctx.run();
+    try testing.expect(ctx.reporter.hasErrors());
+    var seen = false;
+    for (ctx.reporter.list.items) |diag| {
+        if (std.mem.eql(u8, diag.code, "E0489")) seen = true;
+    }
+    try testing.expect(seen);
+}
+
+test "bitfield runs are laid out as measured against clang" {
+    const cases = [_]struct { decl: []const u8, name: []const u8, size: u64, alignment: u64 }{
+        // Each expected pair is the clang answer for the same widths written with
+        // the smallest unsigned/char type that holds each width, which is the C
+        // spelling whose units are the widths themselves.
+        .{ .decl = "struct Wire { k: u3, t: u5 }", .name = "Wire", .size = 1, .alignment = 1 },
+        .{ .decl = "struct Halves { a: u20, b: u20 }", .name = "Halves", .size = 8, .alignment = 4 },
+        .{ .decl = "struct Spill { a: u4, b: u6 }", .name = "Spill", .size = 2, .alignment = 1 },
+        .{ .decl = "struct Wide { a: u31, b: u2 }", .name = "Wide", .size = 8, .alignment = 4 },
+        .{ .decl = "struct Three { a: u3, b: u5, c: u12 }", .name = "Three", .size = 4, .alignment = 2 },
+        .{ .decl = "struct Signed { a: i3, b: i5 }", .name = "Signed", .size = 1, .alignment = 1 },
+        // A non-bitfield member does not open a fresh block: `b` resumes in the
+        // same byte unit after `c`, so 8 + 8 + 5 bits round to 3 bytes. In C this
+        // is the `unsigned char` form (measured 3/1); the `unsigned` form is 4/4
+        // only because a 4-byte unit reaches a 4-byte alignment.
+        .{ .decl = "struct Mix { a: u3, c: u8, b: u5 }", .name = "Mix", .size = 3, .alignment = 1 },
+        // A `double` forces alignment 8, so the run restarts after it.
+        .{ .decl = "struct Doubled { a: u3, d: f64, b: u5 }", .name = "Doubled", .size = 24, .alignment = 8 },
+        // Packed: no boundary may be inserted, so a run may straddle its unit.
+        .{ .decl = "packed struct Tight { a: u3, b: u5 }", .name = "Tight", .size = 1, .alignment = 1 },
+        .{ .decl = "packed struct Tight2 { a: u4, b: u6 }", .name = "Tight2", .size = 2, .alignment = 1 },
+    };
+    for (cases) |case| {
+        const source_text = try std.fmt.allocPrint(
+            testing.allocator,
+            "{s}\nfn main() i32 {{ return 0; }}\n",
+            .{case.decl},
+        );
+        defer testing.allocator.free(source_text);
+
+        var ctx: SemTest = undefined;
+        try ctx.init(source_text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) {
+            for (ctx.reporter.list.items) |diag| std.debug.print("  {s}: {s}\n", .{ diag.code, diag.message });
+            return error.UnexpectedDiagnostic;
+        }
+        const ty = ctx.typeNamed(case.name) orelse {
+            std.debug.print("no type named {s}\n", .{case.name});
+            return error.UnexpectedDiagnostic;
+        };
+        const layout = aggregateLayoutGuess(ty) orelse {
+            std.debug.print("{s}: no layout\n", .{case.name});
+            return error.UnexpectedDiagnostic;
+        };
+        if (layout.size != case.size or layout.align_ != case.alignment) {
+            std.debug.print("{s}: expected {d}/{d}, got {d}/{d}\n", .{
+                case.name, case.size, case.alignment, layout.size, layout.align_,
+            });
+            return error.UnexpectedDiagnostic;
+        }
+    }
 }
 
 test "union layout is the largest member and packed layout has no padding" {

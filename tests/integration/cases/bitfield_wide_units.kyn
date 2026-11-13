@@ -1,0 +1,24 @@
+// The widest shapes the language accepts: a run that grows from a 1-byte to a
+// 2-byte unit, a 63-bit field in an 8-byte unit, and packed runs that must not
+// insert a gap. Expected exit is 6.
+struct Grown { a: u3, b: u5, c: u12 }
+struct WideBit { only: u63 }
+packed struct Tight1 { a: u3, b: u5 }
+packed struct Tight2 { a: u4, b: u6 }
+
+fn main() i32 {
+    var score: i32 = 0;
+    var g: Grown = Grown { a: 7, b: 31, c: 4095 };
+    if (g.a == 7 && g.b == 31) { score += 1; }
+    if (g.c == 4095) { score += 1; }
+    var w: WideBit = WideBit { only: 9223372036854775807 };
+    if (w.only == 9223372036854775807) { score += 1; }
+    var t1: Tight1 = Tight1 { a: 7, b: 31 };
+    if (t1.a == 7 && t1.b == 31) { score += 1; }
+    var t2: Tight2 = Tight2 { a: 15, b: 63 };
+    if (t2.a == 15 && t2.b == 63) { score += 1; }
+    // A write to one field of a packed run must leave the others intact.
+    t2.b = 0;
+    if (t2.a == 15 && t2.b == 0) { score += 1; }
+    return score;
+}
