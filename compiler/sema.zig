@@ -246,6 +246,7 @@ pub const Sema = struct {
                         .is_public = decl.is_public,
                         .is_union = sd.is_union,
                         .is_packed = sd.is_packed,
+                        .explicit_align = sd.explicit_align,
                     };
                     const ty = try self.allocator.create(Type);
                     ty.* = .{ .struct_type = info };
@@ -2701,7 +2702,13 @@ pub fn placeFields(allocator: std.mem.Allocator, info: *types.StructInfo) PlaceE
     }
 
     var size = (bits + 7) / 8;
-    if (info.is_packed) {
+    // `align(N)` raises the aggregate's alignment and rounds its size up to a
+    // multiple of it; it never lowers either. Measured against C:
+    // `struct { char c; } __attribute__((aligned(16)))` is 16/16, `aligned(2)` on a
+    // 4-aligned struct changes nothing, and `packed, aligned(4)` on `{char, int}`
+    // is 8/4 -- the maximum of the two requirements wins.
+    if (info.explicit_align > 0) align_ = @max(align_, info.explicit_align);
+    if (info.is_packed and info.explicit_align == 0) {
         info.layout = .{ .size = size, .align_ = 1 };
     } else {
         size = std.mem.alignForward(u64, size, align_);
@@ -3146,6 +3153,42 @@ test "a union reports itself as a union, not a struct" {
         \\union Loop { inner: Loop }
         \\fn main() i32 { return 0; }
     , "E0403");
+}
+
+test "explicit alignment raises the aggregate's alignment and rounds its size" {
+    // Measured against clang: `aligned(16)` on `{char}` is 16/16; `aligned(2)` on
+    // a 4-aligned struct changes nothing; `packed, aligned(4)` on `{char,int}` is
+    // 8/4, because the maximum of the two requirements wins.
+    const cases = [_]struct { decl: []const u8, name: []const u8, size: u64, alignment: u64 }{
+        .{ .decl = "align(16) struct A { c: u8 }", .name = "A", .size = 16, .alignment = 16 },
+        .{ .decl = "align(2) struct B { c: u8, i: i32 }", .name = "B", .size = 8, .alignment = 4 },
+        .{ .decl = "align(4) packed struct C { c: u8, i: i32 }", .name = "C", .size = 8, .alignment = 4 },
+        .{ .decl = "packed align(4) struct C2 { c: u8, i: i32 }", .name = "C2", .size = 8, .alignment = 4 },
+        .{ .decl = "packed struct P { c: u8, i: i32 }", .name = "P", .size = 5, .alignment = 1 },
+        .{ .decl = "align(8) struct E { c: u8, i: i32 }", .name = "E", .size = 8, .alignment = 8 },
+        .{ .decl = "align(32) struct F { c: u8 }", .name = "F", .size = 32, .alignment = 32 },
+        .{ .decl = "align(16) union U { c: u8, d: f64 }", .name = "U", .size = 16, .alignment = 16 },
+    };
+    for (cases) |case| {
+        const text = try std.fmt.allocPrint(testing.allocator, "{s}\nfn main() i32 {{ return 0; }}\n", .{case.decl});
+        defer testing.allocator.free(text);
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) {
+            for (ctx.reporter.list.items) |diag| std.debug.print("  {s}: {s}\n", .{ diag.code, diag.message });
+            return error.UnexpectedDiagnostic;
+        }
+        const ty = ctx.typeNamed(case.name) orelse return error.MissingStructType;
+        const layout = aggregateLayoutGuess(ty) orelse return error.MissingLayout;
+        if (layout.size != case.size or layout.align_ != case.alignment) {
+            std.debug.print("{s}: expected {d}/{d}, got {d}/{d}\n", .{
+                case.name, case.size, case.alignment, layout.size, layout.align_,
+            });
+            return error.UnexpectedDiagnostic;
+        }
+    }
 }
 
 test "a bitfield run that the emitted type cannot mirror is rejected" {

@@ -38,8 +38,15 @@ parameter      = identifier , ":" , type ;
 
 (* Aggregates and enums *)
 
-aggregate_decl = [ "packed" ] , ( "struct" | "union" ) , identifier ,
+aggregate_decl = [ aggregate_modifier , { aggregate_modifier } ] ,
+                 ( "struct" | "union" ) , identifier ,
                  "{" , [ field_list ] , "}" ;
+
+(* `packed` and `align(N)` may appear in either order, and at most once each.
+   `align` is not a keyword: it is an identifier immediately followed by "(" ,
+   recognised only in this position, so a variable may still be named `align`.
+   N is a power of two no larger than 4096. *)
+aggregate_modifier = "packed" | "align" , "(" , integer , ")" ;
 
 (* A field type may be an integer of any width 1..128, written u<N> or i<N>.
    Those are not keywords: they are recognised where a type is expected, so an

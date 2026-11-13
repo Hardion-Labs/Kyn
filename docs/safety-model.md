@@ -150,6 +150,10 @@ compile time:
   summing to at most 8 bits, no non-bitfield member). The layout is deterministic
   and documented, but it is not claimed to match another compiler's, so a boundary
   that depends on it may disagree; `abi.md` §11 states the subset.
+- an `align(N)` aggregate crossing the C boundary **by value**. The layout is
+  deterministic and matches C's for every measured shape (`abi.md` §10), but the
+  classifier refuses the parameter rather than guessing its class, so this is a
+  rejected program (`E0473`) and not a silent divergence.
 - reading a union member that is not the live one. A union's members overlap, so
   reading a different member reinterprets the same storage; the language has no
   tag and does not claim to track which member was written last. This is the one

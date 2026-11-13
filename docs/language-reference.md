@@ -430,7 +430,42 @@ packed struct Packet {
 - A packed aggregate crosses the C ABI **by memory** even when it is small,
   because it has no guaranteed alignment; that matches what a C compiler does
   with `__attribute__((packed))`.
-### 3.7 Bitfields
+
+### 3.7 Explicit alignment
+
+```kyn
+align(16) struct Buffer {
+    kind: u8,
+}
+
+align(4) packed struct Record {
+    tag: u8,
+    value: i32,
+}
+```
+
+- `align(N)` before `struct` or `union` raises the aggregate's alignment to at
+  least `N` and rounds its size up to a multiple of `N`. `Buffer` is 16 bytes
+  with alignment 16, not 1.
+- It is a modifier, like `packed`, and the two may appear in either order:
+  `align(4) packed struct` and `packed align(4) struct` are the same declaration.
+- **`align` only ever raises.** An alignment below the type's natural one is
+  ignored, not rejected: `align(2)` on `{ u8, i32 }` leaves it 8 bytes with
+  alignment 4, which is what a C compiler does with
+  `__attribute__((aligned(2)))`.
+- **`align` and `packed` compose.** The packing still decides the offsets, the
+  alignment is the larger of the two requirements, and the size is then rounded up
+  to it. `align(4) packed struct Record` above is 8 bytes with `value` at offset 1
+  and alignment 4.
+- `N` must be a power of two no larger than 4096 (`E0491`); `align(N)` that is not
+  attached to a `struct` or `union` is `E0492`; a non-integer inside `align(` is
+  `E0490`.
+- `align` is not a keyword, so a variable or a function may still be named
+  `align`; only `align(` before an aggregate is the modifier.
+- A field's alignment is its type's. There is no field-level annotation: a field
+  that needs more alignment is a field of an `align(N)` type.
+
+### 3.8 Bitfields
 
 ```kyn
 struct Wire {
@@ -469,7 +504,7 @@ struct Wire {
 - A union member cannot be a bitfield (`E0487`): overlapping runs have no defined
   bit positions.
 
-### 3.8 Enums
+### 3.9 Enums
 
 ```kyn
 enum Color: u8 {
@@ -486,7 +521,7 @@ enum Color: u8 {
   backing integer. Use `as`.
 - Values must fit the backing type (`E0408`).
 
-### 3.9 Globals
+### 3.10 Globals
 
 ```kyn
 const GREETING: *const u8 = "Kyn";

@@ -1,0 +1,3 @@
+// An alignment has to be a power of two: 3 has no meaning as one.
+align(3) struct Odd { c: u8 }
+fn main() i32 { return 0; }

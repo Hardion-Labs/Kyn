@@ -2524,7 +2524,25 @@ pub const Emitter = struct {
                 if (i > 0) try writer.writeAll(", ");
                 try self.emitType(writer, member);
             }
-            if (info.fields.len == 0) try writer.writeAll("i8");
+            // `align(N)` raises the aggregate's alignment, and LLVM derives a
+            // struct's alignment from its members -- so the annotation alone would
+            // not do it. An explicit trailing padding array brings the type's size
+            // up to a multiple of N, which is exactly the layout rule and is what
+            // makes LLVM align the type to N as well.
+            if (info.explicit_align > 0) {
+                // Only when there is a real gap: a `[0 x i8]` member would be
+                // emitted text that says nothing and that a reader has to
+                // discount.
+                const padding = try self.explicitAlignPadding(info);
+                if (padding > 0) {
+                    if (info.emitted.len > 0) try writer.writeAll(", ");
+                    try writer.print("[{d} x i8]", .{padding});
+                } else if (info.emitted.len == 0) {
+                    try writer.writeAll("i8");
+                }
+            } else if (info.emitted.len == 0) {
+                try writer.writeAll("i8");
+            }
             try writer.print("{s}\n", .{close});
         }
         if (self.module.structs.items.len > 0) try writer.writeByte('\n');
@@ -2628,11 +2646,14 @@ pub const Emitter = struct {
             .enum_type => |info| llvmAlignmentOfType(info.backing),
             .array => |array| llvmAlignmentOfType(array.elem),
             .struct_type => |info| blk: {
-                var alignment: u16 = 1;
-                for (info.fields) |field| {
-                    alignment = @max(alignment, llvmAlignmentOfType(field.ty));
-                }
-                break :blk alignment;
+                // Delegated, not re-derived: this used to compute the maximum of
+                // the fields' alignments, which ignores `packed` (alignment 1) and
+                // `align(N)`, so an alloca or a `byval` would have been annotated
+                // with an alignment the layout does not have. There is one layout
+                // implementation and this reads it.
+                _ = info;
+                const layout = sema_mod.aggregateLayoutGuess(ty) orelse break :blk 1;
+                break :blk @intCast(@min(layout.align_, 16));
             },
             .slice => 8,
             else => 8,
@@ -3031,6 +3052,15 @@ pub const Emitter = struct {
                     try writer.writeByte(' ');
                     try self.emitEmittedMemberConstant(writer, info, fields, i);
                 }
+                // The explicit-alignment padding is a real member of the emitted
+                // type, so a constant of that type needs an initializer for it too.
+                if (info.explicit_align > 0) {
+                    const padding = try self.explicitAlignPadding(info);
+                    if (padding > 0) {
+                        if (info.emitted.len > 0) try writer.writeAll(", ");
+                        try writer.print("[{d} x i8] zeroinitializer", .{padding});
+                    }
+                }
                 try writer.writeAll(" }");
             },
         }
@@ -3154,8 +3184,16 @@ pub const Emitter = struct {
                 chosen_size = size;
             }
         }
+        // An explicit alignment applies to a union exactly as it does to a struct:
+        // the chosen member already gives the size and alignment of the largest
+        // member, and `align(N)` may raise both, so the same trailing padding is
+        // needed here or the emitted type would disagree with the layout.
         try writer.print("%struct.{s} = type {{ ", .{structLlvmName(info)});
         if (chosen) |ty| try writer.writeAll(try self.typeString(ty)) else try writer.writeAll("i8");
+        if (info.explicit_align > 0) {
+            const padding = try self.explicitAlignPadding(info);
+            if (padding > 0) try writer.print(", [{d} x i8]", .{padding});
+        }
         try writer.writeAll(" }\n");
     }
 
@@ -3191,6 +3229,36 @@ pub const Emitter = struct {
             .abi_vec2_f32, .abi_v2f32_f32, .abi_v2f32_v2f32 => 4,
             else => 8,
         };
+    }
+
+    /// Padding bytes needed after the emitted members for the type's size to be a
+    /// multiple of its explicit alignment.
+    fn explicitAlignPadding(self: *Emitter, info: *types.StructInfo) !u64 {
+        _ = self;
+        // The layout `placeFields` computed and stored; not re-derived here.
+        if (info.layout.align_ == 0) return 0;
+        const layout = info.layout;
+        // The bytes the emitted members occupy *as LLVM will lay them out*: a
+        // packed struct inserts no inter-member padding, an ordinary one does. A
+        // union emits one member -- the largest -- and `placeFields` leaves
+        // `emitted` empty for it, so the layout's own pre-rounding size is the
+        // figure to compare against.
+        var used: u64 = 0;
+        if (info.is_union) {
+            for (info.fields) |field| {
+                const member = sema_mod.aggregateLayoutGuess(field.ty) orelse continue;
+                used = @max(used, member.size);
+            }
+            if (layout.size <= used) return 0;
+            return layout.size - used;
+        }
+        for (info.emitted) |member| {
+            const member_layout = sema_mod.aggregateLayoutGuess(member) orelse return 0;
+            if (!info.is_packed) used = std.mem.alignForward(u64, used, member_layout.align_);
+            used += member_layout.size;
+        }
+        if (layout.size <= used) return 0;
+        return layout.size - used;
     }
 
     fn unitBitWidth(ty: *types.Type) u16 {

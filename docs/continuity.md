@@ -3157,3 +3157,71 @@ assumed feature.
   flag beside `is_union`/`is_packed` that overrides an aggregate's alignment, with
   the same treatment: measure clang's `_Alignas`, state the rule, refuse what the
   emitted type cannot mirror.
+
+## 57. Explicit alignment — `align(N)`
+
+- **Scope.** §57 built the last idea of
+  [design-unions-bitfields-packed.md](design-unions-bitfields-packed.md) §7:
+  `align(N)` on a `struct`/`union` declaration, as the design predicted — a fourth
+  flag, not a redesign. The three prior increments (unions, packed, bitfields)
+  were not touched; the alignment paths are additive.
+- **Measured before stating the rule, and the design's sentence was wrong on one
+  point.** §7 said "`align` increases, `packed` decreases, so the maximum wins".
+  Measured with `zig cc` (`.scratch/al.c`, deleted before the commit):
+  `aligned(16)` on `{char}` is 16/16; **`aligned(2)` on a 4-aligned struct is
+  ignored, not an error** (8/4 and unchanged); **`packed, aligned(4)` on
+  `{char,int}` is 8/4** with `i` still at byte 1 — the two *compose*, so the
+  maximum wins on alignment while packing still decides the offsets, and the size
+  is rounded up to the alignment. "Maximum wins" alone would have suggested packing
+  was cancelled. §7 now states the corrected rule, the table, and both
+  corrections.
+- **The chosen surface is narrower than the design's.** The design allowed
+  `align(N)` on a field as well as a type. The language has **type-level only**: a
+  field's alignment is its type's, and a field needing more is a field of an
+  aligned type. One rule instead of two. `align` is not a keyword — recognised only
+  as an identifier immediately followed by `(` in declaration position, so
+  `fn align(x: i32) i32` still works.
+- **Emission needed more than a number.** LLVM derives a struct's alignment from
+  its members, so annotating the layout is not enough: the emitted definition takes
+  a trailing `[k x i8]` member that brings its size up to a multiple of the
+  alignment. For the ordinary cases this is text-identical to clang
+  (`align(16) {u8}` → `{ i8, [15 x i8] }`). For `packed`+`align(N)` clang writes
+  `<{ i8, i32 }>` and relies on `align 4` at the *use* site; an emitted *type* has
+  no such slot, so Kyn writes `<{ i8, i32, [3 x i8] }>`. Both measure 8/4.
+  §7.2 records the difference rather than hiding it.
+- **A second layout implementation was deleted, not extended.**
+  `llvmAlignmentOfType` computed a struct's alignment as the maximum over its
+  fields, which ignores `packed` and `align(N)` — so an alloca or a `byval` of a
+  packed aggregate was annotated with an alignment its layout does not have. It now
+  calls `aggregateLayoutGuess`. This was a latent defect from §55 that only became
+  observable once an alignment could exceed every field's.
+- **Two emitter bugs were found by the extreme cases, not by the fixtures I first
+  wrote.** (1) A *global* of an aligned type emitted a constant with the wrong
+  number of elements, because the trailing padding member had no initializer — the
+  LLVM parser rejected it, so this was a compile failure, not a wrong layout.
+  (2) A *union* took no padding at all, so `align(16) union { char; int }` came out
+  4 bytes instead of 16 and would have silently disagreed with C. Both are now
+  asserted in `cases/align_layout` (checks 7 and 8).
+- **Diagnostics:** `E0490` (non-integer inside `align(`), `E0491` (not a power of
+  two, or > 4096), `E0492` (`align(N)` not before a `struct`/`union`). There is
+  **deliberately no** diagnostic for an alignment below the natural one: C ignores
+  it and so does Kyn, and rejecting it would refuse a well-defined declaration.
+  `align(0)` is `E0491`.
+- **Fixtures.** `cases/align_layout.kyn` (exit 8) pins the measured numbers, a
+  nested aligned aggregate, a union, and a global; `abi/cabi_align.{kyn,c,exit}`
+  (exit 30) has the C side print `sizeof`/`_Alignof` for the same shapes and checks
+  at run time that a Kyn local is really 16-byte aligned, not merely typed as one;
+  `errors/align_not_power_of_two`, `align_too_large`, `align_not_aggregate` pin the
+  three diagnostics.
+- **Stated limitation:** an `align(N)` aggregate passed **by value** to C is still
+  refused by `E0473`, because the classifier does not take the explicit alignment
+  into account. `abi.md` §10 and `safety-model.md` §3 say so; nothing is emitted
+  that would disagree.
+- **Gate:** unit **135/135** (was 134), integration **222/0** in Debug and
+  ReleaseSafe (was 217: five new fixtures), 902 robustness cases, `zig fmt` clean,
+  23 documentation links, **142** documented codes (was 139), versions
+  `0.1.0-alpha.5`.
+- Next task: none of the four aggregate extensions remains unimplemented. The
+  natural follow-ups are the ones the design lists as out of scope (§8): anonymous
+  members, tagged unions, and taking `align(N)` into the ABI classifier so that an
+  aligned aggregate can cross the boundary by value instead of being refused.

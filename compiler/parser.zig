@@ -161,19 +161,43 @@ pub const Parser = struct {
                 try self.reporter.err("E0203", self.peek().span, "expected 'fn', 'const', 'var' or 'let' after 'export'", .{});
                 return null;
             },
-            .kw_struct => return try self.parseStruct(false, false),
-            .kw_union => return try self.parseStruct(true, false),
+            .kw_struct => return try self.parseStruct(false, false, 0),
+            .kw_union => return try self.parseStruct(true, false, 0),
             .kw_packed => {
                 // `packed` is a modifier, not a declaration: it takes its
-                // meaning from the aggregate keyword that follows it.
+                // meaning from the aggregate keyword that follows it. `align(N)`
+                // is the other one, and the two may appear in either order.
                 const packed_span = self.advance().span;
-                if (self.check(.kw_struct)) return try self.parseStruct(false, true);
-                if (self.check(.kw_union)) return try self.parseStruct(true, true);
+                const align_ = try self.parseOptionalAlign(packed_span);
+                if (self.check(.kw_struct)) return try self.parseStruct(false, true, align_);
+                if (self.check(.kw_union)) return try self.parseStruct(true, true, align_);
                 try self.reporter.err("E0484", packed_span, "'packed' is only allowed before a 'struct' or 'union' declaration", .{});
                 self.synchronize(.semicolon);
                 return null;
             },
             .kw_enum => return try self.parseEnum(),
+            .identifier => {
+                // `align(N)` may open a declaration on its own, and `align` is not
+                // a keyword, so this is where an ordinary identifier is told apart
+                // from the modifier: only `align(` is a modifier, and a bare name
+                // keeps the generic error below.
+                const next_kind = self.peekAt(1).kind;
+                const is_align = std.mem.eql(u8, tok.lexeme, "align") and next_kind == .l_paren;
+                if (is_align) {
+                    const align_start = self.peek().span;
+                    const align_ = try self.parseOptionalAlign(align_start);
+                    const is_packed_modifier = self.check(.kw_packed);
+                    if (is_packed_modifier) _ = self.advance();
+                    if (self.check(.kw_struct)) return try self.parseStruct(false, is_packed_modifier, align_);
+                    if (self.check(.kw_union)) return try self.parseStruct(true, is_packed_modifier, align_);
+                    try self.reporter.err("E0492", align_start, "'align(N)' is only allowed before a 'struct' or 'union' declaration", .{});
+                    self.synchronize(.semicolon);
+                    return null;
+                }
+                try self.reporter.err("E0204", tok.span, "expected a declaration, found {s}", .{token.describe(tok.kind)});
+                self.synchronize(.semicolon);
+                return null;
+            },
             .kw_const, .kw_var, .kw_let => return try self.parseGlobalVar(),
             else => {
                 try self.reporter.err("E0204", tok.span, "expected a declaration, found {s}", .{token.describe(tok.kind)});
@@ -263,7 +287,40 @@ pub const Parser = struct {
         return decl;
     }
 
-    fn parseStruct(self: *Parser, is_union: bool, is_packed: bool) !?*ast.Decl {
+    /// `align` is not a keyword, so `align(16)` is an identifier followed by a
+    /// parenthesised integer. Recognising it here rather than reserving the word
+    /// keeps `align` usable as an ordinary name.
+    fn parseOptionalAlign(self: *Parser, modifier_span: Span) !u32 {
+        if (!self.check(.identifier)) return 0;
+        if (!std.mem.eql(u8, self.peek().lexeme, "align")) return 0;
+        _ = self.advance();
+        if (!try self.expect(.l_paren, "after 'align'")) return 0;
+        const value_span = self.peek().span;
+        if (self.peek().kind != .int_literal) {
+            try self.reporter.err("E0490", value_span, "expected an integer alignment after 'align('", .{});
+            return 0;
+        }
+        const tok = self.advance();
+        _ = try self.expect(.r_paren, "to close 'align('");
+        const value = std.fmt.parseInt(u32, tok.lexeme, 0) catch {
+            try self.reporter.err("E0490", value_span, "alignment '{s}' is not an integer", .{tok.lexeme});
+            return 0;
+        };
+        // A power of two is what both the layout and the emitted annotation need;
+        // anything else has no meaning as an alignment.
+        if (value == 0 or (value & (value - 1)) != 0) {
+            try self.reporter.err("E0491", value_span, "alignment {d} is not a power of two", .{value});
+            return 0;
+        }
+        if (value > 4096) {
+            try self.reporter.err("E0491", value_span, "alignment {d} is larger than the 4096-byte maximum", .{value});
+            return 0;
+        }
+        _ = modifier_span;
+        return value;
+    }
+
+    fn parseStruct(self: *Parser, is_union: bool, is_packed: bool, explicit_align: u32) !?*ast.Decl {
         const start = self.peek().span;
         const keyword: token.Kind = if (is_union) .kw_union else .kw_struct;
         _ = try self.expect(keyword, if (is_union) "to begin union declaration" else "to begin struct declaration");
@@ -312,6 +369,7 @@ pub const Parser = struct {
             .fields = try fields.toOwnedSlice(self.allocator),
             .is_union = is_union,
             .is_packed = is_packed,
+            .explicit_align = explicit_align,
         };
 
         const decl = try self.allocator.create(ast.Decl);

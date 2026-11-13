@@ -6,12 +6,24 @@ promised between alpha releases.
 
 ## [Unreleased]
 
-Exported globals, the callee side of variadics, the three aggregate extensions
-(unions, packed structs, bitfields), and three representation fixes (two
-constants and the signed-division minimum).
+Exported globals, the callee side of variadics, the aggregate extensions
+(unions, packed structs, bitfields, explicit alignment), and three representation
+fixes (two constants and the signed-division minimum).
 
 ### Added
 
+- `align(N)` raises a `struct` or `union`'s alignment to at least `N` and rounds
+  its size up to a multiple of it: `align(16) struct Buffer { kind: u8 }` is 16
+  bytes with alignment 16, and the emitted LLVM type is the same
+  `{ i8, [15 x i8] }` clang produces. It is a modifier like `packed`, accepted in
+  either order, and it only ever *raises*: an alignment below the natural one is
+  ignored, as `__attribute__((aligned(2)))` is. The two compose -- `packed` still
+  decides the offsets, the larger requirement decides the alignment, and the size
+  is rounded up to it. `E0490`/`E0491`/`E0492` cover a malformed, non-power-of-two
+  or misplaced `align(`. Supports a second fix: `llvmAlignmentOfType` computed a
+  struct's alignment from its fields alone, so a `packed` or `align(N)` aggregate
+  was annotated with an alignment its layout does not have; it now reads the one
+  layout implementation.
 - Integer types may now have any width from 1 to 128, written `u1`..`u128` and
   `i1`..`i128`, and an adjacent run of such fields packs into one storage unit
   instead of one byte each: `struct Wire { kind: u3, tag: u5 }` is one byte,
