@@ -1979,18 +1979,40 @@ pub const Lowering = struct {
                 if (constFloat(expr)) |value| return .{ .float = value };
                 return null;
             },
+            // A constant cast is resolved into the *destination* category, not
+            // the source one: `3 as f64` is a float constant and `1.5 as i32`
+            // is an integer one. Returning the source value unchanged emitted
+            // an integer constant where the destination type was a float, and
+            // the module then failed to assemble.
             .cast => |cast| {
-                if (try self.lowerConst(cast.operand, ty)) |value| {
-                    switch (value) {
-                        .int => |number| return .{ .int = truncateInt(number, ty) },
-                        .float => |number| {
-                            if (ty.isInteger()) return .{ .int = @intFromFloat(number) };
-                            return .{ .float = number };
-                        },
-                        else => return value,
-                    }
-                }
-                return null;
+                // The operand folds in its own type, not the destination one: a
+                // chain like `3.9 as i32 as f64` truncates first and converts
+                // the truncated value, so passing the outer destination inward
+                // would turn it into 3.9.
+                const operand_ty = cast.operand.ty orelse ty;
+                const value = (try self.lowerConst(cast.operand, operand_ty)) orelse return null;
+                return switch (value) {
+                    .int => |number| if (ty.isFloat())
+                        .{ .float = @floatFromInt(number) }
+                    else if (ty.* == .bool)
+                        .{ .boolean = number != 0 }
+                    else
+                        .{ .int = truncateInt(number, ty) },
+                    .float => |number| if (ty.* == .bool)
+                        // A NaN is nonzero, so it is true, as in C.
+                        .{ .boolean = !(number == 0.0) }
+                    else if (ty.isInteger())
+                        .{ .int = truncateInt(@intFromFloat(number), ty) }
+                    else
+                        .{ .float = number },
+                    .boolean => |flag| if (ty.isFloat())
+                        .{ .float = if (flag) 1.0 else 0.0 }
+                    else if (ty.* == .bool)
+                        .{ .boolean = flag }
+                    else
+                        .{ .int = if (flag) 1 else 0 },
+                    else => value,
+                };
             },
             else => return null,
         }
@@ -2106,9 +2128,19 @@ fn signedInt(ty: *types.Type) bool {
 fn castKind(from: *types.Type, to: *types.Type) ?ir.CastKind {
     if (to.* == .bool) {
         if (from.isInteger() or from.isPointer()) return .int_to_bool;
+        // `x != 0` is the same predicate for a float, with an ordered compare so
+        // that NaN follows the IEEE rule a C `(_Bool)` conversion follows: a NaN
+        // is nonzero, so it converts to true.
+        if (from.isFloat()) return .float_to_bool;
         return null;
     }
-    if (from.* == .bool) return .bool_to_int;
+    // A `bool` is one bit, which no floating conversion instruction accepts, so
+    // it widens to `i32` first and the result is exact. `zext i1 ... to float`
+    // is not valid IR, which is what an earlier emitter produced here.
+    if (from.* == .bool) {
+        if (to.isFloat()) return .bool_to_float;
+        return .bool_to_int;
+    }
     // A function value has the same representation as a raw pointer, so both
     // directions of that pair are a bitcast; the integer directions are the
     // address erasure `ptrtoint`/`inttoptr` spell.
@@ -2452,11 +2484,33 @@ pub const Emitter = struct {
                     .bitcast => "bitcast",
                     .int_to_bool => "icmp ne",
                     .bool_to_int => "zext",
+                    .float_to_bool => "fcmp une",
+                    .bool_to_float => "uitofp",
                 };
                 if (cast.kind == .int_to_bool) {
                     try writer.print("  %t{d} = icmp ne {s} ", .{ cast.dst, from });
                     try self.emitValue(writer, cast.value, cast.from);
                     try writer.writeAll(if (cast.from.isPointer()) ", null\n" else ", 0\n");
+                    return;
+                }
+                if (cast.kind == .float_to_bool) {
+                    // `une` is unordered-or-not-equal, so a NaN converts to
+                    // true, matching the C `(_Bool)` conversion.
+                    try writer.print("  %t{d} = fcmp une {s} ", .{ cast.dst, from });
+                    try self.emitValue(writer, cast.value, cast.from);
+                    try writer.writeAll(", 0.000000e+00\n");
+                    return;
+                }
+                if (cast.kind == .bool_to_float) {
+                    // One bit cannot be converted directly: no floating
+                    // conversion accepts an `i1`, so the value widens to `i32`
+                    // first (exact, since a bool is 0 or 1) and converts
+                    // unsigned from there. The intermediate register carries no
+                    // type of its own — `i32` is spelled here and in the second
+                    // instruction, which is the whole of what it needs.
+                    try writer.print("  %w{d} = zext i1 ", .{cast.dst});
+                    try self.emitValue(writer, cast.value, cast.from);
+                    try writer.print(" to i32\n  %t{d} = uitofp i32 %w{d} to {s}\n", .{ cast.dst, cast.dst, to });
                     return;
                 }
                 try writer.print("  %t{d} = {s} {s} ", .{ cast.dst, opname, from });
@@ -3033,4 +3087,138 @@ test "lowering declares a variadic extern and passes promoted arguments" {
     // No half-width or half-filled argument survives to the call site.
     try testing.expect(std.mem.indexOf(u8, ll, "call i32 @printf(ptr %t0, i1 ") == null);
     try testing.expect(std.mem.indexOf(u8, ll, ", float ") == null);
+}
+
+test "bool and float casts lower through a valid intermediate type" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Neither direction is one LLVM instruction: `zext i1 ... to double` and
+    // `double ... to i1` are both invalid, which is what the emitter produced
+    // before. A `bool` widens to `i32` and converts unsigned; a float compares
+    // unordered-or-not-equal against zero so that a NaN is true, as in C.
+    const text =
+        \\fn main() i32 {
+        \\    let flag: bool = true;
+        \\    let up: f64 = flag as f64;
+        \\    let down: bool = up as bool;
+        \\    let narrow: f32 = flag as f32;
+        \\    let back: bool = narrow as bool;
+        \\    if (down && back) { return 42; }
+        \\    return 1;
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // The widening is `zext i1 ... to i32` followed by `uitofp i32 ...`.
+    try testing.expect(std.mem.indexOf(u8, ll, "zext i1 ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, " to i32\n") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "uitofp i32 ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, " to double\n") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, " to float\n") != null);
+    // And the narrowing is an ordered-except-unordered compare, which is what
+    // makes a NaN convert to true.
+    try testing.expect(std.mem.indexOf(u8, ll, "fcmp une double ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "fcmp une float ") != null);
+    // No single instruction jumps from one bit to a float: every `zext i1`
+    // that feeds a floating conversion names `i32` as its destination. The
+    // `%w` registers are the ones this cast emits, so the check looks at those
+    // and not at the unrelated `zext i1 ... to i8` a bool store produces.
+    var widening: usize = 0;
+    var lines = std.mem.splitScalar(u8, ll, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "%w") != null and std.mem.indexOf(u8, line, "= zext i1 ") != null) {
+            try testing.expect(std.mem.endsWith(u8, line, " to i32"));
+            widening += 1;
+        }
+    }
+    // Two widenings: one for `f64`, one for `f32`.
+    try testing.expectEqual(@as(usize, 2), widening);
+}
+
+test "a constant cast folds into the destination category" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A global initializer is folded, not lowered: returning the source value
+    // emitted `constant i32 3` where a `double` was declared, and the module
+    // then failed to assemble. Each constant has to arrive in the destination
+    // category, and a cast chain truncates at each step.
+    const text =
+        \\const WIDE: f64 = 3 as f64;
+        \\const FLAG: bool = 1.5 as bool;
+        \\const ZERO: bool = 0.0 as bool;
+        \\const BACK: f64 = true as f64;
+        \\const TRUNCATED: i32 = 3.9 as i32;
+        \\const CHAINED: f64 = 3.9 as i32 as f64;
+        \\fn main() i32 { return 42; }
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // Each constant carries the value in its own category. Floats are printed
+    // in hexadecimal, which is the bit pattern: 3.0 is 0x4008..., 1.0 is
+    // 0x3FF0... and 3.9 is 0x400F333333333333.
+    try testing.expect(std.mem.indexOf(u8, ll, "constant double 0x4008000000000000") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "constant i1 true") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "constant i1 false") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "constant double 0x3FF0000000000000") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "constant i32 3") != null);
+    // The chain truncates at `as i32` before widening back to `double`, so the
+    // fractional part is gone rather than surviving to the outer cast: the
+    // chained constant holds 3.0, never 3.9's bit pattern.
+    try testing.expect(std.mem.indexOf(u8, ll, "constant double 0x400F333333333333") == null);
 }
