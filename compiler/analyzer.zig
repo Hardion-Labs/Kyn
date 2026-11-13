@@ -72,6 +72,19 @@ pub const Analyzer = struct {
         }
     }
 
+    /// `for (init; cond; step) { body }`.
+    ///
+    /// The initializer runs once before anything else, so a variable it declares
+    /// is initialized for the condition, the step and the body. The body runs an
+    /// unknown number of times (possibly zero), so nothing learned inside it
+    /// survives the loop -- which is what the `while` analysis already assumes.
+    fn checkFor(self: *Analyzer, for_stmt: *ast.Stmt.ForStmt) Error!void {
+        if (for_stmt.init) |init_stmt| try self.checkStmt(init_stmt);
+        if (for_stmt.cond) |cond| try self.checkExpr(cond);
+        if (for_stmt.step) |step| try self.checkExpr(step);
+        try self.checkBlock(for_stmt.body);
+    }
+
     fn checkStmt(self: *Analyzer, stmt: *ast.Stmt) Error!void {
         switch (stmt.kind) {
             .expr => |expr| try self.checkExpr(expr),
@@ -82,6 +95,7 @@ pub const Analyzer = struct {
             .block => |block| try self.checkBlock(block),
             .if_stmt => |if_stmt| try self.checkIf(if_stmt),
             .while_stmt => |while_stmt| try self.checkWhile(while_stmt),
+            .for_stmt => |for_stmt| try self.checkFor(for_stmt),
             .match_stmt => |match_stmt| {
                 // The scrutinee is evaluated once; each arm's block is a path of
                 // its own, so what is known after the match is only what holds on

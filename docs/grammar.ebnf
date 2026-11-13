@@ -102,6 +102,8 @@ block          = "{" , { statement } , "}" ;
 statement      = block
                | if_statement
                | while_statement
+               | for_statement
+               | match_statement
                | return_statement
                | break_statement
                | continue_statement
@@ -114,6 +116,20 @@ if_statement   = "if" , "(" , expression , ")" , block ,
                  [ "else" , ( if_statement | block ) ] ;
 
 while_statement = "while" , "(" , expression , ")" , block ;
+
+(* Every clause is optional; an omitted condition means "always". The initializer
+ * may be a local declaration, whose variable is scoped to the whole statement. *)
+for_statement  = "for" , "(" , [ for_init ] , ";" , [ expression ] , ";" ,
+                 [ expression ] , ")" , block ;
+
+for_init       = local_var | expression ;
+
+match_statement = "match" , "(" , expression , ")" , "{" ,
+                  [ match_arm , { "," , match_arm } , [ "," ] ] , "}" ;
+
+match_arm      = ( wildcard | pattern ) , "=>" , block ;
+
+wildcard       = "_" ;
 
 return_statement = "return" , [ expression ] , ";" ;
 

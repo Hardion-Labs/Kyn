@@ -1,0 +1,7 @@
+// The initializer's variable is scoped to the whole statement -- condition, step
+// and body -- and must not exist afterwards. That is the one thing `for` gives
+// over `while` with a pre-declared counter, so the scope is part of the form.
+fn main() i32 {
+    for (var i: i32 = 0; i < 3; i += 1) { }
+    return i;
+}

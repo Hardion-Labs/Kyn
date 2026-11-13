@@ -1,0 +1,7 @@
+// `break` and `continue` are statements, not expressions, so neither can be an
+// expression initializer. This is rejected while parsing, before any question of
+// loop scope arises.
+fn main() i32 {
+    for (break; ; ) { }
+    return 0;
+}

@@ -873,6 +873,7 @@ pub const Lowering = struct {
             .block => |block| try self.lowerBlock(block),
             .if_stmt => |if_stmt| try self.lowerIf(if_stmt),
             .while_stmt => |while_stmt| try self.lowerWhile(while_stmt),
+            .for_stmt => |for_stmt| try self.lowerFor(for_stmt),
             .match_stmt => |match_stmt| try self.lowerMatch(match_stmt),
             .return_stmt => |ret_stmt| {
                 if (ret_stmt.value) |expr| {
@@ -1074,6 +1075,60 @@ pub const Lowering = struct {
         }
         if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
         try self.switchBlock(merge_block);
+    }
+
+    /// `for (init; cond; step) { body }` lowers to the shape a `while` does, with
+    /// the step appended to the body:
+    ///
+    ///     init;  br cond
+    ///     cond:  <cond> -> body | end
+    ///     body:  <body>; br step
+    ///     step:  <step>; br cond
+    ///     end:
+    ///
+    /// `continue` therefore targets the step block, not the body's end, so a
+    /// `continue` still runs the increment -- the one semantic difference from
+    /// putting the step at the end of the body, and the reason for the extra block.
+    ///
+    /// An omitted condition is an unconditional branch into the body: an
+    /// intentional infinite loop, exited only by `break`.
+    fn lowerFor(self: *Lowering, for_stmt: *ast.Stmt.ForStmt) Error!void {
+        // The initializer is in the loop's own scope, which sema already opened;
+        // here it simply runs once, before the first test.
+        if (for_stmt.init) |init_stmt| try self.lowerStmt(init_stmt);
+
+        const cond_block = try self.newBlock();
+        const body_block = try self.newBlock();
+        const step_block = try self.newBlock();
+        const end_block = try self.newBlock();
+        try self.emit(.{ .br = .{ .target = cond_block } });
+
+        try self.switchBlock(cond_block);
+        if (for_stmt.cond) |cond_expr| {
+            const cond = try self.lowerExpr(cond_expr);
+            try self.emit(.{ .cbr = .{
+                .cond = cond,
+                .then_block = body_block,
+                .else_block = end_block,
+            } });
+        } else {
+            try self.emit(.{ .br = .{ .target = body_block } });
+        }
+
+        try self.switchBlock(body_block);
+        try self.ctx.?.break_stack.append(self.allocator, end_block);
+        // `continue` jumps to the step, so the increment is not skipped.
+        try self.ctx.?.continue_stack.append(self.allocator, step_block);
+        try self.lowerBlock(for_stmt.body);
+        if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = step_block } });
+        _ = self.ctx.?.break_stack.pop();
+        _ = self.ctx.?.continue_stack.pop();
+
+        try self.switchBlock(step_block);
+        if (for_stmt.step) |step_expr| _ = try self.lowerExpr(step_expr);
+        if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = cond_block } });
+
+        try self.switchBlock(end_block);
     }
 
     fn lowerWhile(self: *Lowering, while_stmt: *ast.Stmt.WhileStmt) Error!void {

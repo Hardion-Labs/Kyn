@@ -13,6 +13,13 @@ signed-division minimum).
 
 ### Added
 
+- **`for` loops**, in C's shape: `for (var i: i32 = 0; i < n; i += 1) { ... }`.
+  Every clause is optional, so `for (;;)` is an intentional infinite loop exited
+  only by `break`, and an omitted condition means "always" rather than requiring a
+  constant `bool`. The initializer may be a declaration, whose variable is scoped
+  to the whole statement and gone afterwards -- the one thing this form gives over
+  `while`. `continue` jumps to the step rather than past it, so the increment still
+  runs; the lowering gives the step its own block for exactly that reason.
 - **Tagged unions.** A variant may carry a payload -- `Circle(f64)` -- which makes
   the enum a sum type whose value is `{ tag, payload }`: an ordinary struct whose
   second member is a union of every payload. Measured against clang rather than

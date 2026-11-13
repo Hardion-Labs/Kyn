@@ -196,7 +196,23 @@ pub const Stmt = struct {
         break_stmt: void,
         continue_stmt: void,
         match_stmt: *MatchStmt,
+        for_stmt: *ForStmt,
         empty: void,
+    };
+
+    /// `for (init; cond; step) { body }`. Every clause is optional.
+    ///
+    /// The init runs once and its variable is scoped to the whole statement --
+    /// condition, step and body -- so the loop names its counter without leaking
+    /// it afterwards. `cond` omitted means "always", which is how an intentional
+    /// infinite loop is written; `break` is then the only exit.
+    pub const ForStmt = struct {
+        span: Span,
+        /// A `let`/`var`/`const` declaration or an expression, or null.
+        init: ?*Stmt,
+        cond: ?*Expr,
+        step: ?*Expr,
+        body: *Block,
     };
 
     /// `match (value) { pattern => { body }, ... , _ => { body } }`.

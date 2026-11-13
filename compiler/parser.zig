@@ -660,6 +660,7 @@ pub const Parser = struct {
                 return stmt;
             },
             .kw_if => return try self.parseIf(),
+            .kw_for => return try self.parseFor(),
             .kw_match => return try self.parseMatch(),
             .kw_while => return try self.parseWhile(),
             .kw_return => return try self.parseReturn(),
@@ -800,6 +801,59 @@ pub const Parser = struct {
         };
         const stmt = try self.allocator.create(ast.Stmt);
         stmt.* = .{ .span = payload.span, .kind = .{ .match_stmt = payload } };
+        return stmt;
+    }
+
+    /// `for (init; cond; step) { body }`, with every clause optional.
+    ///
+    /// The init is a local declaration or an expression; it is parsed with the
+    /// same code a statement uses, so `for (var i: i32 = 0; ...)` needs no syntax
+    /// of its own and cannot drift from a `var` elsewhere.
+    fn parseFor(self: *Parser) Error!?*ast.Stmt {
+        const start = self.peek().span;
+        _ = self.advance();
+        _ = try self.expect(.l_paren, "after 'for'");
+
+        var init_clause: ?*ast.Stmt = null;
+        if (!self.check(.semicolon)) {
+            // A declaration is not an expression, so it is recognised by its
+            // keyword rather than by trying one first and failing.
+            // `parseLocalVar` consumes the declaration's own `;`, which is also
+            // the initializer clause's terminator -- so the shared code needs no
+            // special case and the two forms cannot drift.
+            if (self.check(.kw_let) or self.check(.kw_var) or self.check(.kw_const)) {
+                init_clause = try self.parseLocalVar();
+            } else {
+                const expr = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+                const stmt = try self.allocator.create(ast.Stmt);
+                stmt.* = .{ .span = expr.span, .kind = .{ .expr = expr } };
+                init_clause = stmt;
+            }
+        }
+        // The declaration path already consumed its `;`; anything else ends here.
+        if (init_clause == null or init_clause.?.kind != .var_decl) {
+            _ = try self.expect(.semicolon, "after for-loop initializer");
+        }
+
+        var cond: ?*ast.Expr = null;
+        if (!self.check(.semicolon)) cond = try self.parseExpr();
+        _ = try self.expect(.semicolon, "after for-loop condition");
+
+        var step: ?*ast.Expr = null;
+        if (!self.check(.r_paren)) step = try self.parseExpr();
+        _ = try self.expect(.r_paren, "after for-loop step");
+
+        const body = try self.parseBlock();
+        const payload = try self.allocator.create(ast.Stmt.ForStmt);
+        payload.* = .{
+            .span = Span.join(start, body.span),
+            .init = init_clause,
+            .cond = cond,
+            .step = step,
+            .body = body,
+        };
+        const stmt = try self.allocator.create(ast.Stmt);
+        stmt.* = .{ .span = payload.span, .kind = .{ .for_stmt = payload } };
         return stmt;
     }
 
@@ -1849,4 +1903,57 @@ test "parse a payload-carrying variant and its binding" {
     // The wildcard arm binds nothing.
     try testing.expect(match_stmt.arms[1].pattern == null);
     try testing.expect(match_stmt.arms[1].binding == null);
+}
+
+test "parse a for loop with every clause, and with none" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    for (var i: i32 = 0; i < 3; i += 1) { }
+        \\    for (;;) { break; }
+        \\    for (; i < 2;) { }
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const stmts = program.decls[0].kind.fn_decl.body.?.stmts;
+    try testing.expectEqual(@as(usize, 3), stmts.len);
+
+    // A declaration initializer is a statement, so the counter is not an
+    // expression and the clause cannot drift from a `var` elsewhere.
+    const decl = stmts[0].kind.for_stmt;
+    try testing.expect(decl.init != null);
+    try testing.expectEqual(true, decl.init.?.kind == .var_decl);
+    try testing.expect(decl.cond != null);
+    try testing.expect(decl.step != null);
+
+    // Every clause omitted is an intentional infinite loop, not a parse error.
+    const forever = stmts[1].kind.for_stmt;
+    try testing.expect(forever.init == null);
+    try testing.expect(forever.cond == null);
+    try testing.expect(forever.step == null);
+
+    // Only the condition: a loop that advances elsewhere.
+    const cond_only = stmts[2].kind.for_stmt;
+    try testing.expect(cond_only.init == null);
+    try testing.expect(cond_only.cond != null);
+    try testing.expect(cond_only.step == null);
+}
+
+test "a for initializer accepts an expression as well as a declaration" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    var k: i32 = 0;
+        \\    for (k = 10; k < 12; k += 1) { }
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const loop = program.decls[0].kind.fn_decl.body.?.stmts[1].kind.for_stmt;
+    try testing.expect(loop.init.?.kind == .expr);
 }
