@@ -3547,7 +3547,11 @@ planned control-flow row.
 - **Gate:** unit **144/144** (was 143), integration **247/0** in Debug and
   ReleaseSafe (was 244), robustness 902, `zig fmt` clean, 23 documentation links,
   **151** documented codes (was 150), versions `0.1.0-alpha.5`.
-- Git: `c3b0644` on `arena/c6df6f65-kyn`, pushed.
+- Git, final for this increment: `c3b0644` compiler + `94388d4` record on
+  `arena/c6df6f65-kyn`, pushed; PR #73 -> CI green -> merged as **`6826e08`**, and
+  `main` re-validated in a fresh clone of it: 144/144 unit, 247/0 integration in
+  Debug and ReleaseSafe, robustness 902, `zig fmt` clean, 23 documentation links,
+  151 documented codes, versions `0.1.0-alpha.5`.
 - **Two arithmetic slips of mine again**, both caught by running the fixtures: an
   expected count of 1 where a per-iteration defer correctly gives 3, and a total of
   310 where the exit status keeps only the low 8 bits (54). Same class as §60; the
