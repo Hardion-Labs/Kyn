@@ -3456,7 +3456,10 @@ The last item on the design's out-of-scope list that is a language feature. `mat
 - **Gate:** unit **141/141** (was 139), integration **240/0** in Debug and
   ReleaseSafe (was 233), robustness 902, `zig fmt` clean, 23 documentation links,
   **150** documented codes (was 146), versions `0.1.0-alpha.5`.
-- Git: `3d20b11` on `arena/b605b6a4-kyn`, pushed.
+- Git, final for this increment: `3d20b11` compiler + `aa0d209` record on
+  `arena/b605b6a4-kyn`, pushed; PR #69 -> CI green -> merged as **`072691f`**, and
+  `main` re-validated in a fresh clone of it (141/141 unit, 240/0 integration,
+  fmt clean).
 - **Next task:** nothing on the old out-of-scope list remains. The nearest open
   items are `for` (reserved in the lexer, unparsed -- `E0221`), `defer`, closures
   and indirect-call support, all listed as planned in `README.md`.
