@@ -18,6 +18,9 @@ pub const Error = error{OutOfMemory};
 
 const FnCtx = struct {
     function: *ir.Function,
+    /// Set when this function retrieves arguments with `va_arg()`, which is the
+    /// only reason to pay for `va_start`/`va_end` bookkeeping.
+    uses_va_arg: bool = false,
     current: u32 = 0,
     break_stack: std.ArrayList(u32) = .empty,
     continue_stack: std.ArrayList(u32) = .empty,
@@ -332,6 +335,16 @@ pub const Lowering = struct {
         try self.currentFunction().addLocal(self.allocator, id, name, ty, hidden_padding);
     }
 
+    /// Declares the storage `va_start` fills. Its type is the target's
+    /// `va_list`, which is not a Kyn type: the emitter sizes and aligns it, and
+    /// this only records that the local holds no value.
+    fn addVaListLocal(self: *Lowering, id: u32) Error!void {
+        const void_ty = try self.simpleType(.void);
+        const function = self.currentFunction();
+        try function.addLocal(self.allocator, id, "va_list", void_ty, 0);
+        function.locals.items[function.locals.items.len - 1].is_va_list = true;
+    }
+
     fn newBlock(self: *Lowering) Error!u32 {
         const function = self.currentFunction();
         const index: u32 = @intCast(function.blocks.items.len);
@@ -367,6 +380,18 @@ pub const Lowering = struct {
     }
 
     fn emit(self: *Lowering, inst: ir.Inst) Error!void {
+        // `va_end` is never written in source, so it is attached to the exits
+        // themselves: hooking here covers an explicit `return`, the implicit end
+        // of a `void` function and the trap path in one place, and cannot be
+        // forgotten by a new emission path added later.
+        const tag = std.meta.activeTag(inst);
+        if ((tag == .ret or tag == .trap_) and self.currentFunction().va_list_local != null) {
+            try self.appendInst(.{ .va_end = {} });
+        }
+        try self.appendInst(inst);
+    }
+
+    fn appendInst(self: *Lowering, inst: ir.Inst) Error!void {
         const function = self.currentFunction();
         const block = function.block(self.ctx.?.current);
         if (block.terminated) return;
@@ -594,6 +619,16 @@ pub const Lowering = struct {
         defer self.current_fd = null;
 
         _ = try self.newBlock();
+
+        // An exported variadic function is the one place a `va_list` exists:
+        // C wrote trailing arguments into the register save area and this is
+        // what lets `va_arg()` walk them. A declaration never reaches here.
+        if (fd.is_variadic) {
+            const id = self.module.ephemeral();
+            try self.addVaListLocal(id);
+            function.va_list_local = id;
+            try self.emit(.{ .va_start = {} });
+        }
 
         const boundary = fd.is_extern or fd.is_export;
         var visible_index: usize = if (boundary and self.aggregateBoundaryRet(fd.ret_expr) == .memory) 1 else 0;
@@ -917,6 +952,7 @@ pub const Lowering = struct {
             .binary => |binary| try self.lowerBinary(expr, binary),
             .assign => |assign| try self.lowerAssign(expr, assign),
             .call => |call| try self.lowerCall(expr, call),
+            .va_arg => |va_arg| try self.lowerVaArg(expr, va_arg),
             .cast => |cast| try self.lowerCast(expr, cast),
             .field => |field| blk: {
                 if (field.is_enum_variant) break :blk .{ .int = field.variant_value };
@@ -1271,6 +1307,18 @@ pub const Lowering = struct {
             .ret = ret,
         } });
         return if (dst) |id| .{ .reg = id } else .none;
+    }
+
+    /// `va_arg()` is one instruction: the retrieval type is the one the checker
+    /// put on the expression, never a default, so a `double` is read as a
+    /// `double` and an `i32` as an `i32`.
+    fn lowerVaArg(self: *Lowering, expr: *ast.Expr, va_arg: ast.Expr.Kind.VaArg) Error!ir.Value {
+        _ = expr;
+        const ty = va_arg.ty orelse return .none;
+        self.ctx.?.uses_va_arg = true;
+        const dst = try self.reg(ty);
+        try self.emit(.{ .va_arg = .{ .dst = dst, .ty = ty } });
+        return .{ .reg = dst };
     }
 
     fn lowerCall(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!ir.Value {
@@ -2260,6 +2308,9 @@ pub const Emitter = struct {
     allocator: std.mem.Allocator,
     module: *ir.Module,
     current_ret_ty: *types.Type = undefined,
+    /// The `va_list` of the definition being emitted, so `va_start`, `va_arg`
+    /// and `va_end` all address the same storage.
+    current_va_list: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, module: *ir.Module) Emitter {
         return .{ .allocator = allocator, .module = module };
@@ -2271,6 +2322,19 @@ pub const Emitter = struct {
         try writer.writeAll("declare void @llvm.trap() noreturn nounwind\n\n");
         try writer.writeAll("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n\n");
         try writer.writeAll("%kyn.slice = type { ptr, i64 }\n");
+        // Only an exported variadic body needs these, and their names are part of
+        // the emitted module: declaring them unconditionally would change the
+        // IR of every existing program, so the module stays byte-identical
+        // unless a `va_arg()` can actually appear in it.
+        if (self.hasVariadicBody()) {
+            try writer.print("{s}\n", .{vaListDecl()});
+            // The suffix-free spelling: `llvm.va_start.p0` only exists from
+            // LLVM 19 on, so emitting it makes the object unlinkable when the
+            // assembler is older. The unsuffixed name is the same intrinsic in
+            // every version Kyn targets.
+            try writer.writeAll("declare void @llvm.va_start(ptr)\n");
+            try writer.writeAll("declare void @llvm.va_end(ptr)\n");
+        }
         if (self.module.structs.items.len > 0) try writer.writeByte('\n');
         for ([_]u16{ 8, 16, 32, 64, 128 }) |bits| {
             for ([_][]const u8{ "add", "sub", "mul" }) |op| {
@@ -2328,6 +2392,13 @@ pub const Emitter = struct {
         }
     }
 
+    fn hasVariadicBody(self: *Emitter) bool {
+        for (self.module.functions.items) |function| {
+            if (function.linkage != .declaration and function.variadic) return true;
+        }
+        return false;
+    }
+
     fn emitParameters(self: *Emitter, writer: *std.Io.Writer, function: *ir.Function) !void {
         for (function.params, 0..) |param, i| {
             if (i > 0) try writer.writeAll(", ");
@@ -2343,6 +2414,17 @@ pub const Emitter = struct {
             try writer.print("{s} %arg{d}", .{ try self.typeString(param.ty), param.local });
         }
     }
+
+    /// The C `va_list` of the targets Kyn emits for. The x86_64 System V ABI spells
+    /// it as a one-element array of the register-save descriptor; the intrinsics
+    /// take a pointer to that array, which is why the definition is an array and
+    /// not the struct.
+    fn vaListDecl() []const u8 {
+        return "%struct.__va_list_tag = type { i32, i32, ptr, ptr }\n%kyn.va_list = type [1 x %struct.__va_list_tag]";
+    }
+
+    /// The type the alloca, `va_start`, `va_arg` and `va_end` all name.
+    const va_list_name = "%kyn.va_list";
 
     fn aggregateAlign(info: *types.StructInfo) usize {
         var alignment: u16 = 1;
@@ -2385,9 +2467,17 @@ pub const Emitter = struct {
 
     fn emitFunction(self: *Emitter, writer: *std.Io.Writer, function: *ir.Function) !void {
         self.current_ret_ty = function.ret;
+        self.current_va_list = function.va_list_local orelse 0;
         const linkage = if (function.linkage == .internal) "internal " else "dso_local ";
         try writer.print("define {s}{s} @{s}(", .{ linkage, try self.typeString(function.ret), function.name });
         try self.emitParameters(writer, function);
+        // A definition C calls carries the same trailing marker as a
+        // declaration: without it the emitted function is not a varargs
+        // function, and `llvm.va_start` is rejected by the verifier.
+        if (function.variadic) {
+            if (function.params.len > 0) try writer.writeAll(", ");
+            try writer.writeAll("...");
+        }
         try writer.writeAll(") {\n");
 
         for (function.blocks.items, 0..) |block, index| {
@@ -2398,7 +2488,11 @@ pub const Emitter = struct {
             }
             if (index == 0) {
                 for (function.locals.items) |local| {
-                    if (local.padding > 0) {
+                    if (local.is_va_list) {
+                        // `va_list` is the one-element array, and the intrinsics
+                        // take a pointer to it rather than to the tag inside.
+                        try writer.print("  %v{d} = alloca {s}, align 16\n", .{ local.id, va_list_name });
+                    } else if (local.padding > 0) {
                         const alignment = @max(llvmAlignmentOfType(local.ty), 8);
                         try writer.print("  %v{d} = alloca [{d} x i8], align {d}\n", .{ local.id, local.padding, alignment });
                     } else {
@@ -2637,6 +2731,19 @@ pub const Emitter = struct {
                 try writer.writeAll(", label %");
                 try self.emitLabel(writer, branch.else_block);
                 try writer.writeByte('\n');
+            },
+            .va_start => {
+                try writer.print("  call void @llvm.va_start(ptr %v{d})\n", .{self.current_va_list});
+            },
+            .va_arg => |va_arg| {
+                try writer.print("  %t{d} = va_arg ptr %v{d}, {s}\n", .{
+                    va_arg.dst,
+                    self.current_va_list,
+                    try self.typeString(va_arg.ty),
+                });
+            },
+            .va_end => {
+                try writer.print("  call void @llvm.va_end(ptr %v{d})\n", .{self.current_va_list});
             },
             .ret => |ret| {
                 if (ret.value) |value| {
@@ -3105,6 +3212,114 @@ test "lowering declares a variadic extern and passes promoted arguments" {
     // No half-width or half-filled argument survives to the call site.
     try testing.expect(std.mem.indexOf(u8, ll, "call i32 @printf(ptr %t0, i1 ") == null);
     try testing.expect(std.mem.indexOf(u8, ll, ", float ") == null);
+}
+
+test "lowering an exported variadic function emits va_start, va_arg and va_end" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const text =
+        \\export fn sum(count: i32, ...) i32 {
+        \\    var total: i32 = 0;
+        \\    var i: i32 = 0;
+        \\    while (i < count) {
+        \\        let value: i32 = va_arg();
+        \\        total += value;
+        \\        i += 1;
+        \\    }
+        \\    return total;
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // The definition must carry `...`: without it the module is not a varargs
+    // function and the verifier rejects `llvm.va_start`.
+    try testing.expect(std.mem.indexOf(u8, ll, "define dso_local i32 @sum(i32 %arg100000, ...)") != null);
+    // `va_list` is the one-element array, and the intrinsics take a pointer to
+    // it rather than to the tag inside.
+    try testing.expect(std.mem.indexOf(u8, ll, "%struct.__va_list_tag = type { i32, i32, ptr, ptr }") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "%kyn.va_list = type [1 x %struct.__va_list_tag]") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "alloca %kyn.va_list, align 16") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "call void @llvm.va_start(ptr ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "= va_arg ptr ") != null);
+    // The old spelling was removed from LLVM; emitting it would not assemble.
+    try testing.expect(std.mem.indexOf(u8, ll, "llvm.va_arg") == null);
+    // `va_end` runs before the returning instruction, not after it.
+    const end_at = std.mem.indexOf(u8, ll, "call void @llvm.va_end(ptr ") orelse return error.MissingVaEnd;
+    const ret_at = std.mem.lastIndexOf(u8, ll, "ret i32 ") orelse return error.MissingReturn;
+    try testing.expect(end_at < ret_at);
+}
+
+test "a module without a variadic body keeps its IR unchanged" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A variadic *declaration* alone must not pull the `va_list` type into the
+    // module: existing programs have to keep emitting the same bytes.
+    const text =
+        \\extern fn printf(format: *const u8, ...) i32;
+        \\fn main() i32 { return printf("hi"); }
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    try testing.expect(std.mem.indexOf(u8, ll, "declare i32 @printf(ptr %arg100000, ...)") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "__va_list_tag") == null);
+    try testing.expect(std.mem.indexOf(u8, ll, "va_start") == null);
+    try testing.expect(std.mem.indexOf(u8, ll, "va_end") == null);
 }
 
 test "bool and float casts lower through a valid intermediate type" {

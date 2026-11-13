@@ -20,12 +20,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§51):** the callee side of variadics
-  now has a written design (`docs/design-callee-variadics.md`) — not
-  implemented. It decides `export fn` may be variadic, `va_arg()` takes its type
-  from context, `va_start`/`va_end` are implicit, and it records the measured
-  `x86_64` System V representation plus a hand-assembled prototype that executed
-  against C before any compiler code exists.
+- **Unreleased work on the current branch (§52):** the callee side of variadics
+  is **implemented** from the §51 design. `export fn` may be variadic,
+  `va_arg()` is a context-typed builtin (`E0478` no expected or non-scalar type,
+  `E0479` a width the caller promoted away, `E0480` outside a variadic
+  function), `E0474` narrowed to `export`/`extern`, and the backend emits
+  `[1 x %struct.__va_list_tag]` with `llvm.va_start.p0`, one `va_arg` per
+  retrieval and `llvm.va_end.p0` before every exit — all gated on a variadic
+  body existing, so other modules emit identical IR. Fixture
+  `cabi_variadic_callee` links C against the exported definitions.
 - **Merged (`db81d81` .. `e5520ee`, §50):** the remaining documented tables were
   swept against the real compiler — the slice half of the cast table, the
   constant-expression rules, and the safety model's static checks
@@ -2792,3 +2795,78 @@ assumed feature.
   gives the order, and step 4 (backend emission) cannot land without step 5's
   C-interop fixture, which is the rule this project has followed for every ABI
   change. The unions/bitfields/packed-structs decision remains undesigned.
+
+## 52. Callee variadics implemented (on `arena/d757f468-kyn`)
+
+- Base: `main` at `e1de4b3`; `v0.1.0-alpha.5` remains the published baseline.
+  §51 closed with a design and the instruction to **implement it in the order of
+  its §10**. This increment does exactly that, in one pass.
+- **What landed, step by step (design §10).** (1) `ast.Expr.Kind.va_arg` with a
+  `ty: ?*Type` field, produced by the parser when a call's callee is the bare
+  identifier `va_arg` with no arguments — no token is reserved, and `args` is
+  never allocated for it. (2) `E0480` (no variadic enclosing function), `E0478`
+  (no expected type, or an expected type that cannot travel through `...`),
+  `E0479` (a width the caller promoted away); `E0474` narrowed in **both** places
+  it is emitted — the parser's body rejection and the checker's signature check.
+  (3) Three `ir.Inst` members: `va_start`, `va_arg { dst, ty }`, `va_end`. (4)
+  Backend: `%struct.__va_list_tag` + `%kyn.va_list` + the two intrinsic
+  declarations emitted from a `hasVariadicBody()` flag; `alloca %kyn.va_list,
+  align 16` in `entry`; `va_arg ptr %vN, <ty>` per retrieval. (5) Tests and the
+  C-interop fixture.
+- **Verified against the measured ABI from §51, not from memory.** The emitted
+  module matches the hand-written prototype that executed in §51: the
+  intrinsics take a pointer to the **array**, not the tag; each retrieval is a
+  first-class `va_arg` instruction, never `llvm.va_arg` (removed from LLVM); a
+  module with no variadic body contains none of the four new declarations.
+- **Three places the implementation differs from the design sketch**, recorded
+  in the design document itself: `va_end` is attached to the single `emit` hook
+  (covering explicit `return`, implicit end of a `void` function **and** the
+  trap path in one place) rather than to each `return` site; a variadic
+  *definition* must carry the `...` marker in the `define` line, because without
+  it the function is not varargs and the LLVM verifier rejects `llvm.va_start`
+  outright; and function values are `.fn_ptr` in the type union, so both
+  `.fn_type` and `.fn_ptr` are accepted retrieval types.
+- **Gate (all from a cold `.zig-cache`):** `zig build`; `zig fmt --check` clean;
+  unit **120/120** (was 109: 6 sema, 2 parser, 2 backend, plus the existing
+  counts unchanged); integration **202/0** in Debug **and** ReleaseSafe (was
+  199/0: `cabi_variadic_callee` plus two new error fixtures —
+  `variadic_retrieve_narrow` `E0479`, `variadic_arg_outside` `E0480`); the old
+  `variadic_export` fixture asserted that exporting a variadic fails, which this
+  increment makes false, so it was **repurposed** to `E0478` (a legal export
+  whose body retrieves without a context type) rather than deleted; robustness
+  corpus 902 cases clean; documentation links 22; documented diagnostic codes
+  **133** (was 130: `E0478`–`E0480` are now real and documented); versions
+  `0.1.0-alpha.5`.
+- **Behaviour confirmed by execution, not only by IR inspection.** The fixture
+  is called from C with three arguments (42), zero arguments (0), negative
+  values (−2), `i64` values beyond 32 bits (1000000000005), three `f64`s (7.0),
+  a mixed `i32`+`f64` list (42.5) and a retrieved function value invoked
+  afterwards (21), and exits 63 under both profiles through the
+  `cabi_variadic_callee.exit` oracle. The fixture bodies are never called
+  directly from Kyn: `main` only calls C, which owns the argument lists.
+- **One real portability defect, found by CI and not by the local gate.** The
+  first CI run failed only `cabi_variadic_callee`, with
+  `undefined reference to 'llvm.va_start.p0'`. The cause was the design's own
+  spelling: `.p0`-suffixed intrinsic names exist from **LLVM 19** on, and the
+  CI image installs LLVM 18, while this sandbox's clang is 22 — so the local
+  gate could never have caught it. The fix is the suffix-free spelling
+  (`llvm.va_start`, `llvm.va_end`), which is the same intrinsic in every
+  version Kyn targets; it was verified end to end on LLVM 22 here and on
+  LLVM 18 in CI. Because the job log is not retrievable from this sandbox, the
+  workflow now reports a failing integration case **and its indented reason** as
+  annotations, which is how the message was obtained at all.
+- **A pre-existing defect found while testing, deliberately not fixed here.**
+  Signed `i128` division panics the *compiler* in the checked profile
+  (`emitDivisionByZeroTrap` computes `-(1 << 127)` in an `i128`), independent of
+  variadics. It reproduces on `main` with `var a: i128 = 1000; const q = a / 7;`.
+  It is out of scope for this increment and is recorded as the next candidate
+  rather than bundled in, which would make one increment two unrelated changes.
+- **Contract kept:** no existing behaviour was changed except the one the design
+  specified (`E0474` narrowing); non-variadic modules emit identical IR, which is
+  asserted by a unit test rather than assumed; every diagnostic is reachable
+  from a real program and covered by a test at the level where it is emitted.
+- Next task: fix the `i128` division panic (small, isolated, with a regression
+  test per width and signedness), or take the remaining undesigned candidate
+  (unions/bitfields/packed structs). Forwarding a variadic list (`v`-style) stays
+  out of scope: it needs a `va_list` parameter type, which is a language handle
+  Kyn has no other use for.

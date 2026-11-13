@@ -332,13 +332,39 @@ fn main() i32 {
 }
 ```
 
-At least one fixed parameter must precede `...`, and only `extern` may be
-variadic: a Kyn-defined function has a fixed signature, so a body or an
-`export` is rejected. The trailing arguments go through the C default argument
-promotions (`i8`/`bool`/`enum` → `i32`, `u8`/`u16` → `u32`, `f32` → `f64`;
-`i64`, `u64`, `f64` and pointers unchanged), and an aggregate, a slice or a
-bare `null` is rejected rather than passed in a form the callee would misread.
-See [the ABI guide](abi.md#variadic-declarations) for the full contract.
+At least one fixed parameter must precede `...`. The trailing arguments go
+through the C default argument promotions (`i8`/`bool`/`enum` → `i32`,
+`u8`/`u16` → `u32`, `f32` → `f64`; `i64`, `u64`, `f64` and pointers
+unchanged), and an aggregate, a slice or a bare `null` is rejected rather than
+passed in a form the callee would misread.
+
+`export fn` may also be variadic, which is how a Kyn function receives a call C
+makes. The trailing arguments are read with `va_arg()`, a builtin expression
+whose type comes from context — `let value: i32 = va_arg();` — because a
+default would silently misread a `double`:
+
+```kyn
+export fn sum(count: i32, ...) i32 {
+    var total: i32 = 0;
+    var i: i32 = 0;
+    while (i < count) {
+        let value: i32 = va_arg();
+        total += value;
+        i += 1;
+    }
+    return total;
+}
+```
+
+Only the promoted widths a caller can actually pass can be retrieved, the type
+must come from context (`E0478`) and `va_arg()` is valid only inside a variadic
+function (`E0480`); a narrow type such as `i8` is rejected and the promoted
+width is named instead (`E0479`). There is no `va_list` value to name and no
+`va_start`/`va_end` to write: the compiler emits both. A plain Kyn function
+(called only from Kyn, with a fixed signature) stays rejected with `E0474`.
+See [the ABI guide](abi.md#variadic-declarations) and
+[receiving a C variadic argument list](abi.md#receiving-a-c-variadic-argument-list)
+for the full contract.
 
 ### 3.3 Structs
 
@@ -771,8 +797,10 @@ The following are rejected or simply not part of v0.1:
 - `defer`, `errdefer`, exceptions, closures, lambdas;
 - const-polymorphic slice constructors and additional slice ergonomics;
 - generics, traits, interfaces, operator overloading;
-- variadic Kyn functions (a variadic declaration must be `extern`; see
-  [the ABI guide](abi.md#variadic-declarations));
+- variadic Kyn functions without a C caller (a variadic declaration must be
+  `export` or `extern`), and forwarding a received argument list (`v`-style
+  callees need a `va_list` parameter type) — see
+  [the ABI guide](abi.md#variadic-declarations);
 - arrays as value parameters/returns; aggregates containing floating-point
   fields across `extern`/`export` boundaries;
 - unions, packed structs, bitfields, alignment/attribute syntax;

@@ -1,0 +1,9 @@
+// Only the frame of a variadic function owns a `va_list`, so there is nothing
+// to retrieve in any other function.
+fn plain(value: i32) i32 {
+    let retrieved: i32 = va_arg();
+    return retrieved;
+}
+fn main() i32 {
+    return plain(1);
+}

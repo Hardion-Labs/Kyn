@@ -1,0 +1,72 @@
+// Receiving a C variadic argument list: `export fn` with `...` and `va_arg()`.
+// Each exported function retrieves a different promoted type, so the fixture
+// covers both halves of the x86_64 register save area and the widths a C caller
+// can actually pass.
+
+export fn kyn_var_sum(count: i32, ...) i32 {
+    var total: i32 = 0;
+    var i: i32 = 0;
+    while (i < count) {
+        const value: i32 = va_arg();
+        total = total + value;
+        i = i + 1;
+    }
+    return total;
+}
+
+export fn kyn_var_sum_wide(count: i32, ...) i64 {
+    var total: i64 = 0;
+    var i: i32 = 0;
+    while (i < count) {
+        const value: i64 = va_arg();
+        total = total + value;
+        i = i + 1;
+    }
+    return total;
+}
+
+export fn kyn_var_sum_float(count: i32, ...) f64 {
+    var total: f64 = 0.0;
+    var i: i32 = 0;
+    while (i < count) {
+        const value: f64 = va_arg();
+        total = total + value;
+        i = i + 1;
+    }
+    return total;
+}
+
+// An integer and a float in one list: the two save areas advance independently,
+// so retrieving `i32` then `f64` must read each from its own side.
+export fn kyn_var_mixed(count: i32, ...) f64 {
+    const whole: i32 = va_arg();
+    const fraction: f64 = va_arg();
+    return whole as f64 + fraction;
+}
+
+// The function value is retrieved at its promoted width, and calling through it
+// proves it came back as a real pointer rather than half a register.
+export fn kyn_var_callback(count: i32, ...) i32 {
+    const step: i32 = va_arg();
+    const op: fn(i32) i32 = va_arg();
+    return op(step);
+}
+
+export fn kyn_var_scale(value: i32) i32 {
+    return value * 3;
+}
+
+extern fn c_var_sum(which: i32) i32;
+extern fn c_var_mixed(which: i32) i32;
+extern fn c_var_callback(which: i32) i32;
+
+fn main() i32 {
+    var total: i32 = 0;
+    total = total + c_var_sum(0);
+    total = total + c_var_sum(1);
+    total = total + c_var_sum(2);
+    total = total + c_var_sum(3);
+    total = total + c_var_mixed(0);
+    total = total + c_var_callback(0);
+    return total;
+}

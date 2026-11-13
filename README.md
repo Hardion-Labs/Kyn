@@ -146,7 +146,7 @@ fn main() i32 {
   qualified references; each file has its own top-level namespace, while
   unaliased imports open public names transitively and diagnose ambiguity.
   `private` declarations are enforced.
-- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, supported integer-class aggregates (including float/integer fields merged within one eightbyte), one-field `f32`/`f64` structs as scalar SSE values, two-adjacent-`f32` structs as `<2 x float>` SSE/SSEUP values, three-adjacent-`f32` structs as `<2 x float>, float`, four-adjacent-`f32` structs as `<2 x float>, <2 x float>`, two-direct-`f64` structs in two SSE argument registers, direct `{ f32, f64 }` and `{ f64, f32 }` structs in their two SSE argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` / `{ f64, u64 }` structs in one SSE and one INTEGER argument register, direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` and the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }` structs in one exact-width INTEGER and one SSE argument register, direct `{ bool, f64 }` and `{ f64, bool }` structs in one `i8` and one SSE argument register, direct singleton `enum`-member structs with `i8`/`i16`/`i32`/`i64` backings in one exact-width INTEGER and one SSE argument register, aggregates with two or more smaller-INTEGER members packed into one eightbyte followed by a single `f32`/`f64` in one `i64` and one SSE argument register, singleton `i8`/`i16`/`i32`/`i64` aggregates in one exact-width INTEGER argument register, exact multi-member `SSE`/`INTEGER`-split layouts such as `{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32, f32, f32 }`, `{ f64, f32, f32 }`, the reverse `{ f32, f32, f64 }` and `{ f32, i32, f32, f32 }` layouts, and sub-32-bit or `bool` integer members inside merged `INTEGER` eightbytes, direct `{ f64, i32 }` and `{ i32, f64 }` structs in their SSE/INTEGER registers, two-eightbyte structs whose registers are decided per leaf — pointer members keep a full-width `ptr` register (`{ *u8, i64 }`, `{ i8, *u8 }`, `{ f32, *u8 }`) and a 12-byte aggregate with a sub-register second leaf transports only that width (`{ f32, f32, i16 }` → `<2 x float>, i16`), larger supported structs via `sret`/`byval`, and slices (`struct { T *ptr; size_t len; }`). Variadics and other unsupported small mixed-class layouts remain unsupported.
+- Kyn and C can call each other through the C ABI on `x86_64` Linux: scalar types, supported integer-class aggregates (including float/integer fields merged within one eightbyte), one-field `f32`/`f64` structs as scalar SSE values, two-adjacent-`f32` structs as `<2 x float>` SSE/SSEUP values, three-adjacent-`f32` structs as `<2 x float>, float`, four-adjacent-`f32` structs as `<2 x float>, <2 x float>`, two-direct-`f64` structs in two SSE argument registers, direct `{ f32, f64 }` and `{ f64, f32 }` structs in their two SSE argument registers, direct `{ f32, i64 }` / `{ f32, u64 }` and `{ f64, i64 }` / `{ f64, u64 }` structs in one SSE and one INTEGER argument register, direct `{ i8/u8, f64 }` / `{ i16/u16, f64 }` and the reverse `{ f64, i8/u8 }` / `{ f64, i16/u16 }` structs in one exact-width INTEGER and one SSE argument register, direct `{ bool, f64 }` and `{ f64, bool }` structs in one `i8` and one SSE argument register, direct singleton `enum`-member structs with `i8`/`i16`/`i32`/`i64` backings in one exact-width INTEGER and one SSE argument register, aggregates with two or more smaller-INTEGER members packed into one eightbyte followed by a single `f32`/`f64` in one `i64` and one SSE argument register, singleton `i8`/`i16`/`i32`/`i64` aggregates in one exact-width INTEGER argument register, exact multi-member `SSE`/`INTEGER`-split layouts such as `{ f32, f32, i32 }`, `{ f32, f32, i64 }`, `{ i32, f32, f32 }`, `{ f64, f32, f32 }`, the reverse `{ f32, f32, f64 }` and `{ f32, i32, f32, f32 }` layouts, and sub-32-bit or `bool` integer members inside merged `INTEGER` eightbytes, direct `{ f64, i32 }` and `{ i32, f64 }` structs in their SSE/INTEGER registers, two-eightbyte structs whose registers are decided per leaf — pointer members keep a full-width `ptr` register (`{ *u8, i64 }`, `{ i8, *u8 }`, `{ f32, *u8 }`) and a 12-byte aggregate with a sub-register second leaf transports only that width (`{ f32, f32, i16 }` → `<2 x float>, i16`), larger supported structs via `sret`/`byval`, and slices (`struct { T *ptr; size_t len; }`). Variadic `extern` declarations and variadic `export` definitions (with context-typed `va_arg()`) are supported; other unsupported small mixed-class layouts remain unsupported.
 
 ---
 
@@ -214,7 +214,7 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ✅ Slices (`[]T`, `[]const T`) | `&array as []T`, `slice[a..b]`, `.len`, runtime bounds |
 | ❌ Generics or traits | Planned |
 | ❌ `defer`, `for`, `switch`/`match`, closures or exceptions | Planned |
-| ❌ Variadic extern functions | Planned / C wrapper required |
+| ✅ Variadic `extern` and `export` functions | C default promotions out; context-typed `va_arg()` in |
 | ❌ Indirect calls and first-class function values | Planned |
 | ✅ Fixed-array dynamic indexes | Bounds-checked at runtime; trap on out-of-range |
 | ✅ Integer division and remainder | Zero divisor traps; signed `INT_MIN / -1` traps |
@@ -272,7 +272,7 @@ See [Diagnostic codes](docs/diagnostics.md) for the stable codes.
 | [🤝 C ABI](docs/abi.md) | Interop and calling conventions |
 | [🏗️ Compiler Architecture](docs/compiler-architecture.md) | Frontend, IR and backend |
 | [🛠️ Build System](docs/build-system.md) | `kyn-build` and incremental builds |
-| [📥 Callee Variadics](docs/design-callee-variadics.md) | Design for receiving a C variable argument list |
+| [📥 Callee Variadics](docs/design-callee-variadics.md) | Design of receiving a C variable argument list |
 | [🔎 Diagnostics](docs/diagnostics.md) | Stable diagnostic codes |
 | [🚦 Release Checklist](docs/release-checklist.md) | Release readiness gate |
 | [🧭 Continuity Record](docs/continuity.md) | Validated technical state, contracts & next step |
@@ -334,6 +334,7 @@ build.zig            Builds the toolchain and wires test steps
 | `v0.1.0-alpha.4` — previous preview | ✅ [Published](https://github.com/Hardion-Labs/Kyn/releases/tag/v0.1.0-alpha.4) |
 | Explicit code-generation targets (`kync --target`) with the `E0473` ABI guard | ✅ Shipped in `v0.1.0-alpha.5` |
 | Variadic `extern` declarations with C default argument promotions | ✅ Shipped in `v0.1.0-alpha.5` |
+| Variadic `export` definitions with context-typed `va_arg()` | ✅ Unreleased (this branch) |
 | First-class function values and indirect calls | ✅ Shipped in `v0.1.0-alpha.5` |
 | Pointer/integer/function-value casts in both directions | ✅ Shipped after `v0.1.0-alpha.5` |
 | `argc`/`argv` entry point, with its signature checked (`E0477`) | ✅ Shipped after `v0.1.0-alpha.5` |

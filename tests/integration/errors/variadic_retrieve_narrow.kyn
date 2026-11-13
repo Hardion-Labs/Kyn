@@ -1,0 +1,10 @@
+// C passes an `i8` as `i32`, so retrieving `i8` would read the right bytes with
+// the wrong width. The promoted type is what must be retrieved, and the message
+// names it.
+export fn retrieve_narrow(count: i32, ...) i32 {
+    let small: i8 = va_arg();
+    return count;
+}
+fn main() i32 {
+    return 0;
+}

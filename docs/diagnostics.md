@@ -145,10 +145,13 @@ unsupported construct or an internal compiler invariant violation.
 | `E0471` | unqualified imported name is ambiguous |
 | `E0472` | external function symbol has conflicting declarations or definitions |
 | `E0473` | aggregate parameter or return layout is unsupported at the C ABI boundary |
-| `E0474` | variadic declaration is not `extern`, or has no fixed parameter |
+| `E0474` | variadic declaration is neither `export` nor `extern`, or has no fixed parameter |
 | `E0475` | argument cannot be passed to a variadic `extern` function |
 | `E0476` | exported global has a layout the C ABI target cannot represent |
 | `E0477` | entry point `main` has a signature the C runtime cannot call |
+| `E0478` | `va_arg` has no concrete scalar type in context |
+| `E0479` | `va_arg` retrieval type is not the promoted width the caller passed |
+| `E0480` | `va_arg` used outside a variadic function |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

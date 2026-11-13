@@ -18,11 +18,12 @@ is selected. Milestones below are directions, not release promises.
   arithmetic no longer traps where the named-variable form works; and the
   duplicate `E0216`/`E0420` check is deduplicated in favour of the documented
   `E0420`. Both came from sweeping the tables in §5.1 and §4.1.
-- The callee side of variadics now has a **written design**
+- The callee side of variadics is implemented from its design
   ([design-callee-variadics.md](design-callee-variadics.md)): `export fn` may be
   variadic, `va_arg()` takes its type from context, `va_start`/`va_end` are
   implicit, and the ABI was measured and executed by hand before any compiler
-  code was written. It is not implemented; the plan is at the end of the design.
+  code was written. Narrowed `E0474` plus new `E0478`–`E0480`; a C fixture links
+  against the exported definitions and executes them under both profiles.
 - The slice half of the cast table (§5.7), the constant-expression rules (§3.5)
   and the safety model's static checks (`E0501`–`E0506`, `W0501`, `W0502`) were
   swept against the real compiler and all behave as documented; one wrong
@@ -146,12 +147,13 @@ is selected. Milestones below are directions, not release promises.
   C boundary* are covered indirectly (they are one `ptr` leaf) rather than by a
   dedicated classifier — a struct of only function pointers travels as an
   aggregate like any other and follows the existing eightbyte rules.
-- Variadic `extern` declarations are implemented: `...` after at least one fixed
-  parameter, with the C default argument promotions applied to the trailing
-  arguments and aggregates, slices and bare `null` rejected. What remains
-  unaddressed is the *callee* side — defining a variadic function in Kyn for C
-  to call — together with `va_list`, which would need a language-level handle
-  and its own ABI type. Variadic Kyn functions and `export`ed variadics stay
+- Variadics are implemented in both directions: `extern` declarations with the
+  C default argument promotions applied to the trailing arguments (aggregates,
+  slices and bare `null` rejected), and `export` definitions that retrieve them
+  with a context-typed `va_arg()` over an implicit `va_start`/`va_end` pair.
+  What remains unaddressed is *forwarding* a list — a `v`-style callee needs a
+  `va_list` parameter type, which would be a language handle Kyn has no other
+  use for. A variadic function that is neither `export` nor `extern` stays
   rejected (`E0474`).
 - Cross-compilation targets are specified and implemented at the
   code-generation level: `kync --target <triple>` reaches the external

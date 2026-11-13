@@ -49,7 +49,25 @@ jobs:
         run: zig build test
 
       - name: Run integration tests
-        run: zig build integration
+        # A failing case is reported as an annotation, so the reason is visible on
+        # the pull request even when the job log is not retrievable.
+        run: |
+          set +e
+          output=$(zig build integration 2>&1)
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$output" | grep -E '^  FAIL|^passed:|^error' | head -n 20 | while IFS= read -r line; do
+              printf '::error::%s\n' "$line"
+            done
+            # The failing fixture's own diagnostics land on the lines after the
+            # `FAIL`, which is where a compile or link error states its reason.
+            # A failing case prints its reason indented under `FAIL`, so those
+            # lines are the ones worth surfacing.
+            printf '%s\n' "$output" | grep -E '^       ' | tail -n 30 | while IFS= read -r line; do
+              printf '::error::%s\n' "$line"
+            done
+          fi
+          exit "$status"
 
       - name: Build optimized toolchain
         run: zig build -Doptimize=ReleaseSafe

@@ -1,13 +1,17 @@
 # Design: the callee side of variadics
 
-Status: **design, not implemented.** This document decides the language surface,
-the ABI and the diagnostics for receiving a variable argument list. It is the
-third item on the roadmap and the first that needed a written design rather than
-a sweep, because it is the first feature that adds to the *type system* and the
-*calling convention* at once.
+Status: **implemented** (§52). This document decided the language surface, the
+ABI and the diagnostics for receiving a variable argument list; §10 is the plan
+that was then carried out, and it records what actually landed and where the
+implementation differs from the sketch. It is the third item on the roadmap and
+the first that needed a written design rather than a sweep, because it is the
+first feature that adds to the *type system* and the *calling convention* at
+once.
 
-Nothing here is claimed as done. §9 lists the validation that already exists —
-measurements taken so the design rests on facts — and what remains to be built.
+§9 lists the validation that already existed before the implementation —
+measurements taken so the design rests on facts — and what remained to be built.
+The user-facing description now lives in [`abi.md`](abi.md) §"Receiving a C
+variadic argument list".
 
 ## 1. Why this needs a design
 
@@ -161,14 +165,14 @@ For an `export fn` with `...`:
 
 - the LLVM definition carries the `...` marker, so C sees a variadic symbol;
 - at entry the function allocates `[1 x %struct.__va_list_tag]`, aligned 16 —
-  **the array, not the tag** — and calls `llvm.va_start.p0` with a pointer to
+  **the array, not the tag** — and calls `llvm.va_start` with a pointer to
   its first element;
 - each `va_arg()` emits one `va_arg` instruction with the retrieval type;
-- `llvm.va_end.p0` runs before every `return` and on the trap path, so the
+- `llvm.va_end` runs before every `return` and on the trap path, so the
   compiler's own bookkeeping is symmetric even though the programmer never
   writes it;
-- the module declares `%struct.__va_list_tag`, `llvm.va_start.p0` and
-  `llvm.va_end.p0` only when a variadic body exists, so a module without one
+- the module declares `%struct.__va_list_tag`, `llvm.va_start` and
+  `llvm.va_end` only when a variadic body exists, so a module without one
   keeps emitting exactly what it does today (determinism of existing output is a
   property the test suite asserts).
 
@@ -251,3 +255,54 @@ Said plainly so the safety model can stay honest:
 Each step is independently testable, and step 4 cannot land without step 5's
 fixture passing, which is the rule this project has followed for every ABI
 change.
+
+### What landed (§52), and the three places it differs from this sketch
+
+All five steps landed together with the fixture:
+
+1. `ast.Expr.Kind.va_arg` with a `ty: ?*Type` field, recognised by the parser
+   when a call's callee is the bare identifier `va_arg` with no arguments. `args`
+   is never allocated for it, so `va_arg` stays an ordinary identifier elsewhere
+   and no token is reserved.
+2. `E0480` (no variadic enclosing function), `E0478` (no expected type, or an
+   expected type that cannot travel through `...`), `E0479` (a width the caller
+   promoted away, or a type C cannot pass). `E0474` narrowed in both places it
+   is emitted — the parser's body rejection and the checker's signature check —
+   to accept `export`.
+3. Three `ir.Inst` members: `va_start`, `va_arg { dst, ty }` and `va_end`. A
+   target-specific intrinsic-call variant was rejected: the emitter already
+   switches exhaustively over `Inst`, so plain instructions keep that guarantee
+   instead of adding an opaque call the verifier would have to trust.
+4. The backend emits `%struct.__va_list_tag` + `%kyn.va_list` + the two
+   intrinsic declarations from a `hasVariadicBody()` flag, allocates the array
+   with `align 16` in `entry`, and emits `va_arg ptr %vN, <ty>`. `llvm.va_arg`
+   is not emitted anywhere, because the intrinsic no longer exists.
+5. 6 parser/sema/backend unit tests, 3 error fixtures (`E0478`–`E0480`), and
+   `tests/integration/abi/cabi_variadic_callee` — C calls the exported functions
+   with three, zero, negative, wide-integer, float, mixed integer/float and
+   function-pointer lists, and the fixture runs under both profiles.
+
+Differences from the sketch:
+
+- **`va_end` is attached to the `emit` hook, not to each `return` site.** Every
+  `ret` and `trap_` instruction is preceded by `va_end` in one place in
+  `Lowering.emit`, so an explicit `return`, the implicit end of a `void`
+  function and the trap path are all covered, and a future emission path cannot
+  forget it.
+- **A variadic *definition* must carry the `...` marker too.** §5 only mentions
+  the marker for a declaration; without it the emitted function is not a varargs
+  function and the LLVM verifier rejects `llvm.va_start` outright. The marker is
+  now emitted for any `function.variadic`, declaration or definition.
+- **The intrinsics are spelled without the `.p0` suffix.** Measured, not
+  assumed: the suffixed names (`llvm.va_start.p0`) only exist from **LLVM 19**
+  on, so emitting them produced an object with two undefined symbols wherever
+  the assembler is older — the project's CI installs LLVM 18 and the fixture
+  failed to link with `undefined reference to 'llvm.va_start.p0'` while passing
+  locally on LLVM 22. The suffix-free spelling is the same intrinsic in LLVM 18
+  through 22 and beyond, and was executed on both ends of that range. §5's
+  wording was corrected to match.
+- **`isize`/`usize` are named `i64`/`u64` in this target's diagnostics.** They
+  are aliases of the 64-bit types, so `typeName` reports the underlying name;
+  the retrieval test asserts `i64` and the design's list of promoted integer
+  types is otherwise unchanged. Function values are `.fn_ptr`, not `.fn_type`,
+  in the type union, and both are accepted.

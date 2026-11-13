@@ -142,7 +142,13 @@ compile time:
 - pointer alignment;
 - uninitialized reads that the conservative analysis cannot prove;
 - data races;
-- invalid pointer provenance after integer casts.
+- invalid pointer provenance after integer casts;
+- reading past the arguments a caller actually passed to a variadic function.
+  `va_arg()` advances the same cursor C does, and neither language can know how
+  many arguments arrived: the count is a convention (`printf`'s format string,
+  a `count` parameter) that only the program knows. Retrieving more than were
+  passed reads the register save area or the overflow area beyond what the
+  caller wrote.
 
 These are undefined behavior in v0.1. The compiler does not insert traps,
 panic handlers, unwinding tables or a safety runtime. Programs that need these
