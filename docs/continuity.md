@@ -2918,5 +2918,13 @@ assumed feature.
   widths and exiting 10, and `runtime_division_i128_min` expecting the trap,
   exit 132); `zig fmt --check` clean; 22 documentation links; 133 documented
   codes; versions `0.1.0-alpha.5`.
+- Git, final for this increment: `1240b1a` (the fix) plus `3fc1343` removing a
+  stray `kync run` binary that the first commit had picked up, pushed before the
+  turn ended; PR #53 → CI green → merged as **`5b2e2e5`**, and `main` re-validated
+  in a fresh clone of it (122/122 unit, 204/0 integration, fmt clean, 22 links,
+  133 codes, no stray artifact in the tree).
+- Lesson re-learned, worth keeping: `kync run <file>` names its binary after the
+  file stem **and writes it to the working directory**, so `git add -A` after a
+  run can sweep it into a commit. Build to `/tmp` with `-o` instead.
 - Next task: the remaining undesigned candidate (unions/bitfields/packed structs)
   or a documented-table sweep; forwarding a variadic list stays out of scope.
