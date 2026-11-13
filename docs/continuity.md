@@ -2844,6 +2844,17 @@ assumed feature.
   afterwards (21), and exits 63 under both profiles through the
   `cabi_variadic_callee.exit` oracle. The fixture bodies are never called
   directly from Kyn: `main` only calls C, which owns the argument lists.
+- **One real portability defect, found by CI and not by the local gate.** The
+  first CI run failed only `cabi_variadic_callee`, with
+  `undefined reference to 'llvm.va_start.p0'`. The cause was the design's own
+  spelling: `.p0`-suffixed intrinsic names exist from **LLVM 19** on, and the
+  CI image installs LLVM 18, while this sandbox's clang is 22 — so the local
+  gate could never have caught it. The fix is the suffix-free spelling
+  (`llvm.va_start`, `llvm.va_end`), which is the same intrinsic in every
+  version Kyn targets; it was verified end to end on LLVM 22 here and on
+  LLVM 18 in CI. Because the job log is not retrievable from this sandbox, the
+  workflow now reports a failing integration case **and its indented reason** as
+  annotations, which is how the message was obtained at all.
 - **A pre-existing defect found while testing, deliberately not fixed here.**
   Signed `i128` division panics the *compiler* in the checked profile
   (`emitDivisionByZeroTrap` computes `-(1 << 127)` in an `i128`), independent of

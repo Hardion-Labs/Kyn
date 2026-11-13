@@ -2328,8 +2328,12 @@ pub const Emitter = struct {
         // unless a `va_arg()` can actually appear in it.
         if (self.hasVariadicBody()) {
             try writer.print("{s}\n", .{vaListDecl()});
-            try writer.writeAll("declare void @llvm.va_start.p0(ptr)\n");
-            try writer.writeAll("declare void @llvm.va_end.p0(ptr)\n");
+            // The suffix-free spelling: `llvm.va_start.p0` only exists from
+            // LLVM 19 on, so emitting it makes the object unlinkable when the
+            // assembler is older. The unsuffixed name is the same intrinsic in
+            // every version Kyn targets.
+            try writer.writeAll("declare void @llvm.va_start(ptr)\n");
+            try writer.writeAll("declare void @llvm.va_end(ptr)\n");
         }
         if (self.module.structs.items.len > 0) try writer.writeByte('\n');
         for ([_]u16{ 8, 16, 32, 64, 128 }) |bits| {
@@ -2729,7 +2733,7 @@ pub const Emitter = struct {
                 try writer.writeByte('\n');
             },
             .va_start => {
-                try writer.print("  call void @llvm.va_start.p0(ptr %v{d})\n", .{self.current_va_list});
+                try writer.print("  call void @llvm.va_start(ptr %v{d})\n", .{self.current_va_list});
             },
             .va_arg => |va_arg| {
                 try writer.print("  %t{d} = va_arg ptr %v{d}, {s}\n", .{
@@ -2739,7 +2743,7 @@ pub const Emitter = struct {
                 });
             },
             .va_end => {
-                try writer.print("  call void @llvm.va_end.p0(ptr %v{d})\n", .{self.current_va_list});
+                try writer.print("  call void @llvm.va_end(ptr %v{d})\n", .{self.current_va_list});
             },
             .ret => |ret| {
                 if (ret.value) |value| {
@@ -3263,12 +3267,12 @@ test "lowering an exported variadic function emits va_start, va_arg and va_end" 
     try testing.expect(std.mem.indexOf(u8, ll, "%struct.__va_list_tag = type { i32, i32, ptr, ptr }") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "%kyn.va_list = type [1 x %struct.__va_list_tag]") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "alloca %kyn.va_list, align 16") != null);
-    try testing.expect(std.mem.indexOf(u8, ll, "call void @llvm.va_start.p0(ptr ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "call void @llvm.va_start(ptr ") != null);
     try testing.expect(std.mem.indexOf(u8, ll, "= va_arg ptr ") != null);
     // The old spelling was removed from LLVM; emitting it would not assemble.
     try testing.expect(std.mem.indexOf(u8, ll, "llvm.va_arg") == null);
     // `va_end` runs before the returning instruction, not after it.
-    const end_at = std.mem.indexOf(u8, ll, "call void @llvm.va_end.p0(ptr ") orelse return error.MissingVaEnd;
+    const end_at = std.mem.indexOf(u8, ll, "call void @llvm.va_end(ptr ") orelse return error.MissingVaEnd;
     const ret_at = std.mem.lastIndexOf(u8, ll, "ret i32 ") orelse return error.MissingReturn;
     try testing.expect(end_at < ret_at);
 }

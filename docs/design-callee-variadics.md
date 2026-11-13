@@ -165,14 +165,14 @@ For an `export fn` with `...`:
 
 - the LLVM definition carries the `...` marker, so C sees a variadic symbol;
 - at entry the function allocates `[1 x %struct.__va_list_tag]`, aligned 16 —
-  **the array, not the tag** — and calls `llvm.va_start.p0` with a pointer to
+  **the array, not the tag** — and calls `llvm.va_start` with a pointer to
   its first element;
 - each `va_arg()` emits one `va_arg` instruction with the retrieval type;
-- `llvm.va_end.p0` runs before every `return` and on the trap path, so the
+- `llvm.va_end` runs before every `return` and on the trap path, so the
   compiler's own bookkeeping is symmetric even though the programmer never
   writes it;
-- the module declares `%struct.__va_list_tag`, `llvm.va_start.p0` and
-  `llvm.va_end.p0` only when a variadic body exists, so a module without one
+- the module declares `%struct.__va_list_tag`, `llvm.va_start` and
+  `llvm.va_end` only when a variadic body exists, so a module without one
   keeps emitting exactly what it does today (determinism of existing output is a
   property the test suite asserts).
 
@@ -293,6 +293,14 @@ Differences from the sketch:
   the marker for a declaration; without it the emitted function is not a varargs
   function and the LLVM verifier rejects `llvm.va_start` outright. The marker is
   now emitted for any `function.variadic`, declaration or definition.
+- **The intrinsics are spelled without the `.p0` suffix.** Measured, not
+  assumed: the suffixed names (`llvm.va_start.p0`) only exist from **LLVM 19**
+  on, so emitting them produced an object with two undefined symbols wherever
+  the assembler is older — the project's CI installs LLVM 18 and the fixture
+  failed to link with `undefined reference to 'llvm.va_start.p0'` while passing
+  locally on LLVM 22. The suffix-free spelling is the same intrinsic in LLVM 18
+  through 22 and beyond, and was executed on both ends of that range. §5's
+  wording was corrected to match.
 - **`isize`/`usize` are named `i64`/`u64` in this target's diagnostics.** They
   are aliases of the 64-bit types, so `typeName` reports the underlying name;
   the retrieval test asserts `i64` and the design's list of promoted integer
