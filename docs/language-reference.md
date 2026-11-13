@@ -508,7 +508,41 @@ struct Wire {
 - A union member cannot be a bitfield (`E0487`): overlapping runs have no defined
   bit positions.
 
-### 3.9 Enums
+### 3.9 Anonymous members
+
+```kyn
+struct Packet {
+    kind: u8,
+    struct {
+        length: u32,
+        flags: u8,
+    },
+}
+```
+
+- An inline `struct { ... }`/`union { ... }` with **no name** is an anonymous
+  member. It occupies its own space, laid out by the ordinary rules, and its field
+  names are **promoted** into the enclosing aggregate: `p.length` reaches the field
+  inside it, and `Packet { kind: 1, length: 2, flags: 3 }` initializes it by those
+  names.
+- Promotion is **transitive**: an anonymous member inside an anonymous member
+  promotes its names all the way out (`struct { struct { b: i32 } }` makes `b`
+  reachable at the top).
+- The member is a real member for layout and for the C ABI: measured against clang,
+  `struct { i32 x; struct { i32 y; i8 z; } }` puts `y` at byte 4 and `z` at 8 with
+  size 12, and the anonymous struct's own trailing padding is part of it.
+- A **promoted name may not collide** with anything at its level — a sibling field,
+  or a name promoted by another anonymous member — and that is `E0493`. C rejects
+  the same shapes.
+- An initializer must still name **every** promoted field of a struct-shaped
+  anonymous member (`E0458` otherwise). A union-shaped one follows the union rule:
+  naming one of its fields is what makes it live.
+- Only an aggregate can be anonymous: `struct S { a: i32, i32 }` is a parse error,
+  because a type with no name would declare nothing.
+- A **named** member of an aggregate type does not promote: `inner: struct { ... }`
+  is reached as `s.inner.field`. Only the nameless form promotes.
+
+### 3.10 Enums
 
 ```kyn
 enum Color: u8 {
@@ -525,7 +559,7 @@ enum Color: u8 {
   backing integer. Use `as`.
 - Values must fit the backing type (`E0408`).
 
-### 3.10 Globals
+### 3.11 Globals
 
 ```kyn
 const GREETING: *const u8 = "Kyn";

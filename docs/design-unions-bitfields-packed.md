@@ -439,7 +439,8 @@ states those rules and `abi/cabi_align_byval` pins them against C.
 ## 8. Out of scope
 
 - tagged unions, sum types, `match` over a tag;
-- anonymous struct/union members;
+- ~~anonymous struct/union members~~ — **built in §59**; see `language-reference.md`
+  §3.9 and `abi.md` §10.3;
 - `extern`-declared C bitfields beyond the documented subset;
 - unions with a non-trivial drop or ownership rule (Kyn has neither);
 - per-target packed layout (specified for `x86_64` Linux only, like the rest of

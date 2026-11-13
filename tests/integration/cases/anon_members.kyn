@@ -1,0 +1,25 @@
+// transitive promotion, anonymous union, pointer access, and a write through
+// a promoted lvalue must leave its siblings alone.
+struct T { struct { struct { b: i32 } } }
+struct U { c: u8, union { i: i32, d: f64 } }
+struct W { a: i32, struct { b: i32, struct { c: i32 } } }
+
+fn bump(p: *W) void { p->b = 7; }
+
+fn main() i32 {
+    var score: i32 = 0;
+    var t: T = T { b: 5 };
+    if (t.b == 5) { score += 1; }
+
+    var u: U = U { c: 1, i: 2 };
+    if (u.c == 1 && u.i == 2) { score += 1; }
+
+    var w: W = W { a: 1, b: 2, c: 3 };
+    // a promoted write through a pointer keeps a and c intact
+    bump(&w);
+    if (w.a == 1 && w.b == 7 && w.c == 3) { score += 1; }
+
+    // a nested promoted read reaches the innermost member
+    if (w.c == 3) { score += 1; }
+    return score * 10;
+}

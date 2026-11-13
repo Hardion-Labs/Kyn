@@ -77,6 +77,8 @@ pub const FnDecl = struct {
 
 pub const StructField = struct {
     span: Span,
+    /// Empty for an anonymous member, whose own fields are promoted into the
+    /// enclosing aggregate's scope.
     name: []const u8,
     ty_expr: *TypeExpr,
     ty: ?*Type = null,
@@ -138,6 +140,11 @@ pub const TypeExpr = struct {
         slice: Slice,
         /// `fn(i32, i32) i32` — the signature of a first-class function value.
         fn_type: FnType,
+        /// An aggregate written inline where a type is expected, which is only an
+        /// anonymous member: `struct { y: i32 }` inside another aggregate. Its
+        /// declaration has an empty name and is not registered in any scope, so
+        /// it can be reached only through the member it belongs to.
+        inline_aggregate: *StructDecl,
 
         pub const FnType = struct {
             params: []ParamType,
@@ -340,6 +347,11 @@ pub const Expr = struct {
             name: []const u8,
             /// Resolved struct field index, or enum variant value.
             field_index: u32 = 0,
+            /// The chain of field indices to walk to reach the accessed field.
+            /// One element for an ordinary field; more when the name was promoted
+            /// out of one or more anonymous members. `field_index` is its last
+            /// element, which is the field the access names.
+            field_path: []const u32 = &.{},
             is_enum_variant: bool = false,
             variant_value: i128 = 0,
             through_pointer: bool = false,
@@ -367,6 +379,9 @@ pub const Expr = struct {
             name: []const u8,
             value: *Expr,
             index: u32 = 0,
+            /// The chain of field indices the promoted name resolves through, so
+            /// the emitter can build the nested value the anonymous member needs.
+            field_path: []const u32 = &.{},
         };
     };
 };

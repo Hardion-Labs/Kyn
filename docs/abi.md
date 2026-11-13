@@ -614,7 +614,18 @@ which the stack always provides, so a layout alignment of 1 does not lower it.
 `sema`-based emission used to carry the layout alignment straight through, which
 put `align 1` where clang puts `align 8`; `byvalAlign` now states the bound.
 
-### 10.3 What is still refused
+### 10.3 Anonymous members
+
+An anonymous member is **transparent to the classifier**: measured, clang
+classifies `struct { int x; struct { int y; int z; }; }` as `i64, i32` — exactly as
+if `y` and `z` had been declared directly, and unlike a *named* nested member,
+whose own class would be a leaf of its own. The leaf walk in `sema` already
+recursed through every field's type, so this is emergent rather than special-cased:
+an anonymous member is an ordinary field whose type is an aggregate, and walking it
+adds its leaves at their real offsets. `abi/cabi_anon_members` echoes two shapes
+through C in both directions and compares the sizes the C side reports.
+
+### 10.4 What is still refused
 
 Nothing for `align(N)`: an aligned aggregate crosses by value like any other, and
 `abi/cabi_align_byval` echoes five shapes (including the by-memory one) through C

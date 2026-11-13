@@ -3293,3 +3293,62 @@ assumed feature.
   fixture can catch it; `run.sh` now emits a probe with a `packed` and an
   `align(32)` aggregate and asserts `align 8` and `align 16` in the emitted text.
   Mutation-checked: the assertion fails against `align 1`, so it is not vacuous.
+
+## 59. Anonymous struct/union members
+
+- **Scope.** The design's §8 out-of-scope list named two aggregate ideas left; this
+  is the first of them. `struct`/`union` written **inline with no name** is an
+  anonymous member: it occupies its own space and its field names promote into the
+  enclosing aggregate. Tagged unions, the other item, are untouched.
+- **Measured before the rule was written.** With `zig cc`: `struct { int x; struct
+  { int y; char z; }; }` is 12/4 with `y` at 4 and `z` at 8; `struct { char c;
+  struct { short s; }; int i; }` is 8/4 with `s` at 2 and `i` at 4; promotion is
+  transitive (`struct { struct { struct { int b; } }; }` reaches `b` from outside);
+  and a collision (`struct S { int a; struct { int a; }; }`) is a C **error**
+  ("member of anonymous struct redeclares 'a'"). Each became a rule and a test.
+- **The one design decision that is not C's.** C also lets an anonymous member be a
+  union, so Kyn does too, and the *incomplete-initializer* rule follows what the
+  member is: a struct-shaped anonymous member needs all of its promoted fields
+  (`E0458`), a union-shaped one needs exactly one, like any union. Requiring all of
+  a union's fields would demand a shape no union initializer can have.
+- **Anonymous is a lookup rule, not a layout one.** The member is an ordinary field
+  whose `Field.name` is empty; `resolveFieldPath` promotes by recursing into
+  nameless fields, and returns the **chain of indices**, which the AST now carries
+  as `field_path`. The emitter walks that chain emitting one `getelementptr` per
+  level — and for the overwhelmingly common non-promoted field it uses a
+  stack-local single-element slice, so ordinary access allocates nothing new.
+- **The ABI needed no change, which was verified rather than assumed.** The leaf
+  walk already recursed through every field's type, so an anonymous member is
+  transparent to the classifier exactly as C has it; `abi/cabi_anon_members` echoes
+  two shapes through C in both directions and prints the C side's sizes (12/4, 8/4).
+- **A wrong assumption in my own first test.** I asserted the anonymous member of
+  `{i32, {i32,i8}}` was 4 bytes; it is **8** — the member is a real aggregate with
+  its own trailing padding, which is precisely why `z` sits at 8 and the whole is
+  12. The suite caught it because the test asserts the measured numbers rather than
+  the numbers I expected.
+- **Four defects found by running the cases, three of them mine, in order.** (1) The
+  anonymous type was never registered with the module, so the emitted type was
+  referenced and never defined; `collectTypes` now recurses into fields. (2) I
+  replaced the initializer's inner loop with an `if` and left its `break` in place,
+  which then exited the *outer* loop — only the first written field was ever
+  resolved, and it took an instrumented build to see it. (3) Duplicate-detection
+  keyed on the resolved field index, so a promoted name and a nested sibling shared
+  a slot and produced a false `E0404`; it now keys on the written name and marks
+  completeness by the path's first element. (4) `anonymousMemberComplete` was
+  bypassed by `assigned[top_index]`, which one promoted write sets — so a
+  half-initialized anonymous struct passed. It is now checked before that flag.
+- **Diagnostics:** `E0493` (promoted name collides) is new. No new code was needed
+  for the missing-field case: `E0458` covers it, with a message naming the anonymous
+  member.
+- **Fixtures and tests.** `cases/anon_members` (exit 40: transitive promotion,
+  anonymous union, a promoted write through a pointer leaving siblings intact);
+  `errors/anon_member_collision` (`E0493`); `abi/cabi_anon_members` (exit 20, both
+  directions against C); a unit test pins size, alignment, each member's own size,
+  and the **byte offset** each promoted name resolves to, against the clang
+  numbers.
+- **Gate:** unit **137/137** (was 136), integration **227/0** in Debug and
+  ReleaseSafe (was 224), 902 robustness cases, `zig fmt` clean, 23 documentation
+  links, **143** documented codes (was 142), versions `0.1.0-alpha.5`.
+- Next task: **tagged unions** (sum types, `match` over a tag) — the last item on
+  the design's out-of-scope list that is a language feature rather than a target
+  restriction.

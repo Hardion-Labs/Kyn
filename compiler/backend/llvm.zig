@@ -100,11 +100,25 @@ pub const Lowering = struct {
     fn collectTypes(self: *Lowering, program: *ast.Program) Error!void {
         for (program.decls) |decl| {
             switch (decl.kind) {
-                .struct_decl => |sd| if (sd.ty) |ty| try self.module.addStruct(ty.struct_type),
+                .struct_decl => |sd| if (sd.ty) |ty| try self.collectStructType(ty),
                 .enum_decl => |ed| if (ed.ty) |ty| try self.module.addEnum(ty.enum_type),
                 else => {},
             }
         }
+    }
+
+    /// Registers a struct and, recursively, the anonymous aggregates its fields
+    /// hold. An anonymous member is reachable only through the field that owns it,
+    /// so it never appears as a top-level declaration and would otherwise be
+    /// referenced by the emitted type without ever being defined.
+    fn collectStructType(self: *Lowering, ty: *types.Type) Error!void {
+        if (ty.* != .struct_type) return;
+        const info = ty.struct_type;
+        for (self.module.structs.items) |existing| {
+            if (existing == info) return;
+        }
+        try self.module.addStruct(info);
+        for (info.fields) |field| try self.collectStructType(field.ty);
     }
 
     fn lowerGlobal(self: *Lowering, vd: *ast.VarDecl, span: @import("../source.zig").Span) Error!void {
@@ -2010,15 +2024,40 @@ pub const Lowering = struct {
                     base_ptr = try self.lowerLvalue(field.base);
                     if (base_ptr == .none) break :blk .none;
                 }
-                const dst = try self.reg(try self.makePointer(struct_ty, base_ty.* == .pointer and base_ty.pointer.is_const));
-                const bitfield_ref = bitfieldRefOf(struct_ty.struct_type, field.field_index);
-                try self.emit(.{ .field_ptr = .{
-                    .dst = dst,
-                    .base = base_ptr,
-                    .struct_ty = struct_ty.struct_type,
-                    .field = field.field_index,
-                    .bitfield = bitfield_ref,
-                } });
+                // A name promoted out of anonymous members resolves to a chain of
+                // indices, so the address is reached one `getelementptr` per level.
+                // The chain comes from sema; the emitter only walks it, which is
+                // why an anonymous member needs no IR of its own.
+                var level_ptr = base_ptr;
+                var level_ty = struct_ty;
+                var bitfield_ref: ?ir.BitfieldRef = null;
+                var dst: u32 = 0;
+                // An ordinary field has a one-element path but carries no
+                // allocation at all: the common case must not pay for promotion.
+                const single = [_]u32{field.field_index};
+                const path: []const u32 = if (field.field_path.len > 0) field.field_path else &single;
+                for (path, 0..) |level_field, level| {
+                    const level_info = level_ty.struct_type;
+                    const pointer_ty = try self.makePointer(level_ty, base_ty.* == .pointer and base_ty.pointer.is_const);
+                    const level_dst = try self.reg(pointer_ty);
+                    const ref = bitfieldRefOf(level_info, level_field);
+                    try self.emit(.{ .field_ptr = .{
+                        .dst = level_dst,
+                        .base = level_ptr,
+                        .struct_ty = level_info,
+                        .field = level_field,
+                        .bitfield = ref,
+                    } });
+                    level_ptr = .{ .reg = level_dst };
+                    dst = level_dst;
+                    if (level + 1 < path.len) {
+                        // Only the last level can be the accessed field; the ones
+                        // before it are the anonymous members the name came out of.
+                        level_ty = level_info.fields[level_field].ty;
+                    } else {
+                        bitfield_ref = ref;
+                    }
+                }
                 // Only a *direct* field lvalue can be a bitfield target; an index
                 // or a dereference produces no `field_ptr`, so the flag stays
                 // cleared and the ordinary store path is taken.
@@ -2074,24 +2113,42 @@ pub const Lowering = struct {
     fn lowerAggregateInto(self: *Lowering, dest: ir.Value, ty: *types.Type, expr: *ast.Expr) Error!void {
         switch (expr.kind) {
             .struct_init => |initializer| {
-                const info = ty.struct_type;
+                // A promoted name writes into the anonymous member it came out of,
+                // so the destination is reached one `getelementptr` per level of the
+                // path. Every level before the last is an anonymous member, whose
+                // own fields are never named directly.
                 for (initializer.fields) |field| {
-                    const field_ty = info.fields[field.index].ty;
-                    const field_ptr_ty = try self.makePointer(field_ty, false);
-                    const dst = try self.reg(field_ptr_ty);
-                    const bitfield_ref = bitfieldRefOf(info, field.index);
-                    try self.emit(.{ .field_ptr = .{
-                        .dst = dst,
-                        .base = dest,
-                        .struct_ty = info,
-                        .field = field.index,
-                        .bitfield = bitfield_ref,
-                    } });
-                    if (field_ty.isAggregate()) {
-                        try self.lowerAggregateInto(.{ .reg = dst }, field_ty, field.value);
+                    const single = [_]u32{field.index};
+                    const path: []const u32 = if (field.field_path.len > 0) field.field_path else &single;
+                    var base = dest;
+                    var base_ty = ty;
+                    var dst: u32 = 0;
+                    var member_ty = ty;
+                    var ref: ?ir.BitfieldRef = null;
+                    for (path, 0..) |level_field, level| {
+                        const level_info = base_ty.struct_type;
+                        member_ty = level_info.fields[level_field].ty;
+                        dst = try self.reg(try self.makePointer(member_ty, false));
+                        ref = bitfieldRefOf(level_info, level_field);
+                        try self.emit(.{ .field_ptr = .{
+                            .dst = dst,
+                            .base = base,
+                            .struct_ty = level_info,
+                            .field = level_field,
+                            .bitfield = ref,
+                        } });
+                        base = .{ .reg = dst };
+                        base_ty = member_ty;
+                        if (level + 1 == path.len) break;
+                    }
+                    // The last `field_ptr` is the member the name designates, so
+                    // the value is written through it; the levels before it were
+                    // anonymous members and only carried the address inward.
+                    if (member_ty.isAggregate()) {
+                        try self.lowerAggregateInto(.{ .reg = dst }, member_ty, field.value);
                     } else {
                         const value = try self.lowerExpr(field.value);
-                        try self.emitFieldStore(.{ .reg = dst }, value, field_ty, bitfield_ref);
+                        try self.emitFieldStore(.{ .reg = dst }, value, member_ty, ref);
                     }
                 }
             },

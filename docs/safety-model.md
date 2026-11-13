@@ -155,6 +155,11 @@ compile time:
   measured and matched, and `abi/cabi_align_byval` echoes five of them through C
   in both directions; a shape the leaf walk cannot classify is still refused
   (`E0473`) rather than guessed.
+- a promoted name reaching the wrong storage. Promotion is a lookup rule: a name
+  resolves to a path of field indices, and the emitter walks exactly that path, so a
+  promoted write lands in the anonymous member the name came from and leaves its
+  siblings alone. A collision that would make two names reach the same storage is
+  `E0493` at compile time, not a silent preference.
 - reading a union member that is not the live one. A union's members overlap, so
   reading a different member reinterprets the same storage; the language has no
   tag and does not claim to track which member was written last. This is the one
