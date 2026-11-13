@@ -1,0 +1,11 @@
+// `INT_MIN / -1` is the one signed division with no representable result: the
+// quotient is one past the maximum. For `i128` the type's minimum does not fit
+// in a positive literal, so the check itself used to overflow the compiler
+// rather than the program. The expected exit is 132 (the trap), not a compile
+// error and not a wrong number.
+fn main() i32 {
+    var minimum: i128 = -170141183460469231731687303715884105728;
+    var minus_one: i128 = -1;
+    let quotient: i128 = minimum / minus_one;
+    return quotient as i32;
+}

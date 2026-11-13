@@ -525,7 +525,12 @@ Parentheses group expressions. `as` binds tighter than arithmetic, so
   overflow. `%` and shifts are also checked at runtime.
 - `/` and `%` on signed integers truncate toward zero; on unsigned integers
   they use unsigned division. A dynamic zero divisor traps. Signed division
-  and remainder also trap on `INT_MIN / -1`.
+  and remainder also trap on `INT_MIN / -1`, at every width including `i128` —
+  the trap is a run-time property of the program, not a compile-time error.
+- The minimum of a signed type is written as a unary minus in front of its
+  magnitude (`-128` for an `i8`, `-170141183460469231731687303715884105728` for
+  an `i128`), and that spelling is accepted at its own width rather than being
+  computed as a subtraction that would overflow.
 - Mixing different concrete numeric types is an error (`E0439`); use `as`.
 - `& | ^` require integer operands.
 - `<< >>` require integer operands; the left operand determines the result

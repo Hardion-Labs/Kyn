@@ -507,7 +507,11 @@ pub const Lowering = struct {
 
         if (rhs_ty.intInfo().signed) {
             const info = rhs_ty.intInfo();
-            const min_value = -(@as(i128, 1) << @intCast(info.bits - 1));
+            // `1 << 127` does not fit in an `i128`, so the minimum comes from
+            // the type and not from an arithmetic expression that overflows for
+            // the widest signed type — the whole point of the `INT_MIN / -1`
+            // trap is to catch that case, not to make the compiler panic on it.
+            const min_value = info.min();
             const lhs_is_min = try self.reg(bool_ty);
             try self.emit(.{ .icmp = .{ .dst = lhs_is_min, .op = .eq, .ty = lhs_ty, .lhs = lhs, .rhs = .{ .int = min_value } } });
             const rhs_is_neg_one = try self.reg(bool_ty);
@@ -1059,6 +1063,27 @@ pub const Lowering = struct {
         const operand = try self.lowerExpr(unary.operand);
         const ty = expr.ty orelse return .none;
         if (unary.op == .negate and ty.isInteger()) {
+            // Negating a literal is folded rather than computed: the most
+            // negative value of a signed type is written as `-` in front of its
+            // magnitude, and `0 - 2^127` overflows in a checked build even
+            // though the result is exactly the value the literal denotes. The
+            // checker already accepts that spelling (`minMagnitude`), so the
+            // lowering must produce it instead of trapping at run time.
+            if (unary.operand.kind == .int_lit) {
+                const magnitude = unary.operand.kind.int_lit.value;
+                const info = ty.intInfo();
+                if (info.signed and magnitude == info.minMagnitude()) {
+                    // The value of the *type*, not of an `i128`: `-128` for an
+                    // `i8`, `-2^127` for an `i128`. Only the widest case cannot
+                    // be built by negating, because its magnitude has no
+                    // positive counterpart.
+                    const value: i128 = if (magnitude == (@as(u128, 1) << 127))
+                        std.math.minInt(i128)
+                    else
+                        -@as(i128, @intCast(magnitude));
+                    return .{ .int = value };
+                }
+            }
             const operand_ty = unary.operand.ty orelse ty;
             return self.lowerCheckedBinary(.sub, .{ .int = 0 }, ty, operand, operand_ty, ty);
         }
@@ -3509,6 +3534,110 @@ test "a folded constant uses the signedness it is lowered with" {
     // zero: a bound of `2` for a 64-bit value is legal.
     try testing.expect(std.mem.indexOf(u8, ll, "icmp sge i128 ") != null);
     try testing.expect(std.mem.indexOf(u8, ll, ", 64\n") != null);
+}
+
+test "the division trap is lowered for i128 without overflowing the compiler" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The `INT_MIN / -1` check needs the type's minimum. Computing it as
+    // `-(1 << 127)` overflows while lowering an `i128` division, so the value
+    // has to come from the type — this test fails with a panic, not an
+    // assertion, if that regresses.
+    const text =
+        \\fn main() i32 {
+        \\    var a: i128 = 1000;
+        \\    var b: i128 = 7;
+        \\    const q: i128 = a / b;
+        \\    return (q % 10) as i32;
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // The guard compares against the minimum in the type's own width, and it is
+    // `i128`'s minimum rather than a truncated value.
+    try testing.expect(std.mem.indexOf(u8, ll, "icmp eq i128 %t") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "i128 %t1, -170141183460469231731687303715884105728") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "sdiv i128") != null);
+}
+
+test "the most negative literal of a signed type folds to that type's minimum" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `-128` for an `i8` and `-2^127` for an `i128` are both written as a unary
+    // minus in front of the magnitude. Lowering them as `0 - magnitude` would
+    // overflow in a checked build, so each must reach the IR as the value it
+    // denotes — and at its own width, not as a truncated `i128`.
+    const text =
+        \\fn main() i32 {
+        \\    var byte_min: i8 = -128;
+        \\    var int_min: i32 = -2147483648;
+        \\    var huge_min: i128 = -170141183460469231731687303715884105728;
+        \\    if (byte_min == -128) { return 1; }
+        \\    if (int_min == -2147483648) { return 2; }
+        \\    return 3;
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    try testing.expect(std.mem.indexOf(u8, ll, "store i8 -128, ptr") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "store i32 -2147483648, ptr") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "i128 -170141183460469231731687303715884105728") != null);
 }
 
 test "the lowered integer info names the width a constant is emitted with" {

@@ -6,8 +6,8 @@ promised between alpha releases.
 
 ## [Unreleased]
 
-Exported globals, the callee side of variadics, and two constant-representation
-fixes.
+Exported globals, the callee side of variadics, and three representation fixes
+(two constants and the signed-division minimum).
 
 ### Added
 
@@ -60,6 +60,19 @@ fixes.
   them through.
 
 ### Fixed
+- Signed division by a type whose minimum has no positive counterpart no longer
+  breaks compilation. Lowering the `INT_MIN / -1` guard computed the minimum as
+  `-(1 << (bits - 1))`, which overflows for `i128` and made the **compiler**
+  panic on any `i128` division (the check exists to trap that case at run time).
+  The minimum now comes from the type, so `i128` division compiles and
+  `i128` `INT_MIN / -1` traps like every narrower width. In the same family, the
+  most negative literal of a signed type was lowered as `0 - magnitude` with an
+  overflow check, so `let m: i128 = -170141183460469231731687303715884105728;`
+  trapped at run time in a checked build; negating a literal now folds to the
+  value the type denotes. Covered by `division_minimum_widths` (exact halving at
+  five widths) and `runtime_division_i128_min` (the trap), plus a backend test
+  per behaviour.
+
 
 - `language-reference.md` §3.5 named the wrong diagnostic for a non-constant
   global initializer: it said `E0419`, which is the code for a local of type

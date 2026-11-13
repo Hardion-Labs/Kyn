@@ -20,8 +20,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§52):** the callee side of variadics
-  is **implemented** from the §51 design. `export fn` may be variadic,
+- **Unreleased work on the current branch (§53):** signed division at the widest
+  minimum. `i128` division no longer panics the compiler (`emitDivisionByZeroTrap`
+  built `INT_MIN` as `-(1 << 127)`), and the most negative literal of a signed
+  type folds to the value its type denotes instead of trapping as a checked
+  `0 - magnitude`. Both are lowering fixes with IR-level tests and two
+  integration fixtures. The callee side of variadics (§52) is merged.
+- **Merged (`00837d5` .. `c15a185`, §52):** the callee side of variadics is
+  **implemented** from the §51 design. `export fn` may be variadic,
   `va_arg()` is a context-typed builtin (`E0478` no expected or non-scalar type,
   `E0479` a width the caller promoted away, `E0480` outside a variadic
   function), `E0474` narrowed to `export`/`extern`, and the backend emits
@@ -2878,3 +2884,39 @@ assumed feature.
   (unions/bitfields/packed structs). Forwarding a variadic list (`v`-style) stays
   out of scope: it needs a `va_list` parameter type, which is a language handle
   Kyn has no other use for.
+
+## 53. Signed division at the widest minimum (on `arena/eb0df533-kyn`)
+
+- Base: `main` at `c15a185`; `v0.1.0-alpha.5` remains the published baseline.
+  §52 closed by naming this defect explicitly — found while testing callee
+  variadics, deliberately not bundled in — so this increment fixes exactly it.
+- **The defect.** `emitDivisionByZeroTrap` computed the `INT_MIN / -1` guard's
+  bound as `-(@as(i128, 1) << @intCast(info.bits - 1))`, which overflows for a
+  128-bit type: **any** `i128` division panicked the compiler in the checked
+  profile. The check exists to trap that quotient at run time, so the fix was one
+  line: take the value from `IntInfo.min()`, the helper that already special-cased
+  128 bits for exactly this reason. Verified for `i8`/`i16`/`i32`/`i64`/`i128`
+  and for all four profiles.
+- **A second defect in the same family, found while validating the first.** The
+  most negative literal of a signed type reached the IR as a checked
+  `0 - magnitude`, so `let m: i128 = -170141183460469231731687303715884105728;`
+  trapped at run time *in a checked build* even though the checker accepts that
+  spelling on purpose (`IntInfo.minMagnitude`). Negating an integer *literal* now
+  folds to the value the type denotes. My first attempt returned the `i128`
+  minimum for every width, which the integration check caught immediately
+  (`-128` became `-2^127`); the fixed form returns the magnitude's negation and
+  special-cases only the widest type, which is the only one whose magnitude has
+  no positive counterpart.
+- **Scope discipline.** Two audit passes confirmed no other site shares the
+  pattern: `truncateInt` and the constant cast evaluator both return early at 128
+  bits, and `types.zig` min/max already used the unsigned domain. The change is
+  the two lowering sites plus tests; no diagnostic, no language surface, no ABI
+  moved.
+- **Gate:** unit **122/122** (was 120: two backend tests, one per behaviour, both
+  asserting the emitted IR rather than the absence of a panic); integration
+  **204/0** (was 202: `division_minimum_widths` asserting exact halving at five
+  widths and exiting 10, and `runtime_division_i128_min` expecting the trap,
+  exit 132); `zig fmt --check` clean; 22 documentation links; 133 documented
+  codes; versions `0.1.0-alpha.5`.
+- Next task: the remaining undesigned candidate (unions/bitfields/packed structs)
+  or a documented-table sweep; forwarding a variadic list stays out of scope.
