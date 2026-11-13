@@ -178,7 +178,7 @@ Warnings:
 | `E0601` | internal: global has no resolved type |
 | `E0602` | global initializer cannot be emitted as a constant |
 | `E0603` | pointer difference on an element type without a known scalar size |
-| `E0604` | indirect call is not supported yet |
+| `E0604` | callee has no function signature |
 | `E0605` | internal: unsupported cast from the semantic layer |
 | `E0606` | internal: expected an aggregate initializer |
 

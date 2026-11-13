@@ -103,8 +103,6 @@ extern fn free(ptr: *u8);
   through `extern`/`export` is then rejected with `E0473` instead of being
   lowered with the host convention. Scalar boundaries and all non-`extern`
   code cross-compile unchanged.
-- Variadic declarations are not supported yet. Declare a fixed prototype that
-  matches the arguments you actually pass, or write a C wrapper.
 
 ### Variadic declarations
 

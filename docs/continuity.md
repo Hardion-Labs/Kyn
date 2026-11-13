@@ -20,10 +20,16 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§47):** `kyn-build` now hashes the
-  transitive quoted C headers of a target, so editing a header rebuilds instead
-  of silently leaving a stale binary (a documented caveat that was a
-  correctness bug).
+- **Unreleased work on the current branch (§48):** `bool` ↔ float casts now
+  compile — one direction raised an "internal" error and the other emitted
+  invalid IR — and a constant cast in a global initializer folds into the
+  destination category instead of keeping the source representation. Found by a
+  differential sweep of every numeric cast pair. Three stale doc lines that
+  described features as "not supported yet" after they shipped were corrected in
+  the same pass.
+- **Merged (`b3df054` .. `99b6495`, §47):** `kyn-build` hashes the transitive
+  quoted C headers of a target, so editing a header rebuilds instead of silently
+  leaving a stale binary (a documented caveat that was a correctness bug).
 - **Merged (`8028fb6` .. `c87a197`, §46):** a struct initializer that repeats a
   field is now `E0404` — the documented "specified exactly once" rule was
   unenforced and the last value silently won.
@@ -2341,3 +2347,100 @@ assumed feature.
 - Contract kept: no test was modified to pass; the one existing assertion about
   headers was deleted from the docs because the behaviour now matches the
   stronger statement.
+
+## 48. `bool` ↔ float casts, and constant-cast folding (on `arena/9aa72244-kyn`)
+
+- Base: `main` at `99b6495`; `v0.1.0-alpha.5` remains the published baseline.
+  §47's next-task note offered the callee side of variadics or the
+  unions/bitfields/packed-structs decision. Both are design decisions that need
+  a spec before code, so instead of opening one of them this increment did what
+  §46 did and swept documented contracts against the real compiler first — which
+  is what found the defects below.
+- **Method: a differential sweep, not a single probe.** `language-reference.md`
+  §5.7 lists the allowed cast pairs in a table. Rather than spot-checking, a
+  harness generated **every** pair among `i8 u8 i16 u16 i32 u32 i64 u64 isize
+  usize f32 f64 bool char` (182 ordered pairs), compiled each through
+  `kync emit-obj`, and again with every initializer placed in a global
+  (72 ordered pairs, a separate path). Exactly 4 of 182 failed — all of them
+  `bool` ↔ float, in both widths — and 6 of 72 globals. Everything else
+  compiled. The sweep is the reason the fix covers the whole class instead of
+  the one pair that a first probe happened to hit.
+- **Defect 1 — `float as bool` was accepted and then rejected.** `checkCast`
+  allows `.float` → `.bool`, and the table documents it, but `backend.castKind`
+  had no arm for it, so `lowerCast` fell through to
+  `E0605 internal: unsupported cast from the semantic layer`. A documented cast
+  that can never compile, reported as an internal error.
+- **Defect 2 — `bool as f32` / `bool as f64` emitted invalid IR.** The
+  `from.* == .bool` arm returned `.bool_to_int` unconditionally, which the
+  emitter spells `zext i1 ... to <dest>`; `zext i1 %x to double` is not valid
+  LLVM, so the module failed to assemble and nothing containing such a cast
+  could be built. `kync check` accepted it, which is why a type-check-only sweep
+  would have missed this.
+- **Fix, backend only.** Two new `ir.CastKind` members:
+  `float_to_bool` is `fcmp une <ty> %x, 0.0` — unordered-or-not-equal, so a NaN
+  is **true**, which is C's `(_Bool)` conversion (an ordered compare would make
+  a NaN false); `bool_to_float` is `zext i1 %x to i32` followed by
+  `uitofp i32 ... to <float>`, because no floating conversion accepts an `i1`
+  operand. The `i32` intermediate is spelled in the two instructions rather than
+  added to the emitter's type table, since the emitter has no type arena and the
+  value is exact either way. `castKind` gained a `from.isFloat()` arm under
+  `to.* == .bool` and a `to.isFloat()` arm under `from.* == .bool`.
+- **Defect 3 — a constant cast kept the source representation.** `lowerConst`'s
+  `.cast` arm handled only `int` and `float` and ignored the destination
+  category, so `const WIDE: f64 = 3 as f64` emitted `constant i32 3` (which LLVM
+  rejects: "integer constant must have integer type") and `const FLAG: bool =
+  1.5 as bool` emitted the float's bit pattern as an `i1`. The arm is now driven
+  by the destination type: int→float is `@floatFromInt`, anything→`bool` is
+  `!= 0` (a NaN included), `bool`→float is `0.0`/`1.0`, and the integer cases
+  still truncate.
+- **A mistake in the first version of that fix, caught by a chain probe.** The
+  recursive call passed the outer destination type inward, so
+  `3.9 as i32 as f64` folded the operand at `f64` and produced `3.9` instead of
+  `3.0`. The recursion now passes `cast.operand.ty` — each step folds in its own
+  type — and chains through ints, floats and `bool` were re-checked:
+  `3.9 as i32 as f64` = 3.0, `0 as f64 as bool` = false,
+  `true as f64 as i32` = 1, `300 as i32 as u8` = 44, `1000 as i16 as i8` = -24.
+- **Runtime semantics checked, not assumed.** Before trusting the fix, the
+  already-working directions were re-verified against real execution:
+  `bool`→int is 0/1, int→`bool` is false only for zero (including negatives),
+  float→int truncates toward zero for both signs. `-0.0 as bool` is false.
+  NaN and infinity were produced **by C**, not by a Kyn constant fold, and
+  linked across the boundary: NaN→true, inf→true, `0.0`→false. The C fixture
+  keeps those values so the check is reproducible.
+- Files changed: `compiler/backend/llvm.zig` (`castKind` arms, the two emitter
+  cases, the destination-driven constant `.cast` arm, two new unit tests),
+  `compiler/ir.zig` (two `CastKind` members), the
+  `tests/integration/abi/cabi_bool_float_convert.{kyn,c,exit}` fixture, and docs
+  (`language-reference.md` §5.7 semantics paragraph, `CHANGELOG.md`, `roadmap.md`,
+  `README.md`).
+- **Three stale documentation lines corrected in the same pass**, all describing
+  shipped behaviour as absent: `language-reference.md` §5.6 said "indirect calls
+  through function pointers are not supported yet" (§41 shipped them in
+  alpha.5), `abi.md` said "variadic declarations are not supported yet" four
+  lines above its own `### Variadic declarations` section that documents them
+  (§40), and `diagnostics.md` still described `E0604` as "indirect call is not
+  supported yet" when the code emits "callee has no function signature". These
+  are not new work — they are the documented contract disagreeing with the
+  compiler, which is the same class of defect as the one being fixed.
+- Negative controls, run rather than assumed: reverting only the `castKind` arms
+  makes the new unit test fail (`101 pass, 1 fail`) and makes the new fixture
+  fail with `E0605`; restoring them makes both pass. Invalid casts were
+  re-checked and are still rejected: slice→bool, struct→float, ptr→float,
+  float→ptr, bool→ptr, bool→slice all report `E0447`, so no check was weakened.
+- Validation from a clean cache: `zig build` OK; `zig build test` **102/102**
+  (100 → 102); integration **198/0** in Debug and ReleaseSafe (197 → 198);
+  `zig fmt --check` clean; docs links 21; documented codes 131; robustness
+  corpus 902 clean; versions consistent at `0.1.0-alpha.5`.
+- Limitations: numeric casts still insert no runtime range check in v0.1, which
+  is documented and unchanged. `bool`→float is exact and lossless in both
+  directions only because a `bool` is 0 or 1; there is no `f16`/`f128` in the
+  type system, so those widths could not be swept. No sanitizer gate exists in
+  this repo, so none ran.
+- Next task: the callee side of variadics (`va_list` + an exported variadic) or
+  the unions/bitfields/packed-structs decision — both need a written design
+  before implementation. A future sweep could cover the remaining documented
+  tables the same way: the operator table in §5.1 against precedence and
+  associativity, and the local-declaration rules in §4.1.
+- Contract kept: no test was modified to pass; the doc lines that were wrong
+  about shipped features were corrected to match the compiler, not the compiler
+  to match the doc.
