@@ -30,6 +30,19 @@ const FnCtx = struct {
     current: u32 = 0,
     break_stack: std.ArrayList(u32) = .empty,
     continue_stack: std.ArrayList(u32) = .empty,
+    /// One entry per block being lowered, holding the `defer` bodies registered in
+    /// it, innermost last. Leaving the block runs them in reverse order.
+    defer_scopes: std.ArrayList(*DeferScope) = .empty,
+    /// How deep `defer_scopes` was at each enclosing loop, parallel to
+    /// `break_stack`/`continue_stack`. `break`/`continue` unwind back to that depth
+    /// and no further: the statements between the jump and the loop boundary are
+    /// the ones whose scope is being left.
+    loop_defer_depth: std.ArrayList(usize) = .empty,
+};
+
+/// The `defer` bodies registered in one block, in source order.
+const DeferScope = struct {
+    bodies: std.ArrayList(*ast.Block) = .empty,
 };
 
 /// The boundary class of an aggregate, as decided by the semantic analyzer.
@@ -859,10 +872,53 @@ pub const Lowering = struct {
     // Statements
     // ------------------------------------------------------------------
 
+    /// Lowers a block and runs the `defer` bodies it registered on the way out.
+    ///
+    /// The scope is opened here and closed here, so a `defer` belongs to the block
+    /// that lexically contains it -- not to the function, and not to the loop. A
+    /// statement that jumps out (`return`, `break`, `continue`) runs the scopes it
+    /// is leaving itself, because it is the only place that knows how far out it
+    /// goes; falling off the end runs the ones still open.
     fn lowerBlock(self: *Lowering, block: *ast.Block) Error!void {
+        const scope = try self.allocator.create(DeferScope);
+        scope.* = .{};
+        try self.ctx.?.defer_scopes.append(self.allocator, scope);
+
         for (block.stmts) |stmt| {
-            if (self.isTerminated()) return;
+            if (self.isTerminated()) break;
             try self.lowerStmt(stmt);
+        }
+        // A block whose last statement jumped has already run its scopes and left
+        // nothing to do; running them twice would double the side effects.
+        if (!self.isTerminated()) try self.runDeferScope(scope);
+
+        _ = self.ctx.?.defer_scopes.pop();
+    }
+
+    /// Runs one scope's `defer` bodies in reverse source order. A body that itself
+    /// terminates cannot: sema rejects `return`/`break`/`continue` inside one.
+    fn runDeferScope(self: *Lowering, scope: *DeferScope) Error!void {
+        var index = scope.bodies.items.len;
+        while (index > 0) {
+            index -= 1;
+            try self.lowerBlock(scope.bodies.items[index]);
+        }
+    }
+
+    /// Runs the scopes opened since depth `from`, innermost first. This is what a
+    /// `return`, `break` or `continue` does for the blocks it leaves.
+    ///
+    /// The scopes are **not** cleared. A jump statement always emits a terminator,
+    /// so `lowerBlock` sees the block as terminated and skips its own
+    /// `runDeferScope` -- that is what keeps the bodies from running twice. Clearing
+    /// here would be wrong for a loop body, which is lowered once and runs many
+    /// times: the second iteration would find nothing registered.
+    fn unwindDefersTo(self: *Lowering, from: usize) Error!void {
+        const scopes = self.ctx.?.defer_scopes.items;
+        var index = scopes.len;
+        while (index > from) {
+            index -= 1;
+            try self.runDeferScope(scopes[index]);
         }
     }
 
@@ -894,6 +950,7 @@ pub const Lowering = struct {
                             .value = value,
                             .ty = expr.ty.?,
                         });
+                        try self.unwindDefersTo(0);
                         try self.emit(.{ .ret = .{ .value = null } });
                     } else {
                         if (sse_abi_return) {
@@ -905,6 +962,7 @@ pub const Lowering = struct {
                                 .ptr = aggregate_ptr,
                                 .ty = abi_ty,
                             } });
+                            try self.unwindDefersTo(0);
                             try self.emit(.{ .ret = .{ .value = .{ .reg = field_value } } });
                         } else if (ret_class.eql(.small_1) or ret_class.eql(.small_2)) {
                             const storage_ty = if (ret_class.eql(.small_1))
@@ -930,22 +988,40 @@ pub const Lowering = struct {
                                 .ptr = .{ .local = temp },
                                 .ty = storage_ty,
                             } });
+                            try self.unwindDefersTo(0);
                             try self.emit(.{ .ret = .{ .value = .{ .reg = loaded } } });
                         } else {
+                            try self.unwindDefersTo(0);
                             try self.emit(.{ .ret = .{ .value = value } });
                         }
                     }
                 } else {
+                    try self.unwindDefersTo(0);
                     try self.emit(.{ .ret = .{ .value = null } });
                 }
             },
             .break_stmt => {
+                // Jumping out of a loop leaves every block between here and the
+                // loop body, so their defers run -- and no further: the loop's own
+                // enclosing scopes are not being left.
                 const target = self.ctx.?.break_stack.items[self.ctx.?.break_stack.items.len - 1];
+                const depth = self.ctx.?.loop_defer_depth.items[self.ctx.?.loop_defer_depth.items.len - 1];
+                try self.unwindDefersTo(depth);
                 try self.emit(.{ .br = .{ .target = target } });
             },
             .continue_stmt => {
                 const target = self.ctx.?.continue_stack.items[self.ctx.?.continue_stack.items.len - 1];
+                const depth = self.ctx.?.loop_defer_depth.items[self.ctx.?.loop_defer_depth.items.len - 1];
+                try self.unwindDefersTo(depth);
                 try self.emit(.{ .br = .{ .target = target } });
+            },
+            .defer_stmt => |defer_stmt| {
+                // Registration only: the body runs when the enclosing block is
+                // left, which `lowerBlock` and the jump statements arrange. A
+                // `defer` inside a block that never runs registers nothing, because
+                // the whole block was not lowered.
+                const scopes = self.ctx.?.defer_scopes.items;
+                if (scopes.len > 0) try scopes[scopes.len - 1].bodies.append(self.allocator, defer_stmt.body);
             },
             .empty => {},
         }
@@ -1119,8 +1195,12 @@ pub const Lowering = struct {
         try self.ctx.?.break_stack.append(self.allocator, end_block);
         // `continue` jumps to the step, so the increment is not skipped.
         try self.ctx.?.continue_stack.append(self.allocator, step_block);
+        // The body's own scope is opened by `lowerBlock`; a jump out of the loop
+        // unwinds to here, leaving the loop's enclosing scopes alone.
+        try self.ctx.?.loop_defer_depth.append(self.allocator, self.ctx.?.defer_scopes.items.len);
         try self.lowerBlock(for_stmt.body);
         if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = step_block } });
+        _ = self.ctx.?.loop_defer_depth.pop();
         _ = self.ctx.?.break_stack.pop();
         _ = self.ctx.?.continue_stack.pop();
 
@@ -1148,8 +1228,10 @@ pub const Lowering = struct {
         try self.switchBlock(body_block);
         try self.ctx.?.break_stack.append(self.allocator, end_block);
         try self.ctx.?.continue_stack.append(self.allocator, cond_block);
+        try self.ctx.?.loop_defer_depth.append(self.allocator, self.ctx.?.defer_scopes.items.len);
         try self.lowerBlock(while_stmt.body);
         if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = cond_block } });
+        _ = self.ctx.?.loop_defer_depth.pop();
         _ = self.ctx.?.break_stack.pop();
         _ = self.ctx.?.continue_stack.pop();
 

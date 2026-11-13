@@ -662,6 +662,16 @@ pub const Parser = struct {
             .kw_if => return try self.parseIf(),
             .kw_for => return try self.parseFor(),
             .kw_match => return try self.parseMatch(),
+            .kw_defer => {
+                const start = self.peek().span;
+                _ = self.advance();
+                const body = try self.parseBlock();
+                const payload = try self.allocator.create(ast.Stmt.DeferStmt);
+                payload.* = .{ .span = Span.join(start, body.span), .body = body };
+                const stmt = try self.allocator.create(ast.Stmt);
+                stmt.* = .{ .span = payload.span, .kind = .{ .defer_stmt = payload } };
+                return stmt;
+            },
             .kw_while => return try self.parseWhile(),
             .kw_return => return try self.parseReturn(),
             .kw_break => {
@@ -1956,4 +1966,30 @@ test "a for initializer accepts an expression as well as a declaration" {
     try testing.expect(!ctx.reporter.hasErrors());
     const loop = program.decls[0].kind.fn_decl.body.?.stmts[1].kind.for_stmt;
     try testing.expect(loop.init.?.kind == .expr);
+}
+
+test "parse a defer whose body is a block" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    defer { }
+        \\    defer {
+        \\        var x: i32 = 1;
+        \\    }
+        \\    return 0;
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const stmts = program.decls[0].kind.fn_decl.body.?.stmts;
+    try testing.expectEqual(@as(usize, 3), stmts.len);
+
+    // The body is a block, not an expression: `defer f();` is not a form the
+    // language has, so nothing here can be mistaken for one.
+    try testing.expectEqual(@as(usize, 0), stmts[0].kind.defer_stmt.body.stmts.len);
+    try testing.expectEqual(@as(usize, 1), stmts[1].kind.defer_stmt.body.stmts.len);
+    // No trailing `;`, like `if` and `while`.
+    try testing.expect(stmts[2].kind == .return_stmt);
 }

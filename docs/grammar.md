@@ -14,7 +14,7 @@ enum        := "enum" IDENT (":" type)? "{" (variant ("," variant)* ","?)? "}"
 global      := ("const"|"let"|"var") IDENT (":" type)? ("=" expr)? ";"
 export global := "export" global
 type        := "*" ["const"] type | "[" "]" ["const"] type | "[" expr "]" type | IDENT | primitive
-statement   := block | if | while | for | match | return | break | continue | local | expr ";"
+statement   := block | if | while | for | match | defer | return | break | continue | local | expr ";"
 expression  := assignment, with precedence documented in the language reference
 ```
 

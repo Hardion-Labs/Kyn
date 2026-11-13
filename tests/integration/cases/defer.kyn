@@ -1,0 +1,53 @@
+// The five properties of `defer` that need a value each. Weights are powers of
+// two summed to 31, reported as `score * 10` -> 310, whose low 8 bits are 54 --
+// an exit status keeps only those, so the expected value is 54 and not 310.
+var order: i32 = 0;
+var on_return: i32 = 0;
+
+fn take() i32 {
+    defer { on_return = 1; }
+    return 10;
+}
+
+fn main() i32 {
+    var score: i32 = 0;
+
+    // 1. Defers in one block run in reverse source order.
+    {
+        defer { order = order * 10 + 1; }
+        defer { order = order * 10 + 2; }
+        defer { order = order * 10 + 3; }
+    }
+    if (order == 321) { score += 1; }
+
+    // 2. A defer runs on `return`, and the returned value was computed first, so
+    //    a defer that changes a variable cannot change what is returned.
+    if (take() == 10 && on_return == 1) { score += 2; }
+
+    // 3. A defer inside a loop body runs once per iteration -- on `break` too.
+    var n: i32 = 0;
+    for (var i: i32 = 0; i < 5; i += 1) {
+        defer { n += 1; }
+        if (i == 2) { break; }
+    }
+    if (n == 3) { score += 4; }        // i = 0, 1, 2
+
+    // 4. ... and on `continue`, once per iteration.
+    var c: i32 = 0;
+    for (var i: i32 = 0; i < 3; i += 1) {
+        defer { c += 1; }
+        if (i == 1) { continue; }
+    }
+    if (c == 3) { score += 8; }
+
+    // 5. A defer belongs to its block, not the function: an inner block's defers
+    //    have run by the time the statement after it executes.
+    var inner: i32 = 0;
+    {
+        defer { inner = 5; }
+        if (inner != 0) { return 99; }
+    }
+    if (inner == 5) { score += 16; }
+
+    return score * 10;
+}

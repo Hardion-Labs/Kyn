@@ -169,6 +169,7 @@ unsupported construct or an internal compiler invariant violation.
 | `E0508` | a tagged union's payload has no known size or a layout the emitted type cannot mirror |
 | `E0509` | a variant construction passes the wrong number of arguments, or a payload of the wrong type |
 | `E0510` | a match arm binds a payload for a variant that carries none |
+| `E0511` | `return`, `break` or `continue` inside a `defer`: the body runs while the enclosing block is being left |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

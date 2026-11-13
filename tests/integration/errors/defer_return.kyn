@@ -1,0 +1,7 @@
+// A deferred body runs while the enclosing block is being left, so it cannot
+// leave again: a `return` there would have to unwind the statement that is
+// already unwinding.
+fn main() i32 {
+    defer { return 1; }
+    return 0;
+}

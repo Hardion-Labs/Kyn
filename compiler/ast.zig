@@ -197,7 +197,19 @@ pub const Stmt = struct {
         continue_stmt: void,
         match_stmt: *MatchStmt,
         for_stmt: *ForStmt,
+        defer_stmt: *DeferStmt,
         empty: void,
+    };
+
+    /// `defer { body }` -- runs when the enclosing block is left, however it is
+    /// left: falling off the end, `return`, `break` or `continue`.
+    ///
+    /// The body is a block, not an expression, so a `defer` cannot silently drop
+    /// the value of a call the way a bare expression statement might tempt a
+    /// reader into believing.
+    pub const DeferStmt = struct {
+        span: Span,
+        body: *Block,
     };
 
     /// `for (init; cond; step) { body }`. Every clause is optional.

@@ -1,0 +1,8 @@
+// The same for a loop jump: `break` inside a defer would leave a block while
+// that block's scope is already being torn down.
+fn main() i32 {
+    for (;;) {
+        defer { break; }
+    }
+    return 0;
+}
