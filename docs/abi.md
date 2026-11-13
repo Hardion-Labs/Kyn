@@ -625,7 +625,30 @@ an anonymous member is an ordinary field whose type is an aggregate, and walking
 adds its leaves at their real offsets. `abi/cabi_anon_members` echoes two shapes
 through C in both directions and compares the sizes the C side reports.
 
-### 10.4 What is still refused
+### 10.4 Tagged unions
+
+A tagged union crosses the boundary as the struct it is: `{ tag, payload }`, with
+the payload a union of the variants' payloads. Measured against clang for
+`enum Shape { Circle(f64), Rect(i32), Empty }`, i.e. C's `struct { int tag; union
+{ double; int; } payload; }`:
+
+| | measured |
+| --- | --- |
+| size / alignment | 16 / 8 |
+| payload offset | 8 |
+| register transport | `{ i32, i64 }` — tag INTEGER, payload bitcast into the second INTEGER |
+
+The transport is the ordinary aggregate rule, not a special case: with
+`isAggregate` reading a tagged enum's `value_ty`, the existing leaf walk classifies
+`{ i32, double }` as two INTEGER eightbytes and the emitter's `small_2` path
+already packs them. Before that, the value was classified as a bare scalar and
+travelled as one struct register — which is why `abi/cabi_tagged_union` echoes the
+value through C in both directions and reads the tag *and* the payload back.
+
+`E0508` refuses a payload with no known size, so a value that cannot be laid out is
+never emitted with a layout it does not have.
+
+### 10.5 What is still refused
 
 Nothing for `align(N)`: an aligned aggregate crosses by value like any other, and
 `abi/cabi_align_byval` echoes five shapes (including the by-memory one) through C

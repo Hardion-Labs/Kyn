@@ -1,0 +1,3 @@
+// The argument must have the payload's type; no conversion is applied silently.
+enum Shape { Circle(f64) }
+fn main() i32 { var s: Shape = Shape.Circle(true); return 0; }

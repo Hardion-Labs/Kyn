@@ -165,6 +165,10 @@ unsupported construct or an internal compiler invariant violation.
 | `E0494` | a `match` scrutinee is not an integer, `bool` or enum, or a pattern's type cannot be compared with it |
 | `E0495` | a `match` has no wildcard arm, so it is not exhaustive; or more than one wildcard |
 | `E0496` | a `match` arm can never run: it follows the wildcard, or it repeats a value already matched |
+| `E0507` | a tagged union's variant declares an explicit discriminant, which is assigned automatically |
+| `E0508` | a tagged union's payload has no known size or a layout the emitted type cannot mirror |
+| `E0509` | a variant construction passes the wrong number of arguments, or a payload of the wrong type |
+| `E0510` | a match arm binds a payload for a variant that carries none |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

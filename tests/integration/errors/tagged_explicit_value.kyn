@@ -1,0 +1,5 @@
+// A tagged union's discriminant is what `match` switches on and what the layout's
+// tag holds. Letting the program choose it would let two variants share a value,
+// which the tag cannot represent -- so it is assigned, not declared.
+enum Shape { Circle(f64) = 4, Rect(i32) }
+fn main() i32 { return 0; }

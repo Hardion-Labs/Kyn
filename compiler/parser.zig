@@ -455,12 +455,21 @@ pub const Parser = struct {
                     continue;
                 }
                 const variant_tok = self.advance();
+                // `Variant(T)` declares a payload-carrying variant; `Variant` alone
+                // carries nothing. A payload is not an initializer, so the two
+                // forms cannot be confused: `=` introduces a discriminant value.
+                var payload_expr: ?*ast.TypeExpr = null;
+                if (self.match(.l_paren)) {
+                    payload_expr = try self.parseType();
+                    _ = try self.expect(.r_paren, "after a variant's payload type");
+                }
                 var value_expr: ?*ast.Expr = null;
                 if (self.match(.equal)) value_expr = try self.parseExpr();
                 try variants.append(self.allocator, .{
                     .span = variant_tok.span,
                     .name = variant_tok.lexeme,
                     .value_expr = value_expr,
+                    .payload_expr = payload_expr,
                 });
                 if (!self.match(.comma)) break;
             }
@@ -746,10 +755,24 @@ pub const Parser = struct {
             var pattern: ?*ast.Expr = null;
             // `_` is the wildcard. It is not a keyword, so it is recognised here
             // and stays usable as an ordinary identifier everywhere else.
+            var binding: ?ast.Stmt.Binding = null;
             if (self.check(.identifier) and std.mem.eql(u8, self.peek().lexeme, "_")) {
                 _ = self.advance();
             } else {
                 pattern = try self.parseExpr();
+                // `Variant(name)` binds the payload. The expression already parses
+                // as a call with one bare-identifier argument, so the binding is
+                // read off it here rather than given a syntax of its own: the same
+                // shape that constructs a payload matches it.
+                if (pattern.?.kind == .call) {
+                    const call = pattern.?.kind.call;
+                    if (call.args.len == 1 and call.args[0].kind == .ident) {
+                        binding = .{
+                            .span = call.args[0].span,
+                            .name = call.args[0].kind.ident.name,
+                        };
+                    }
+                }
             }
             if (!try self.expect(.fat_arrow, "after match pattern")) {
                 self.synchronize(.comma);
@@ -760,6 +783,7 @@ pub const Parser = struct {
             try arms.append(self.allocator, .{
                 .span = Span.join(arm_start, body.span),
                 .pattern = pattern,
+                .binding = binding,
                 .body = body,
             });
             if (!self.match(.comma)) break;
@@ -1793,4 +1817,36 @@ test "parse a match with patterns and a wildcard" {
     try testing.expect(match_stmt.arms[0].pattern != null);
     try testing.expect(match_stmt.arms[1].pattern != null);
     try testing.expect(match_stmt.arms[2].pattern == null);
+}
+
+test "parse a payload-carrying variant and its binding" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\enum Shape { Circle(f64), Empty }
+        \\fn main() i32 {
+        \\    var s: Shape = Shape.Circle(1.5);
+        \\    match (s) {
+        \\        Shape.Circle(r) => { return 1; },
+        \\        _ => { return 0; },
+        \\    }
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+
+    // `Circle(f64)` is a payload; `Empty` carries none.
+    const variants = program.decls[0].kind.enum_decl.variants;
+    try testing.expect(variants[0].payload_expr != null);
+    try testing.expect(variants[1].payload_expr == null);
+
+    // The arm names both a pattern and the binding the payload lands in.
+    const match_stmt = program.decls[1].kind.fn_decl.body.?.stmts[1].kind.match_stmt;
+    try testing.expect(match_stmt.arms[0].pattern != null);
+    try testing.expect(match_stmt.arms[0].binding != null);
+    try testing.expectEqualStrings("r", match_stmt.arms[0].binding.?.name);
+    // The wildcard arm binds nothing.
+    try testing.expect(match_stmt.arms[1].pattern == null);
+    try testing.expect(match_stmt.arms[1].binding == null);
 }

@@ -438,7 +438,8 @@ states those rules and `abi/cabi_align_byval` pins them against C.
 
 ## 8. Out of scope
 
-- tagged unions, sum types, `match` over a tag;
+- ~~tagged unions, sum types, `match` over a tag~~ — **built in §60–§61**; see
+  `language-reference.md` §3.11–§3.12, `abi.md` §10.4;
 - ~~anonymous struct/union members~~ — **built in §59**; see `language-reference.md`
   §3.9 and `abi.md` §10.3;
 - `extern`-declared C bitfields beyond the documented subset;

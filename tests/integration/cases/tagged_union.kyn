@@ -1,0 +1,46 @@
+// A tagged union: a variant may carry a payload, and `match` dispatches on the
+// tag and binds the payload. Every arm that names `Variant(name)` receives a copy
+// of that variant's payload in `name`.
+enum Shape {
+    Circle(f64),
+    Rect(i32),
+    Empty,
+}
+
+fn area(s: Shape) i32 {
+    match (s) {
+        // The payload is bound and used; the tag decides the arm.
+        Shape.Circle(r) => { return r as i32 * 2; },
+        Shape.Rect(w) => { return w * 3; },
+        // A payload-less variant still needs no binding.
+        Shape.Empty => { return 7; },
+        _ => { return 0; },
+    }
+}
+
+fn main() i32 {
+    // Construct, match, bind -- each variant through its own arm.
+    if (area(Shape.Circle(4.0)) != 8) { return 1; }
+    if (area(Shape.Rect(5)) != 15) { return 2; }
+    if (area(Shape.Empty()) != 7) { return 3; }
+
+    // The last variant's discriminant decides the wildcard arm.
+    var s: Shape = Shape.Rect(9);
+    match (s) {
+        Shape.Circle(r) => { return 4; },
+        Shape.Rect(w) => {
+            // The binding is a copy: writing to it leaves the matched value alone.
+            var copy: i32 = w;
+            copy += 1;
+            if (copy != 10) { return 5; }
+            s = Shape.Circle(1.0);
+        },
+        _ => { return 6; },
+    }
+    // Reassigned through a match arm, then read by a second match.
+    match (s) {
+        Shape.Circle(r) => { if (r == 1.0) { return 40; } },
+        _ => { return 7; },
+    }
+    return 8;
+}

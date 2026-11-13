@@ -570,11 +570,28 @@ pub const Sema = struct {
         var variants = try self.allocator.alloc(types.Variant, ed.variants.len);
         var seen = std.StringHashMap(void).init(self.allocator);
         var next_value: i128 = 0;
+        // A payload-carrying variant makes this a tagged union, whose discriminant
+        // is the tag the match reads. Decided before the loop so every variant of
+        // such an enum rejects an explicit value with the same diagnostic.
+        var is_tagged = false;
+        for (ed.variants) |variant| {
+            if (variant.payload_expr != null) is_tagged = true;
+        }
         for (ed.variants, 0..) |*variant, i| {
             if (seen.contains(variant.name)) {
                 try self.reporter.err("E0406", variant.span, "duplicate variant '{s}' in enum '{s}'", .{ variant.name, ed.name });
             } else {
                 try seen.put(variant.name, {});
+            }
+            if (variant.payload_expr != null and variant.value_expr != null) {
+                // The discriminant of a tagged union is what `match` switches on
+                // and what the layout's tag holds. Letting the program pick it
+                // would let two variants share a value, which the tag cannot
+                // represent -- so it is assigned, not declared.
+                try self.reporter.err("E0507", variant.span, "variant '{s}' carries a payload, so its discriminant is assigned automatically; remove '= ...'", .{variant.name});
+            }
+            if (is_tagged and variant.value_expr != null) {
+                try self.reporter.err("E0507", variant.span, "enum '{s}' is a tagged union: no variant may declare an explicit value", .{ed.name});
             }
             if (variant.value_expr) |value_expr| {
                 if (try self.evalConstInt(value_expr)) |value| {
@@ -592,9 +609,94 @@ pub const Sema = struct {
             variant.value = next_value;
             variants[i] = .{ .name = variant.name, .value = next_value };
             next_value += 1;
+            if (variant.payload_expr) |payload_expr| {
+                variants[i].payload = try self.resolveType(payload_expr);
+            }
         }
         info.variants = variants;
+        info.is_tagged = is_tagged;
+        if (is_tagged) {
+            // The payload is one union of every variant's payload, so the largest
+            // decides the size and the alignment of the whole, exactly as a union
+            // does. Zero-sized payloads simply do not raise either.
+            const union_info = try self.allocator.create(types.StructInfo);
+            union_info.* = .{
+                .name = "",
+                .llvm_name = try std.fmt.allocPrint(self.allocator, "__kyn_payload_{d}_{d}", .{ ed.span.source_id, ed.span.start }),
+                .owner_module_id = ed.span.source_id,
+                .is_public = false,
+                .is_union = true,
+            };
+            var fields: std.ArrayList(types.Field) = .empty;
+            for (info.variants) |variant| {
+                const payload = variant.payload orelse continue;
+                try fields.append(self.allocator, .{
+                    .name = variant.name,
+                    .ty = payload,
+                    .index = @intCast(fields.items.len),
+                });
+            }
+            union_info.fields = try fields.toOwnedSlice(self.allocator);
+            // The same placement rule a named union uses: every member at offset 0,
+            // size and alignment from the largest. Reused rather than re-derived,
+            // so the payload and a real union cannot disagree.
+            placeFields(self.allocator, union_info) catch |err| switch (err) {
+                error.UnknownLayout => {
+                    try self.reporter.err("E0508", ed.span, "tagged union '{s}' has a payload with no known size", .{ed.name});
+                    info.complete = true;
+                    return;
+                },
+                error.UnrepresentableBitfield => {
+                    try self.reporter.err("E0489", ed.span, "tagged union '{s}' has a payload layout the emitted type cannot mirror", .{ed.name});
+                    info.complete = true;
+                    return;
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            info.payload_union = union_info;
+            // The value type is an ordinary struct of two members. Building it
+            // here means the emitter, the classifier and `sizeInBytes` all read a
+            // `struct_type`, so none of them needs a tagged-union branch of its
+            // own -- and none can disagree with the measured layout.
+            const value_info = try self.allocator.create(types.StructInfo);
+            value_info.* = .{
+                .name = ed.name,
+                .llvm_name = try std.fmt.allocPrint(self.allocator, "__kyn_tagged_{d}_{d}", .{ ed.span.source_id, ed.span.start }),
+                .owner_module_id = ed.span.source_id,
+                .is_public = info.is_public,
+                // The tag is an ordinary integer member, not a bitfield: a bitfield
+                // there would collapse the tag into a storage unit with the payload
+                // and change the C layout the fixture pins.
+                .fields = try self.allocator.dupe(types.Field, &.{
+                    .{ .name = "tag", .ty = info.backing, .index = 0 },
+                    .{ .name = "payload", .ty = try self.typeOfStructInfo(union_info), .index = 1 },
+                }),
+            };
+            placeFields(self.allocator, value_info) catch |err| switch (err) {
+                error.UnknownLayout, error.UnrepresentableBitfield => {
+                    try self.reporter.err("E0508", ed.span, "tagged union '{s}' has a payload with no known size", .{ed.name});
+                    info.complete = true;
+                    return;
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            // An empty payload union has no members, so `placeFields` gives it size
+            // 0; the emitted struct needs a member there, which the struct rule
+            // already provides (an empty struct emits one `i8`). Measured: clang's
+            // `struct { int t; union {} p; }` is 4 bytes, and so is `{ i32, i8 }`
+            // padded to 4 -- the size is the same, and it is what the fixture pins.
+            info.value_ty = try self.typeOfStructInfo(value_info);
+        }
         info.complete = true;
+    }
+
+    /// A `*Type` wrapping an already-built `StructInfo`. Used for the pieces a
+    /// tagged union synthesises (its payload union and its value struct), which
+    /// have no declaration of their own to hang a type on.
+    fn typeOfStructInfo(self: *Sema, info: *types.StructInfo) Error!*Type {
+        const ty = try self.allocator.create(Type);
+        ty.* = .{ .struct_type = info };
+        return ty;
     }
 
     fn resolveSignature(self: *Sema, fd: *ast.FnDecl) Error!void {
@@ -767,6 +869,42 @@ pub const Sema = struct {
         }
     }
 
+    /// Checks one arm's pattern against the scrutinee, resolving a payload
+    /// binding if the pattern names one.
+    ///
+    /// `Variant(name)` is a call over a field, so the ordinary expression check
+    /// would reject it as a call to a non-function. Recognising the shape here
+    /// keeps a variant pattern from needing an expression kind of its own.
+    fn checkPattern(self: *Sema, pattern: *ast.Expr, value_ty: *Type, binding: ?*ast.Stmt.Binding) Error!*Type {
+        if (binding) |bind| {
+            if (value_ty.* == .enum_type and pattern.kind == .call) {
+                const info = value_ty.enum_type;
+                const field = &pattern.kind.call.callee.kind.field;
+                if (info.is_tagged and pattern.kind.call.args.len == 1) {
+                    const variant = for (info.variants) |v| {
+                        if (std.mem.eql(u8, v.name, field.name)) break v;
+                    } else {
+                        try self.reporter.err("E0449", pattern.span, "enum '{s}' has no variant '{s}'", .{ info.name, field.name });
+                        return self.prims.invalid;
+                    };
+                    const payload_ty = variant.payload orelse {
+                        try self.reporter.err("E0510", bind.span, "variant '{s}.{s}' carries no payload, so '{s}' has nothing to bind", .{ info.name, variant.name, bind.name });
+                        return self.prims.invalid;
+                    };
+                    bind.ty = payload_ty;
+                    // The pattern compared is the variant itself, which is the
+                    // discriminant `match` already switches on: `field.is_enum_variant`
+                    // is what the lowering reads.
+                    field.is_enum_variant = true;
+                    field.variant_value = variant.value;
+                    _ = try self.checkExpr(field.base, null);
+                    return value_ty;
+                }
+            }
+        }
+        return self.checkExpr(pattern, value_ty);
+    }
+
     /// `match (value) { pattern => { ... }, ..., _ => { ... } }`.
     ///
     /// Two rules, both decided here rather than left to the backend:
@@ -790,12 +928,17 @@ pub const Sema = struct {
         var saw_wildcard = false;
         var seen_values = std.AutoHashMap(i128, void).init(self.allocator);
         for (match_stmt.arms) |*arm| {
+            // `checkPattern` fills the binding's type, so it needs the arm
+            // mutably even though the expression check itself does not.
             if (arm.pattern) |pattern| {
                 if (saw_wildcard) {
                     // An arm after `_` can never run: `_` matches everything.
                     try self.reporter.err("E0496", pattern.span, "unreachable match arm: the wildcard '_' above already matches every value", .{});
                 }
-                const pattern_ty = try self.checkExpr(pattern, value_ty);
+                // A payload is bound, not compared: `Variant(name)` names the tag
+                // and the binding, so the pattern checked is the tag itself. The
+                // binding's type then comes from the variant's payload.
+                const pattern_ty = try self.checkPattern(pattern, value_ty, if (arm.binding != null) &arm.binding.? else null);
                 // The same rule `==` uses: the arm is that comparison, so a
                 // pattern that could not be written as `value == pattern` is not a
                 // pattern. One rule, not a second one that could drift.
@@ -819,7 +962,26 @@ pub const Sema = struct {
                 }
                 saw_wildcard = true;
             }
+            // The binding is visible only inside its own arm, so it gets a scope
+            // around the body rather than leaking into the next arm or after the
+            // match.
+            try self.pushScope();
+            if (arm.binding) |*binding| {
+                if (binding.ty) |binding_ty| {
+                    const sym = try self.allocator.create(Symbol);
+                    sym.* = .{
+                        .id = self.nextId(),
+                        .name = binding.name,
+                        .ty = binding_ty,
+                        .kind = .local,
+                        .owner_module_id = arm.span.source_id,
+                    };
+                    binding.sym = sym;
+                    try self.declareLocal(sym, binding.span);
+                }
+            }
             try self.checkBlock(arm.body);
+            self.popScope();
         }
         if (!saw_wildcard) {
             try self.reporter.err("E0495", match_stmt.span, "match is not exhaustive: add a '_ => {{ ... }}' arm to handle the remaining values", .{});
@@ -1557,7 +1719,86 @@ pub const Sema = struct {
         return want;
     }
 
+    /// `Enum.Variant(payload)` constructs a tagged-union value.
+    ///
+    /// Checked *after* the callee has gone through the ordinary expression path,
+    /// so module aliases, visibility and privacy keep working exactly as they do
+    /// for any other field access -- probing `field.base` separately here would
+    /// bypass that handling, which is how a module alias once stopped resolving.
+    fn checkTaggedConstruction(self: *Sema, expr: *ast.Expr, call: *ast.Expr.Kind.Call, callee_ty: *Type) Error!*Type {
+        const info = callee_ty.enum_type;
+        const callee = call.callee;
+        const field = &callee.kind.field;
+        field.is_enum_variant = true;
+        const variant = for (info.variants) |v| {
+            if (std.mem.eql(u8, v.name, field.name)) break v;
+        } else {
+            try self.reporter.err("E0449", callee.span, "enum '{s}' has no variant '{s}'", .{ info.name, field.name });
+            for (call.args) |arg| _ = try self.checkExpr(arg, null);
+            return self.prims.invalid;
+        };
+        // The discriminant the construction writes as the tag. Recorded on the
+        // field so the emitter reads it, exactly as a plain enum variant does.
+        field.variant_value = variant.value;
+        if (variant.payload) |payload_ty| {
+            if (call.args.len != 1) {
+                try self.reporter.err("E0509", expr.span, "variant '{s}.{s}' carries a payload: expected 1 argument, found {d}", .{
+                    info.name, variant.name, call.args.len,
+                });
+                for (call.args) |arg| _ = try self.checkExpr(arg, null);
+                return callee_ty;
+            }
+            const arg_ty = try self.checkExpr(call.args[0], payload_ty);
+            if (arg_ty.* != .invalid and !Type.eql(arg_ty, payload_ty)) {
+                try self.reporter.err("E0509", call.args[0].span, "variant '{s}.{s}' carries '{s}', found '{s}'", .{
+                    info.name, variant.name, self.typeName(payload_ty), self.typeName(arg_ty),
+                });
+            }
+        } else if (call.args.len != 0) {
+            try self.reporter.err("E0509", expr.span, "variant '{s}.{s}' carries no payload: expected 0 arguments, found {d}", .{
+                info.name, variant.name, call.args.len,
+            });
+            for (call.args) |arg| _ = try self.checkExpr(arg, null);
+        }
+        return callee_ty;
+    }
+
     fn checkCall(self: *Sema, expr: *ast.Expr, call: *ast.Expr.Kind.Call) Error!*Type {
+        // A construction is recognised before the callee is checked as a value,
+        // because `Enum.Variant` alone is a value only when the variant carries
+        // nothing -- checking it first would reject every construction.
+        // `Name.Variant(...)` where `Name` names a tagged enum is a construction,
+        // and must be recognised *before* the callee is checked as a value: the
+        // bare `Name.Variant` of a payload-carrying variant is deliberately not a
+        // value.
+        //
+        // The probe resolves the base's *symbol* rather than its expression. Going
+        // through `checkExpr` here would resolve a module alias's member ahead of
+        // the alias handling that gives the field its meaning, which is how
+        // `geom.sum(...)` once stopped resolving. A symbol lookup has no such
+        // effect, and anything that is not a tagged enum falls through to the
+        // ordinary call check unchanged.
+        if (call.callee.kind == .field and call.callee.kind.field.base.kind == .ident) {
+            const base_ident = call.callee.kind.field.base.kind.ident;
+            if (self.lookupValue(base_ident.name, call.callee.span.source_id, call.callee.span) catch null) |sym| {
+                if (sym.kind == .enum_type and sym.ty.* == .enum_type and sym.ty.enum_type.is_tagged) {
+                    const info = sym.ty.enum_type;
+                    const name = call.callee.kind.field.name;
+                    for (info.variants) |v| {
+                        if (std.mem.eql(u8, v.name, name)) {
+                            // The base is resolved for real now, exactly as the
+                            // field check would have done.
+                            _ = try self.checkExpr(call.callee.kind.field.base, null);
+                            return self.checkTaggedConstruction(expr, call, sym.ty);
+                        }
+                    }
+                    _ = try self.checkExpr(call.callee.kind.field.base, null);
+                    try self.reporter.err("E0449", call.callee.span, "enum '{s}' has no variant '{s}'", .{ info.name, name });
+                    for (call.args) |arg| _ = try self.checkExpr(arg, null);
+                    return self.prims.invalid;
+                }
+            }
+        }
         const callee_ty = try self.checkExpr(call.callee, null);
         if (callee_ty.* == .invalid) {
             for (call.args) |arg| _ = try self.checkExpr(arg, null);
@@ -1819,6 +2060,16 @@ pub const Sema = struct {
             const info = base_ty.enum_type;
             for (info.variants) |variant| {
                 if (std.mem.eql(u8, variant.name, field.name)) {
+                    // `Enum.Variant` is a value only when the variant carries
+                    // nothing. With a payload it is a constructor shape, so
+                    // naming it alone would have to invent a payload -- the
+                    // construction `Variant(x)` is the only way to get a value.
+                    if (variant.payload != null) {
+                        try self.reporter.err("E0509", expr.span, "variant '{s}.{s}' carries a payload: construct it with '{s}.{s}(...)'", .{
+                            info.name, variant.name, info.name, variant.name,
+                        });
+                        return self.prims.invalid;
+                    }
                     field.is_enum_variant = true;
                     field.variant_value = variant.value;
                     return base_ty;
@@ -2405,8 +2656,15 @@ pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
     // `sret`/`byval` for a 5-byte `{ char; int; }` that would otherwise travel in
     // one `i64`. Register transport would also be wrong: the loads it implies are
     // unaligned by construction.
-    if (ty.* == .struct_type and ty.struct_type.is_packed) return .memory;
-    if (ty.* != .struct_type) {
+    // A tagged union is a struct in every way the boundary cares about, so it
+    // takes the same path -- including the packed check and the leaf walk. Its
+    // value type is that struct.
+    const value_ty: *Type = if (ty.* == .enum_type and ty.enum_type.value_ty != null)
+        ty.enum_type.value_ty.?
+    else
+        ty;
+    if (value_ty.* == .struct_type and value_ty.struct_type.is_packed) return .memory;
+    if (value_ty.* != .struct_type) {
         // A non-struct aggregate (a slice) travels as one packed INTEGER
         // value, matching the C struct `{ T *ptr; size_t len; }`.
         if (layout.size <= 8) return .small_1;
@@ -2414,7 +2672,7 @@ pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
     }
 
     var leaves = [_]EightbyteLeaf{ .{}, .{} };
-    if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
+    if (!collectAggregateLeaves(value_ty, 0, &leaves)) return null;
 
     if (layout.size > 8) {
         // An eightbyte that holds no data consumes no register. Measured:
@@ -2834,7 +3092,9 @@ pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
         // A function type has no storage of its own; in an aggregate it is a
         // pointer to the code, which is what its lowering produces.
         .fn_type, .fn_ptr => .{ .size = 8, .align_ = 8 },
-        .enum_type => |info| aggregateLayoutGuess(info.backing),
+        // A tagged union's value is `{ tag, payload }`, so its layout is that
+        // struct's, not the backing's: the backing is only the tag half.
+        .enum_type => |info| aggregateLayoutGuess(info.value_ty orelse info.backing),
         else => null,
     };
 }
@@ -3127,6 +3387,9 @@ const SemTest = struct {
             switch (decl.kind) {
                 .struct_decl => |sd| {
                     if (std.mem.eql(u8, sd.name, name)) return sd.ty;
+                },
+                .enum_decl => |ed| {
+                    if (std.mem.eql(u8, ed.name, name)) return ed.ty;
                 },
                 else => {},
             }
@@ -4961,4 +5224,38 @@ test "a declaration is visible after itself and not before" {
         \\    return shadowed;
         \\}
     , "E0421");
+}
+
+test "a tagged union is laid out as the tag plus a union of payloads" {
+    // The numbers are clang's for C's `struct { int tag; union { double; int; }
+    // payload; }`, measured before the rule was written: 16 bytes, alignment 8,
+    // payload at offset 8. Pinning them here means a change to the layout rule
+    // fails a test instead of quietly disagreeing with C.
+    var ctx: SemTest = undefined;
+    try ctx.init(
+        \\enum Shape { Circle(f64), Rect(i32), Empty }
+        \\fn main() i32 { return 0; }
+    );
+    defer ctx.deinit();
+    try ctx.run();
+    try testing.expect(!ctx.reporter.hasErrors());
+
+    const shape = ctx.typeNamed("Shape").?;
+    try testing.expectEqual(true, shape.enum_type.is_tagged);
+
+    const layout = aggregateLayoutGuess(shape).?;
+    try testing.expectEqual(@as(u64, 16), layout.size);
+    try testing.expectEqual(@as(u64, 8), layout.align_);
+
+    // The tag is the first member and holds the variant index, in declaration
+    // order, with no explicit value permitted to shift it.
+    const value = shape.enum_type.value_ty.?;
+    try testing.expectEqual(true, value.isAggregate());
+    try testing.expectEqual(@as(u64, 8), value.struct_type.layout.align_);
+    const payload = shape.enum_type.payload_union.?;
+    try testing.expectEqual(@as(u64, 8), payload.layout.size);
+    try testing.expectEqual(@as(u64, 8), payload.layout.align_);
+    try testing.expectEqual(@as(i128, 0), shape.enum_type.variants[0].value);
+    try testing.expectEqual(@as(i128, 1), shape.enum_type.variants[1].value);
+    try testing.expectEqual(@as(i128, 2), shape.enum_type.variants[2].value);
 }
