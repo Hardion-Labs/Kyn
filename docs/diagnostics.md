@@ -50,7 +50,6 @@ unsupported construct or an internal compiler invariant violation.
 | `E0213` | expected a type |
 | `E0214` | declaration inside a function body |
 | `E0215` | expected a local variable name |
-| `E0216` | local needs a type or an initializer |
 | `E0217` | expected `if` or a block after `else` |
 | `E0218` | expected a field name after `.`/`->` |
 | `E0219` | malformed or oversized integer literal |

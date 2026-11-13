@@ -577,9 +577,10 @@ pub const Parser = struct {
         if (self.match(.equal)) init_expr = try self.parseExpr();
 
         _ = try self.expect(.semicolon, "after variable declaration");
-        if (ty_expr == null and init_expr == null) {
-            try self.reporter.err("E0216", name_tok.span, "variable '{s}' needs a type or an initializer", .{name_tok.lexeme});
-        }
+        // Whether a local has a type, an initializer or neither is a semantic
+        // question, not a syntactic one: the parser accepts both forms and the
+        // analyzer reports `E0420` for the empty one. Reporting it here as well
+        // kept `E0420` unreachable and gave the same condition two codes.
 
         const var_decl = try self.allocator.create(ast.VarDecl);
         var_decl.* = .{

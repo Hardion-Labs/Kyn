@@ -20,10 +20,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§48):** `bool` ↔ float casts now
-  compile — one direction raised an "internal" error and the other emitted
-  invalid IR — and a constant cast in a global initializer folds into the
-  destination category instead of keeping the source representation. Found by a
+- **Unreleased work on the current branch (§49):** folded constant integers now
+  lower with their real signedness, so literal `-` no longer traps where the
+  named-variable form works, and a shift by a constant no longer traps always;
+  the duplicate `E0216`/`E0420` check is deduplicated in favour of the documented
+  `E0420`. Both found by sweeping the documented tables in §5.1 and §4.1.
+- **Merged (`fe9c964` .. `e34bda9`, §48):** `bool` ↔ float casts now compile —
+  one direction raised an "internal" error and the other emitted invalid IR —
+  and a constant cast in a global initializer folds into the destination
+  category instead of keeping the source representation. Found by a
   differential sweep of every numeric cast pair. Three stale doc lines that
   described features as "not supported yet" after they shipped were corrected in
   the same pass.
@@ -2453,3 +2458,102 @@ assumed feature.
   remaining documented tables are the cheapest next targets: the operator table
   in §5.1 against real precedence and associativity, and the local-declaration
   rules in §4.1.
+
+## 49. Folded-constant signedness, and `E0420` deduplication (on `arena/9888b78f-kyn`)
+
+- Base: `main` at `e34bda9`; `v0.1.0-alpha.5` remains the published baseline.
+  §48 recorded two remaining documented tables worth sweeping and this
+  increment was those sweeps: precedence/associativity (§5.1) and the
+  local-declaration rules (§4.1).
+- **Method: an independent oracle, in the style §48 established for casts.**
+  The precedence table was transcribed into a Python precedence-climbing parser
+  (left-associative means "recurse at prec+1", right means "at prec"), which
+  computes the grouping the documentation promises. An expression that shares
+  operators across levels is then evaluated twice: once by the oracle with exact
+  integers, once by running the compiled Kyn program and reading its exit
+  status. Any disagreement is a parser bug or a doc bug. 346 generated cases
+  (every adjacent operator pair in both orders, same-level left associativity,
+  comparisons against arithmetic, and 120 random three-operator chains) all
+  agree after the fix; before it, 107 disagreed — all of them trapping.
+- **Defect 1 — every folded `-` trapped.** `1 - 2 + 3` exits 132 (the overflow
+  trap) while `a - b + c` over `i32` variables exits 2. The emitted instruction
+  was `@llvm.usub.with.overflow.i64(i64 1, i64 2)`: an **unsigned** subtract of
+  a negative result, which is an overflow. Root cause: a `comptime_int` carries
+  no width or sign in the type system, and `Type.intInfo()` answers
+  `bits = 0, signed = false` for it, so `Emitter`'s `checked_binary` arm fell to
+  the `u` prefix. Everything that read `intInfo()` directly on a possibly-folded
+  type had the same blind spot.
+- **Defect 2 — a shift by a constant always trapped.** `3 | 1 << 2` exits 132
+  for the same reason: `emitShiftBoundsCheck` compared the amount against
+  `lhs_ty.intInfo().bits`, which is `0` for `comptime_int`, so any amount
+  `>= 0` failed the bound. `1 << 2` alone worked only because the sema
+  materializes a lone literal expression to `i32` first.
+- **Fix: one helper, not two patches.** `loweredIntInfo(ty)` answers "how wide
+  and how signed is this lowered" — `comptime_int` is `i64`/signed (which is
+  what `typeString` already emits for it), `char` is 32-bit unsigned, an enum
+  answers for its backing, and a non-integer is `null`. Both `checked_binary`'s
+  sign choice and `emitShiftBoundsCheck` use it, so the two cannot drift. The
+  four other `intInfo()` call sites (index bounds, division check, slice
+  bounds, `castIntegerValue`) were probed rather than assumed: all four already
+  behave correctly, because their operands are contextual or explicitly typed
+  by the time they reach lowering, so they were **left alone** — the fix is
+  placed where the defect is, not sprayed across every similar-looking line.
+- **Defect 3 — a duplicated declaration check with two codes.** §4.1 documents
+  "a local needs a type, an initializer, or both (`E0420`)", and `sema` has that
+  check, but `parser.parseVarDecl` reported the same condition as `E0216` before
+  the analyzer ever ran. `E0420` was therefore **unreachable**, and one rule had
+  two documented codes in `diagnostics.md`. The parser now accepts both forms
+  and the analyzer reports the documented `E0420`, which is where the rest of
+  the declaration rules live. Verified the old behaviour produced exactly one
+  diagnostic (`E0216`) and the new one exactly one (`E0420`).
+- **A false negative in my own test, caught and fixed.** The first unit test
+  asserted `E0420` was present; it passed even with the parser check restored,
+  because `expectSemanticError` returns on the *first* matching diagnostic and
+  the parser's `E0216` short-circuits compilation. A new `expectOnlyError`
+  helper asserts the program fails with exactly that code and nothing else, and
+  with it the negative control fails as it should (105 pass, 1 fail).
+- Deliberately **not** changed, after checking each against the docs:
+  `let x = 5` infers `i64` and assigning that to `i32` is `E0462`, which is
+  exactly what `type-system.md` §2 says ("if no context exists, it materializes
+  as `i64`") and what "there are no implicit promotions" means — my probe was
+  wrong, not the compiler. `let x: i32 = 1 << 31 >> 31` gives 255 while
+  `(1 << 31 >> 31) as i32` gives 1; both follow the documented contextual typing
+  rule (the whole expression takes the expected type), so this stands.
+- Files changed: `compiler/backend/llvm.zig` (`loweredIntInfo` plus its two call
+  sites, two unit tests), `compiler/parser.zig` (duplicate check removed with a
+  comment explaining where the rule lives), `compiler/sema.zig` (unit tests and
+  the `expectOnlyError` helper), `tests/integration/cases/precedence.{kyn,exit}`
+  (executes the table: tightness of `*` over `+`, left associativity, `<<`
+  below `+`, `&`/`^`/`|` order, `<<` over `|`, signed intermediates on folded
+  operands, a shift amount checked against the operand width), and docs
+  (`language-reference.md` §4.1 clarifies inferred local types,
+  `diagnostics.md` drops the duplicate `E0216`, `CHANGELOG.md`, `roadmap.md`,
+  `README.md`).
+- Negative controls, run rather than assumed: reverting `loweredIntInfo`'s
+  `comptime_int` arm makes both new unit tests fail (102/104 at that point) and
+  makes the integration case trap (132 instead of 42); restoring it makes all
+  pass. Restoring the parser check fails the tightened `E0420` test (105/106).
+  The two folded defects were **reproduced on a clean stashed tree** before any
+  edit, so they are pre-existing, not introduced here.
+- Validation from a clean cache: `zig build` OK; `zig build test` **106/106**
+  (104 → 106); integration **199/0** in Debug and ReleaseSafe (198 → 199);
+  `zig fmt --check` clean; docs links 21; documented codes **130** (131 → 130,
+  the removed duplicate); robustness corpus 902 clean; versions consistent at
+  `0.1.0-alpha.5`.
+- Limitations: the precedence sweep compares *values*, so a grouping bug that
+  happens to be value-preserving for the chosen operands would not show; the
+  cases use operands chosen so each grouping changes the answer, and printing
+  the tree for every case would be the stronger check. `comptime_int` is
+  documented as `i64` at lowering time rather than being given a width in the
+  type system; giving it one would be a larger type-system change and is not
+  attempted here. No sanitizer gate exists in this repo, so none ran.
+- Next task: the callee side of variadics (`va_list` + an exported variadic) or
+  the unions/bitfields/packed-structs decision — both still need a written
+  design before implementation. The sweep of §5.1/§4.1 is complete; the
+  remaining tables that could be swept the same way are the cast table's
+  interaction with slices (`isSliceCast`) and the constant-expression rules in
+  §3.5.
+- Contract kept: no test was modified to pass; a probe that disagreed with the
+  docs was investigated and the docs won (`let x = 5` → `i64`), and a
+  behaviour that looked wrong in isolation (`1 << 31 >> 31`) was traced to a
+  documented rule and left alone.

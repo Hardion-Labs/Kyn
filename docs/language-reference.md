@@ -426,7 +426,10 @@ const limit: i32 = 10;  // immutable, same rules as let locally
 var buffer: [64]u8;     // typed, uninitialized
 ```
 
-- A local needs a type, an initializer, or both (`E0420`).
+- A local needs a type, an initializer, or both (`E0420`). The type of a local
+  with an initializer and no declared type is the initializer's type, and a
+  literal with no other context materializes as `i64`/`f64`; write the type when
+  you want a narrower one, since there is no implicit numeric conversion.
 - Without an initializer, the stack slot is uninitialized. Reading it before
   assignment is diagnosed by the static analyzer (`E0501`) when the compiler
   can prove the read may happen. Unproven cases are not checked yet.

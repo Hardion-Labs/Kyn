@@ -39,6 +39,20 @@ Exported globals, and two constant-representation fixes.
 
 ### Fixed
 
+- A folded constant integer now lowers with the signedness it actually has. A
+  `comptime_int` carries no width or sign in the type system, and the overflow
+  and shift checks read `intInfo()` directly, which answers `bits = 0, signed =
+  false`. Concrete consequences: any `-` on literal operands emitted an unsigned
+  `usub`, so `1 - 2 + 3` trapped instead of evaluating to 2 while the same
+  expression over named variables was fine; and a shift by a constant compared
+  its amount against `0`, so `3 | 1 << 2` always trapped. Both go through one
+  helper that names the width and sign a value is lowered with, which also
+  covers `char` and enums.
+- `E0420` ("local needs a type or an initializer") is now the code that reports
+  that condition. The parser checked it first and emitted `E0216`, so the
+  analyzer's own check could never run: the documented `E0420` was unreachable
+  and one rule had two codes. The rule lives in the analyzer, where the rest of
+  the declaration rules are.
 - `bool` ↔ float casts now compile, in both directions and at every width. The
   two were broken in different ways: `float as bool` was accepted by the type
   checker and then failed with `E0605 internal: unsupported cast from the
