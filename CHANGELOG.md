@@ -6,9 +6,31 @@ promised between alpha releases.
 
 ## [Unreleased]
 
-Exported globals, and two constant-representation fixes.
+Exported globals, the callee side of variadics, and two constant-representation
+fixes.
 
 ### Added
+
+- A Kyn function may now receive a C variadic argument list. `export fn` takes
+  `...` after at least one fixed parameter, and the trailing arguments are read
+  with `va_arg()`, a builtin expression whose type comes from context:
+  `let value: i32 = va_arg();`. Three rules follow from what a caller can have
+  passed and are diagnosed rather than defaulted: `va_arg()` needs an expected
+  type (`E0478`), so a `double` is never read as an `i32`; only the promoted
+  widths travel, so `let small: i8 = va_arg();` is `E0479` naming `i32`; and
+  `va_arg()` outside a variadic function is `E0480`. `va_start`/`va_end` are
+  implicit — the compiler emits them at entry and before every `return` and on
+  the trap path — and there is no `va_list` value to name or pass, so a list
+  cannot be forwarded yet. `E0474` narrows accordingly: a variadic function that
+  is neither `export` nor `extern` stays rejected, because a Kyn-internal
+  function has no C caller to supply the tail. The emitted representation is the
+  `x86_64` System V one (`[1 x %struct.__va_list_tag]`, `llvm.va_start.p0`, a
+  single `va_arg` per retrieval, `llvm.va_end.p0`), and its type and intrinsic
+  declarations appear only when a variadic body exists, so every other program
+  keeps emitting byte-identical IR. Fixture
+  `tests/integration/abi/cabi_variadic_callee` links C against the exported
+  definitions and exercises three, zero, negative, wide-integer, float, mixed
+  integer/float and function-pointer lists under both profiles.
 
 - `export` now applies to global variables. `export var counter: i32 = 41;`
   publishes a writable C object under its source spelling; `export let` and

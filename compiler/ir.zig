@@ -73,6 +73,10 @@ pub const Local = struct {
     name: []const u8,
     ty: *Type,
     padding: u16 = 0,
+    /// True for the storage `va_start` fills. It is not a Kyn value: it has no
+    /// type the language can name, so the back end allocates it with the size
+    /// and alignment the target's `va_list` requires.
+    is_va_list: bool = false,
 };
 
 pub const UnOp = enum {
@@ -178,6 +182,17 @@ pub const Inst = union(enum) {
         source: Value,
         length: u32,
     },
+    /// Initialises this function's `va_list` from the argument registers the C
+    /// caller filled. Emitted once, at function entry.
+    va_start: void,
+    /// Retrieves one argument the C caller appended after the fixed parameters.
+    va_arg: struct {
+        dst: u32,
+        ty: *Type,
+    },
+    /// Frees the bookkeeping `va_start` created. Emitted before every `return`
+    /// and on the trap path, so the programmer never writes it.
+    va_end: void,
     call: struct {
         dst: ?u32,
         name: []const u8,
@@ -247,9 +262,13 @@ pub const Function = struct {
     params: []Param,
     ret: *Type,
     linkage: Linkage,
-    /// True for a C declaration ending in `...`. Only a declaration can be
-    /// variadic, so a definition never carries it.
+    /// True for a function whose signature ends in `...`: a C declaration Kyn
+    /// calls, or an `export` definition C calls. The marker is emitted in both
+    /// cases, because it is what makes the trailing arguments well defined.
     variadic: bool = false,
+    /// The local that holds this function's `va_list`. Only a variadic
+    /// *definition* has one: a declaration has no body to walk it.
+    va_list_local: ?u32 = null,
     sret: bool = false,
     sret_type: ?*types.StructInfo = null,
     byval_params: []bool = &.{},

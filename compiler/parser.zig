@@ -219,10 +219,13 @@ pub const Parser = struct {
 
         var body: ?*ast.Block = null;
         if (!is_extern) {
-            // A Kyn-defined function has a fixed signature: there is no calling
-            // convention here that can receive an unspecified trailing list.
-            if (is_variadic) {
-                try self.reporter.err("E0474", name_tok.span, "variadic functions must be declared 'extern'; '{s}' has a body", .{name_tok.lexeme});
+            // An `export fn` with a body may receive an unspecified trailing
+            // list, because C is what calls it and `va_arg()` walks the arguments
+            // it appended. A plain Kyn function is called only from Kyn, where a
+            // fixed signature is checked at the call site, so a variadic one would
+            // be unusable: it has no C caller to supply the tail.
+            if (is_variadic and !is_export) {
+                try self.reporter.err("E0474", name_tok.span, "variadic function '{s}' must be 'export' or 'extern'; a Kyn function is called with a fixed signature", .{name_tok.lexeme});
             }
             body = try self.parseBlock();
         } else {
@@ -824,9 +827,18 @@ pub const Parser = struct {
                     }
                     _ = try self.expect(.r_paren, "after call arguments");
                     const node = try self.allocator.create(ast.Expr);
+                    // `va_arg()` is a builtin expression rather than a call to a
+                    // symbol: a call would need a callee the language cannot
+                    // declare, since the type it retrieves comes from context.
+                    // Recognising it here keeps `va_arg` an ordinary identifier
+                    // everywhere else, so no token is reserved for it.
+                    const is_va_arg = expr.kind == .ident and std.mem.eql(u8, expr.kind.ident.name, "va_arg") and args.items.len == 0;
                     node.* = .{
                         .span = Span.join(expr.span, self.peek().span),
-                        .kind = .{ .call = .{ .callee = expr, .args = try args.toOwnedSlice(self.allocator) } },
+                        .kind = if (is_va_arg)
+                            .{ .va_arg = .{} }
+                        else
+                            .{ .call = .{ .callee = expr, .args = try args.toOwnedSlice(self.allocator) } },
                     };
                     expr = node;
                 },
@@ -1308,6 +1320,38 @@ test "parse variadic extern declaration" {
     try testing.expectEqualStrings("format", variadic.params[0].name);
     try testing.expect(!program.decls[1].kind.fn_decl.is_variadic);
     try testing.expect(!program.decls[2].kind.fn_decl.is_variadic);
+}
+
+test "parse an exported variadic function and its va_arg expression" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\export fn sum(count: i32, ...) i32 {
+        \\    let value: i32 = va_arg();
+        \\    return value;
+        \\}
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    try testing.expectEqual(@as(usize, 1), program.decls.len);
+    const fd = program.decls[0].kind.fn_decl;
+    try testing.expect(fd.is_variadic);
+    try testing.expect(fd.is_export);
+    try testing.expect(fd.body != null);
+
+    // `va_arg()` is an expression, not a call to a symbol: it has no callee, so
+    // no identifier has to resolve for it.
+    const init = fd.body.?.stmts[0].kind.var_decl.init.?;
+    try testing.expect(init.kind == .va_arg);
+}
+
+test "a non-exported variadic function with a body is rejected" {
+    var ctx: TestContext = undefined;
+    try ctx.init("fn internal(count: i32, ...) i32 { return count; }");
+    defer ctx.deinit();
+    _ = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(ctx.reporter.hasErrors());
+    try testing.expectEqualStrings("E0474", ctx.reporter.list.items[0].code);
 }
 
 test "variadic function with a body is rejected" {

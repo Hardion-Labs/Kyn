@@ -159,6 +159,9 @@ pub const Analyzer = struct {
                 }
                 if (unary.op == .negate) try self.checkUnaryOverflow(expr, unary);
             },
+            // `va_arg()` has no sub-expression and no variable to read, so
+            // there is nothing for dataflow to say about it.
+            .va_arg => {},
             .slice => |slice| {
                 try self.checkExpr(slice.base);
                 if (slice.start) |start_expr| try self.checkExpr(start_expr);

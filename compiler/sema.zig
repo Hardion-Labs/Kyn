@@ -434,11 +434,13 @@ pub const Sema = struct {
     }
 
     fn resolveSignature(self: *Sema, fd: *ast.FnDecl) Error!void {
-        // A variadic declaration is C-only and inbound-unspecified: Kyn cannot
-        // receive an argument list it was not told the shape of, so `export` is
-        // rejected while `extern` calls are promoted at each call site.
-        if (fd.is_variadic and !fd.is_extern) {
-            try self.reporter.err("E0474", fd.span, "variadic declaration '{s}' must be 'extern'; an exported or Kyn function has a fixed signature", .{fd.name});
+        // A variadic declaration is C-only and inbound-unspecified: C is what
+        // supplies the trailing arguments, so the declaration must either be
+        // `extern` (Kyn calls out, promoting at each call site) or `export` (C
+        // calls in and `va_arg()` retrieves). A plain Kyn function is called
+        // only from Kyn, where the signature is fixed and checked.
+        if (fd.is_variadic and !fd.is_extern and !fd.is_export) {
+            try self.reporter.err("E0474", fd.span, "variadic function '{s}' must be 'export' or 'extern'; a Kyn function is called with a fixed signature", .{fd.name});
         }
         // ISO C requires a named parameter before the `...`, and the rule exists
         // for the same reason here: with no fixed parameter there is nothing to
@@ -902,6 +904,7 @@ pub const Sema = struct {
             .binary => |binary| try self.checkBinary(expr, binary),
             .assign => |assign| try self.checkAssign(expr, assign),
             .call => |*call| try self.checkCall(expr, call),
+            .va_arg => |*va_arg| try self.checkVaArg(expr, va_arg, expected),
             .cast => |cast| try self.checkCast(expr, cast),
             .slice => |slice| try self.checkSlice(expr, slice, expected),
             .field => |*field| try self.checkField(expr, field),
@@ -1238,6 +1241,66 @@ pub const Sema = struct {
             }
         }
         return target_ty;
+    }
+
+    /// `va_arg()` retrieves one argument a C caller appended after the fixed
+    /// parameters of a variadic `export fn`. It has no type of its own, so it
+    /// takes the expected type at the position where it is written — the same
+    /// rule integer literals follow. There is deliberately no default: guessing
+    /// `i32` would read a `double` out of the wrong half of the register save
+    /// area and produce a plausible wrong number instead of a diagnostic.
+    fn checkVaArg(self: *Sema, expr: *ast.Expr, va_arg: *ast.Expr.Kind.VaArg, expected: ?*Type) Error!*Type {
+        // The function that receives `...` is the only one whose frame has a
+        // `va_list` to walk, so there is nothing to retrieve anywhere else.
+        const fn_decl = self.currentFunction();
+        if (fn_decl == null or !fn_decl.?.is_variadic) {
+            try self.reporter.err("E0480", expr.span, "'va_arg()' is only valid inside a variadic function", .{});
+            expr.ty = self.prims.invalid;
+            return self.prims.invalid;
+        }
+        const want = expected orelse {
+            try self.reporter.err("E0478", expr.span, "'va_arg()' needs to know the type it retrieves; annotate the binding or cast the result", .{});
+            expr.ty = self.prims.invalid;
+            return self.prims.invalid;
+        };
+        if (want.* == .invalid) {
+            expr.ty = self.prims.invalid;
+            return self.prims.invalid;
+        }
+        // Only a value that can actually travel through `...` can come back
+        // out; an aggregate or a slice has no place in an argument list, and a
+        // `void` or a literal type has no representation at all.
+        switch (want.*) {
+            .int, .float, .bool, .char, .enum_type, .pointer, .fn_type, .fn_ptr => {},
+            else => {
+                try self.reporter.err("E0478", expr.span, "'va_arg()' needs a concrete scalar type from context, found '{s}'", .{self.typeName(want)});
+                expr.ty = self.prims.invalid;
+                return self.prims.invalid;
+            },
+        }
+        // The promotion table is the call site's, so "what C passes" is defined
+        // in exactly one place on both sides of the boundary.
+        var probe = ast.Expr{ .span = expr.span, .kind = .{ .call = .{ .callee = expr, .args = &.{} } } };
+        const promoted = try self.promoteVariadic(&probe, want);
+        if (promoted.* == .invalid) {
+            expr.ty = self.prims.invalid;
+            return self.prims.invalid;
+        }
+        // C promotes every variadic argument by default, so only the widths the
+        // caller actually passed can be retrieved. Asking for `i8` would read a
+        // register the caller wrote as `i32`.
+        if (promoted != want) {
+            try self.reporter.err("E0479", expr.span, "cannot retrieve '{s}' with 'va_arg()'; C passes it as '{s}', so retrieve '{s}'", .{
+                self.typeName(want),
+                self.typeName(promoted),
+                self.typeName(promoted),
+            });
+            expr.ty = self.prims.invalid;
+            return self.prims.invalid;
+        }
+        va_arg.ty = want;
+        expr.ty = want;
+        return want;
     }
 
     fn checkCall(self: *Sema, expr: *ast.Expr, call: *ast.Expr.Kind.Call) Error!*Type {
@@ -2579,6 +2642,135 @@ test "C ABI boundary classification follows Clang's leaf registers" {
         } else {
             try testing.expect(actual == null);
         }
+    }
+}
+
+test "semantic accepts an exported variadic function reading its arguments" {
+    try expectClean(
+        \\export fn sum(count: i32, ...) i32 {
+        \\    var total: i32 = 0;
+        \\    var i: i32 = 0;
+        \\    while (i < count) {
+        \\        let value: i32 = va_arg();
+        \\        total += value;
+        \\        i += 1;
+        \\    }
+        \\    return total;
+        \\}
+        \\fn main() i32 { return 0; }
+    );
+}
+
+test "semantic rejects a variadic function that is neither export nor extern" {
+    // A Kyn-internal function is called only from Kyn, where the signature is
+    // fixed and checked, so a variadic one could never receive its tail.
+    try expectSemanticError(
+        \\fn internal(count: i32, ...) i32 {
+        \\    let value: i32 = va_arg();
+        \\    return value;
+        \\}
+        \\fn main() i32 { return 0; }
+    , "E0474");
+}
+
+test "semantic rejects va_arg outside a variadic function" {
+    try expectOnlyError(
+        \\fn plain() i32 {
+        \\    let value: i32 = va_arg();
+        \\    return value;
+        \\}
+        \\fn main() i32 { return 0; }
+    , "E0480");
+}
+
+test "semantic requires a context type for va_arg" {
+    // Guessing `i32` would misread a `double` from the same list, so a position
+    // with no expected type is rejected rather than defaulted.
+    try expectOnlyError(
+        \\export fn f(count: i32, ...) i32 {
+        \\    va_arg();
+        \\    return count;
+        \\}
+        \\fn main() i32 { return 0; }
+    , "E0478");
+}
+
+test "semantic rejects retrieval types the caller cannot have passed" {
+    // An aggregate has no place in an argument list, so it cannot come out of
+    // one either; the message names what was found rather than defaulting.
+    try expectSemanticError(
+        \\struct Pair { a: i32 }
+        \\export fn f(count: i32, ...) i32 {
+        \\    let pair: Pair = va_arg();
+        \\    return count;
+        \\}
+        \\fn main() i32 { return 0; }
+    , "E0478");
+}
+
+test "semantic rejects a retrieval narrower than the promoted width" {
+    // C passes `i8` as `i32`; retrieving `i8` would read the right bytes with
+    // the wrong width, so the promoted type is required and named.
+    try expectOnlyError(
+        \\export fn f(count: i32, ...) i32 {
+        \\    let small: i8 = va_arg();
+        \\    return 0;
+        \\}
+        \\fn main() i32 { return 0; }
+    , "E0479");
+}
+
+test "semantic records the type a va_arg retrieves" {
+    // `f32` is absent on purpose: it is promoted to `f64` by the caller, so a
+    // retrieval of `f32` is rejected by the case below rather than recorded.
+    const cases = [_]struct { annotation: []const u8, expected: []const u8 }{
+        .{ .annotation = "i32", .expected = "i32" },
+        .{ .annotation = "i64", .expected = "i64" },
+        .{ .annotation = "u64", .expected = "u64" },
+        .{ .annotation = "isize", .expected = "i64" },
+        .{ .annotation = "f64", .expected = "f64" },
+        .{ .annotation = "*u8", .expected = "*u8" },
+        .{ .annotation = "fn(i32) i32", .expected = "fn(i32) i32" },
+    };
+    for (cases) |case| {
+        var buf: [512]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buf,
+            \\export fn f(count: i32, ...) i32 {{
+            \\    let value: {s} = va_arg();
+            \\    return count;
+            \\}}
+            \\fn main() i32 {{ return 0; }}
+        , .{case.annotation});
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) {
+            for (ctx.reporter.list.items) |diag| std.debug.print("  {s}: {s}\n", .{ diag.code, diag.message });
+            return error.UnexpectedDiagnostic;
+        }
+        var found = false;
+        for (ctx.program.?.decls) |decl| {
+            switch (decl.kind) {
+                .fn_decl => |fd| {
+                    if (!std.mem.eql(u8, fd.name, "f")) continue;
+                    // The retrieval reaches the back end as the recorded type,
+                    // which is what the instruction names.
+                    for (fd.body.?.stmts) |stmt| {
+                        const vd = switch (stmt.kind) {
+                            .var_decl => |v| v,
+                            else => continue,
+                        };
+                        const init = vd.init orelse continue;
+                        if (init.kind != .va_arg) continue;
+                        found = true;
+                        try testing.expectEqualStrings(case.expected, ctx.typeName(init.ty.?));
+                    }
+                },
+                else => {},
+            }
+        }
+        try testing.expect(found);
     }
 }
 

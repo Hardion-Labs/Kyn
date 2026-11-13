@@ -1,7 +1,9 @@
-// A variadic function is called by C with an argument list of unspecified
-// shape, so Kyn cannot define or export one: the body would have no way to
-// receive the extra arguments. Only `extern` may be variadic.
+// An exported variadic function is legal now, but its tail can only be read
+// with `va_arg()`, and a retrieval requires a context type: guessing one would
+// misread a `double` from the same list. A position with no expected type is
+// rejected rather than defaulted.
 export fn variadic_exported(value: i32, ...) i32 {
+    va_arg();
     return value;
 }
 fn main() i32 {

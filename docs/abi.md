@@ -136,16 +136,60 @@ than lowering something the callee would misread:
   an unrelated pair. Calling with only the fixed parameters is legal, since zero
   variadic arguments is a valid C call.
 
-A variadic declaration must be `extern`: a Kyn-defined function has a fixed
-signature and there is no calling convention here that could receive an
-argument list of unknown shape, so a body is rejected with `E0474`, and so is a
-declaration with no fixed parameter at all (the same rule ISO C applies, and
-without one there would be nothing to anchor the call). `export` is likewise
-rejected today, because there is no way for a Kyn body to read the list yet.
-Receiving one is designed but not implemented: see
-[the callee-variadics design](design-callee-variadics.md), which specifies
-`export fn` with `...`, a context-typed `va_arg()` expression, implicit
-`va_start`/`va_end`, and the measured `x86_64` System V representation.
+Every variadic declaration is a C boundary, across one direction or the other:
+`extern` (Kyn calls out, with the promotions above applied at each call site)
+or `export` (C calls in — see the next section). A plain Kyn function is called
+only from Kyn, where the signature is fixed and checked, so it has no caller to
+supply a tail and a body is rejected with `E0474`; so is a declaration with no
+fixed parameter at all (the same rule ISO C applies, and without one there would
+be nothing to anchor the call).
+
+### Receiving a C variadic argument list
+
+An `export fn` may end in `...`, and retrieves the trailing arguments with one
+builtin expression, `va_arg()`:
+
+```kyn
+export fn sum(count: i32, ...) i32 {
+    var total: i32 = 0;
+    var i: i32 = 0;
+    while (i < count) {
+        let value: i32 = va_arg();
+        total += value;
+        i += 1;
+    }
+    return total;
+}
+```
+
+- **The type comes from context.** `va_arg()` has no type of its own: it takes
+  the expected type where it is written, the same way an integer literal or a
+  `null` does. A position with no expected type is rejected (`E0478`) rather
+  than defaulted — guessing `i32` would read a `double` out of the wrong half of
+  the save area and return a plausible wrong number instead of a diagnostic.
+- **Only promoted widths can be retrieved.** The caller passed `i8`/`i16`/`bool`
+  as `i32`, `u8`/`u16` as `u32`, `f32` as `f64` and `char` as `u32`, so asking
+  for anything narrower is rejected (`E0479`, naming the type to use). What can
+  be retrieved is exactly what a caller can have passed: `i32 i64 u32 u64 isize
+  usize`, `f32 f64`, `*T`, `**u8` and function values.
+- **`va_arg()` is only valid in a variadic function.** The enclosing frame is
+  the one thing that owns a `va_list`, so any other use is `E0480`.
+- **There is no `va_list` type and no `va_start`/`va_end`.** The compiler emits
+  `llvm.va_start` at entry and `llvm.va_end` before every `return` and on the
+  trap path, so the program cannot pair them wrongly. A list cannot be forwarded
+  to another function yet, because that would need a `va_list` parameter type.
+- **The emitted representation is the x86_64 System V one:** a 24-byte, 8-aligned
+  `%struct.__va_list_tag { i32, i32, ptr, ptr }` wrapped in a one-element array;
+  the intrinsics take a pointer to the array, and each retrieval is a single
+  `va_arg` instruction (`llvm.va_arg` no longer exists). The type and the two
+  intrinsic declarations appear in the module only when a variadic body exists,
+  so a program without one keeps emitting byte-identical IR.
+
+Reading past the arguments the caller actually passed is undefined behaviour,
+exactly as in C; the language does not pretend to check it. Forwarding a list
+and the `v`-style convention (`vprintf`) are out of scope for v0.1. The full
+rationale and the measurements behind it are in
+[the callee-variadics design](design-callee-variadics.md).
 
 ### Function pointers
 

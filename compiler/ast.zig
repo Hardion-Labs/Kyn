@@ -253,6 +253,9 @@ pub const Expr = struct {
         slice: SliceAccess,
         struct_init: StructInit,
         array_lit: []*Expr,
+        /// `va_arg()` — a builtin expression, not a call: there is no callee
+        /// symbol, and its type is decided by the expected type.
+        va_arg: VaArg,
 
         pub const IntLit = struct {
             value: u128,
@@ -307,6 +310,16 @@ pub const Expr = struct {
         pub const Cast = struct {
             operand: *Expr,
             target: *TypeExpr,
+        };
+
+        /// `va_arg()` — retrieve the next argument a C caller passed to a
+        /// variadic `export fn`. It carries no type of its own: the type comes
+        /// from the expected type at the position where it is written, the same
+        /// way an integer literal or a `null` takes its type from context.
+        pub const VaArg = struct {
+            /// Filled by the checker: the type the caller passed, which is what
+            /// the retrieval instruction names.
+            ty: ?*Type = null,
         };
 
         pub const Field = struct {
