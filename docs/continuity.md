@@ -3514,3 +3514,46 @@ corrections came from running programs, not from reading the table.
 - **Next task:** `defer` is the last item in the README's "planned" control-flow
   row. Closures need an allocation and ownership story that does not exist yet, so
   `defer` is the smaller coherent step.
+
+## §63 — `defer`
+
+`defer` was not even a keyword: `defer { }` parsed as an identifier followed by a
+struct initializer and then failed on the `;`. It is the last item in the README's
+planned control-flow row.
+
+- **Syntax.** `defer { body }` -- a block, not an expression, so the form cannot be
+  confused with an expression statement. No trailing `;`, like `if`/`while`.
+- **Owned by the block.** `lowerBlock` opens a `DeferScope`, records the bodies in
+  it, and runs them in reverse source order on the way out. An inner block's defers
+  have run by the time the next statement executes -- the property that makes
+  `defer` compose with the blocks already in the language.
+- **Every exit runs them.** `return`, `break` and `continue` call
+  `unwindDefersTo(depth)`: `return` to 0, the jumps to the depth recorded when the
+  loop body was entered, so a `break` leaves the loop's enclosing scopes alone.
+- **The return value is computed before the defers run**, so a `defer` that assigns
+  to the returned variable cannot change the result. Pinned by a fixture.
+- **Once per iteration inside a loop.** The first implementation cleared a scope
+  after unwinding it, which is right for a block that runs once and wrong for a loop
+  body that is lowered once and runs many times: the second iteration found nothing
+  registered. The fix is to not clear: a jump always emits a terminator, and
+  `lowerBlock` skips its own run for a terminated block, which is what prevents a
+  double run.
+- **`E0511` for `return`/`break`/`continue` inside a defer.** This is not style.
+  Without the check, `defer { return 1; }` crashed the **compiler** with a stack
+  overflow: the return lowered a `ret` while unwinding, re-entering the same
+  statement. The rule is what makes the lowering total. `sema.defer_depth` is the
+  state that reports it, and the diagnostic names the defer rather than "outside a
+  loop", which would be misleading.
+- **Gate:** unit **144/144** (was 143), integration **247/0** in Debug and
+  ReleaseSafe (was 244), robustness 902, `zig fmt` clean, 23 documentation links,
+  **151** documented codes (was 150), versions `0.1.0-alpha.5`.
+- Git: `c3b0644` on `arena/c6df6f65-kyn`, pushed.
+- **Two arithmetic slips of mine again**, both caught by running the fixtures: an
+  expected count of 1 where a per-iteration defer correctly gives 3, and a total of
+  310 where the exit status keeps only the low 8 bits (54). Same class as §60; the
+  rule is to compute the expected value from the code, not from intuition.
+- **Next task:** closures are what remains of the planned feature rows, and they
+  need an allocation and ownership story the language does not have (no allocator
+  abstraction, no lifetime rules). Before that, the honest options are narrower:
+  `switch` as a dispatch spelling, or `errdefer`/error propagation, which is the
+  other half of the failure story `defer` just started.
