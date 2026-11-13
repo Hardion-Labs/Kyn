@@ -555,8 +555,10 @@ puts("hello");
 let sum: i32 = add(1, 2);
 ```
 
-- The callee must be a direct function name. Indirect calls through function
-  pointers are not supported yet.
+- The callee is either a direct function name or a value of function type
+  (`fn(P) R`), which is called indirectly: `let f: fn(i32) i32 = double; f(1)`.
+  An indirect call checks its arguments and result against that signature,
+  since there is no declaration to read them from.
 - Argument count must match (`E0446`) and each argument must be assignable to
   its parameter type.
 - Arguments are evaluated left to right.
@@ -629,6 +631,23 @@ provably `null` array pointer to a slice is rejected (`E0506`), and a dynamic
 `null` array pointer cast to a slice traps at runtime. Numeric casts do not
 insert runtime range checks in v0.1; converting an out-of-range numeric value
 is the programmer's responsibility.
+
+Every pair above is compiled, including the `bool`/float ones, which are not a
+single machine conversion in either direction:
+
+- **`bool` → float** is `false` → `0.0` and `true` → `1.0`, exactly. The bit
+  widens to a 32-bit integer first, because no floating conversion accepts a
+  one-bit operand.
+- **float → `bool`** is `false` only for a zero (of either sign) and `true`
+  otherwise. A NaN is **true**, matching C's `(_Bool)` conversion: the test is
+  "not equal or unordered", not "ordered and not equal".
+- **`bool` → integer** is `0` or `1`; **integer → `bool`** is `false` only for
+  zero. These agree with C.
+
+A constant cast folds into the *destination* category, so a global such as
+`const WIDE: f64 = 3 as f64` holds a float constant. A chain truncates at each
+step and the outer cast sees the already-converted value: `3.9 as i32 as f64`
+is `3.0`, not `3.9`.
 
 ### 5.8 Field access
 

@@ -118,6 +118,11 @@ pub const CastKind = enum {
     bitcast,
     int_to_bool,
     bool_to_int,
+    /// `f != 0`, ordered so a NaN converts to true as C's `(_Bool)` does.
+    float_to_bool,
+    /// Widen the bit to `i32` and convert unsigned, since no conversion
+    /// instruction accepts an `i1` operand.
+    bool_to_float,
 };
 
 pub const Inst = union(enum) {

@@ -11,6 +11,9 @@ is selected. Milestones below are directions, not release promises.
 
 - `kyn-build` hashes transitive quoted C headers, so editing a header rebuilds
   instead of silently leaving a stale binary.
+- `bool` ↔ float casts compile (and fold correctly when constant), closing two
+  defects that a differential sweep of every numeric cast pair found: one
+  "internal" error and one invalid-IR emission.
 
 - A struct initializer that repeats a field is `E0404`; the documented "exactly
   once" rule was previously unenforced and the last value won.

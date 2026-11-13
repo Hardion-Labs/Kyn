@@ -39,6 +39,22 @@ Exported globals, and two constant-representation fixes.
 
 ### Fixed
 
+- `bool` ↔ float casts now compile, in both directions and at every width. The
+  two were broken in different ways: `float as bool` was accepted by the type
+  checker and then failed with `E0605 internal: unsupported cast from the
+  semantic layer`, and `bool as f32` / `bool as f64` emitted `zext i1 ... to
+  double`, which is not valid IR, so no module containing one could assemble. A
+  `bool` now widens to `i32` and converts unsigned; a float compares
+  unordered-or-not-equal against zero, so a NaN converts to `true` as C's
+  `(_Bool)` does. A whole-program differential sweep of every numeric cast pair
+  (182 local, 72 global) now compiles, and the values were checked at runtime
+  across the C boundary.
+- A constant cast in a global initializer now folds into the destination
+  category instead of keeping the source representation. `const WIDE: f64 = 3
+  as f64` emitted `constant i32 3` and failed to assemble, and the same applied
+  to `1.5 as bool`, `true as f64` and any other pair that crosses from integer
+  to float or to/from `bool`. A cast chain also truncates at each step, so
+  `3.9 as i32 as f64` is `3.0`.
 - `kyn-build` now hashes the C headers a target includes, transitively. Editing
   a header used to leave the previous object in place and print `up to date`, so
   the build reported success while the binary still ran the old code — the
