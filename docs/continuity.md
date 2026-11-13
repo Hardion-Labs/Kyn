@@ -2865,6 +2865,14 @@ assumed feature.
   specified (`E0474` narrowing); non-variadic modules emit identical IR, which is
   asserted by a unit test rather than assumed; every diagnostic is reachable
   from a real program and covered by a test at the level where it is emitted.
+- Git, final for this increment: `8621823` (implementation) plus three CI
+  commits on `arena/d757f468-kyn`, pushed before the turn ended; PR #51 → CI
+  green on the fourth run → merged as **`00837d5`**. The three earlier runs failed
+  only on the `.p0` intrinsic spelling described above; the workflow change that
+  made the reason visible is part of the merge. `main` was then re-validated in a
+  fresh clone of `00837d5`: `zig build` clean, unit **120/120**, integration
+  **202/0**, `zig fmt --check` clean, 22 documentation links, 133 documented
+  codes, versions `0.1.0-alpha.5`.
 - Next task: fix the `i128` division panic (small, isolated, with a regression
   test per width and signedness), or take the remaining undesigned candidate
   (unions/bitfields/packed structs). Forwarding a variadic list (`v`-style) stays
