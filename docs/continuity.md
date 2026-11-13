@@ -3400,7 +3400,10 @@ half.
 - **Gate:** unit **139/139** (was 137), integration **233/0** in Debug and
   ReleaseSafe (was 227), robustness 902, `zig fmt` clean, 23 documentation links,
   **146** documented codes (was 143), versions `0.1.0-alpha.5`.
-- Git: `c7f07d2` on `arena/114bb6a9-kyn`, pushed.
+- Git, final for this increment: `c7f07d2` compiler + `16caf20` record on
+  `arena/114bb6a9-kyn`, pushed; PR #67 → CI green → merged as **`6ffbb5f`**, and
+  `main` re-validated in a fresh clone of it (139/139 unit, 233/0 integration,
+  fmt clean).
 - **Next task: tagged unions** — a payload-carrying enum shape plus binding in an
   arm. `match` is in place; what is missing is the declaration form and the arm
   that names a payload. `for` remains reserved and unparsed.
