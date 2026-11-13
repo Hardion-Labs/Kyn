@@ -3507,7 +3507,10 @@ corrections came from running programs, not from reading the table.
   ReleaseSafe (was 240), robustness 902, `zig fmt` clean, 23 documentation links,
   **150** documented codes (no new code was needed: the failures reuse `E0427`,
   `E0463` and `E0221`), versions `0.1.0-alpha.5`.
-- Git: `3a13506` on `arena/d217181f-kyn`, pushed.
+- Git, final for this increment: `3a13506` compiler + `7865dd2` record on
+  `arena/d217181f-kyn`, pushed; PR #71 -> CI green -> merged as **`0402d4b`**, and
+  `main` re-validated in a fresh clone of it (143/143 unit, 244/0 integration,
+  fmt clean).
 - **Next task:** `defer` is the last item in the README's "planned" control-flow
   row. Closures need an allocation and ownership story that does not exist yet, so
   `defer` is the smaller coherent step.
