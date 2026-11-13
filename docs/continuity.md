@@ -3349,6 +3349,9 @@ assumed feature.
 - **Gate:** unit **137/137** (was 136), integration **227/0** in Debug and
   ReleaseSafe (was 224), 902 robustness cases, `zig fmt` clean, 23 documentation
   links, **143** documented codes (was 142), versions `0.1.0-alpha.5`.
+- Git, final for this increment: `525af58` on `arena/5278e977-kyn`, pushed;
+  PR #65 → CI green → merged as **`0de5c69`**, and `main` re-validated in a fresh
+  clone of it (137/137 unit, 227/0 integration, fmt clean).
 - Next task: **tagged unions** (sum types, `match` over a tag) — the last item on
   the design's out-of-scope list that is a language feature rather than a target
   restriction.
