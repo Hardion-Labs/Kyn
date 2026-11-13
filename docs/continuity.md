@@ -2654,3 +2654,12 @@ assumed feature.
   docs was investigated and, where the compiler was right, the probe was
   discarded (`let x = 5` → `i64`, `[0]i32`, the `grep -m1` false alarm), and
   where the docs were wrong the docs were corrected (`E0412`).
+- Git, final for this increment: implementation commit `e8570aa` and record
+  `d0ecb4a` on `arena/785da054-kyn`, pushed before the turn ended; PR #47 → CI
+  green → merged as **`db81d81`**; `main` re-validated in a fresh clone of
+  `db81d81` (109/109 unit, 199/0 integration).
+- The documented tables are now swept: §5.1, §4.1, §5.7 (both halves), §3.5 and
+  safety-model §2. The next increment should therefore **write a design** rather
+  than look for another table; the two candidates are below. If a future session
+  finds itself looking for a fifth table, that is the signal that the remaining
+  work is the design work, not more sweeping.
