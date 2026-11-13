@@ -3284,3 +3284,8 @@ assumed feature.
 - Next task: the remaining items of design §8 — anonymous struct/union members and
   tagged unions. The ABI-classifier work this document listed as a follow-up is
   done.
+- **The `byval` annotation is asserted on the IR, not through values.** Since a
+  too-small annotation does not change values on this target, no value-checking
+  fixture can catch it; `run.sh` now emits a probe with a `packed` and an
+  `align(32)` aggregate and asserts `align 8` and `align 16` in the emitted text.
+  Mutation-checked: the assertion fails against `align 1`, so it is not vacuous.
