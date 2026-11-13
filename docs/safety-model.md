@@ -50,7 +50,10 @@ The backend emits checks before the affected operation:
 - Integer addition, subtraction and multiplication trap on signed and unsigned
   overflow. Integer negation is checked as `0 - x`.
 - Integer division and remainder check the divisor. A zero divisor traps.
-- Signed integer division and remainder also trap on `INT_MIN / -1`.
+- Signed integer division and remainder also trap on `INT_MIN / -1`, at every
+  width from `i8` to `i128`. The check compares the left operand against the
+  type's minimum, which is a property of the type and not of the value, so the
+  widest type needs no special case in the lowering.
 - Dynamic shift amounts are checked against the integer width. A negative or
   out-of-range amount traps.
 - Dereferencing or slicing a pointer that is exactly `null` traps. This

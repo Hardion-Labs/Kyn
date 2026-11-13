@@ -1,0 +1,36 @@
+// Signed division at the most negative value of each width. The minimum of a
+// signed type has no positive counterpart, so it is written as a unary minus in
+// front of its magnitude; the compiler must accept that literal as the value the
+// type denotes rather than compute `0 - magnitude` and trap on the overflow.
+//
+// No divisor here is -1, so none of these is an `INT_MIN / -1` trap: each one is
+// an exact halving and the expected exit is 10 (five matches, two points each).
+fn main() i32 {
+    var byte_min: i8 = -128;
+    var byte_two: i8 = 2;
+    let byte_half: i8 = byte_min / byte_two;
+
+    var short_min: i16 = -32768;
+    var short_two: i16 = 2;
+    let short_half: i16 = short_min / short_two;
+
+    var int_min: i32 = -2147483648;
+    var int_two: i32 = 2;
+    let int_half: i32 = int_min / int_two;
+
+    var long_min: i64 = -9223372036854775808;
+    var long_two: i64 = 2;
+    let long_half: i64 = long_min / long_two;
+
+    var huge_min: i128 = -170141183460469231731687303715884105728;
+    var huge_two: i128 = 2;
+    let huge_half: i128 = huge_min / huge_two;
+
+    var matches: i32 = 0;
+    if (byte_half == -64) { matches += 1; }
+    if (short_half == -16384) { matches += 1; }
+    if (int_half == -1073741824) { matches += 1; }
+    if (long_half == -4611686018427387904) { matches += 1; }
+    if (huge_half == -85070591730234615865843651857942052864) { matches += 1; }
+    return matches * 2;
+}
