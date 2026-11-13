@@ -207,7 +207,7 @@ pub const Lowering = struct {
                     hidden_id += 1;
                 },
                 .small_1 => {
-                    const bits = sema_mod.smallRegisterBits(self.aggregateSize(ty) orelse 8);
+                    const bits = sema_mod.singleRegisterBits(ty);
                     try params_list.append(self.allocator, .{ .local = hidden_id, .ty = try self.simpleType(.{ .int = .{ .bits = bits, .signed = true } }) });
                     hidden_id += 1;
                 },
@@ -229,7 +229,7 @@ pub const Lowering = struct {
         const ret_ty = switch (ret_class) {
             .memory => void_ty,
             .none => if (fd.ret_expr == null) void_ty else info.ret,
-            .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(fd.ret_expr.?.resolved.?) orelse 8), .signed = true } }),
+            .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.singleRegisterBits(fd.ret_expr.?.resolved.?), .signed = true } }),
             .small_2 => i128_ty,
             .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .pair => try self.sseReturnTransport(ret_class),
         };
@@ -875,7 +875,7 @@ pub const Lowering = struct {
                             try self.emit(.{ .ret = .{ .value = .{ .reg = field_value } } });
                         } else if (ret_class.eql(.small_1) or ret_class.eql(.small_2)) {
                             const storage_ty = if (ret_class.eql(.small_1))
-                                try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(expr.ty orelse try self.simpleType(.invalid)) orelse 8), .signed = true } })
+                                try self.simpleType(.{ .int = .{ .bits = sema_mod.singleRegisterBits(expr.ty orelse try self.simpleType(.invalid)), .signed = true } })
                             else
                                 try self.simpleType(.{ .int = .{ .bits = 128, .signed = true } });
                             const temp = self.module.ephemeral();
@@ -1464,7 +1464,7 @@ pub const Lowering = struct {
                 .small_1 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
                     const size: u64 = @intCast(self.aggregateSize(ty) orelse 8);
-                    const bits: u16 = sema_mod.smallRegisterBits(size);
+                    const bits: u16 = sema_mod.singleRegisterBits(ty);
                     const sized_ty = try self.simpleType(.{ .int = .{ .bits = bits, .signed = true } });
                     var pack_ptr = slot;
                     if (size < bits / 8) {
@@ -1502,14 +1502,22 @@ pub const Lowering = struct {
 
                 .small_2 => {
                     const slot = try self.lowerAggregateBase(arg, ty);
-                    const size = self.aggregateSize(ty) orelse 16;
+                    // The register pair is sixteen bytes of value, but the
+                    // aggregate's data may end earlier -- `align(16) struct { long
+                    // l; }` is 16 bytes of layout with 8 bytes of data. The bytes
+                    // past the data are zeros rather than whatever the slot held,
+                    // so the value that crosses the boundary is deterministic; the
+                    // callee's padding is not observable, but copying uninitialized
+                    // stack into a register is exactly the kind of thing that makes
+                    // a difference between builds.
+                    const data_end = sema_mod.aggregateDataEnd(ty) orelse 16;
                     var pack_ptr = slot;
-                    if (size < 16) {
+                    if (data_end < 16) {
                         const pack_id = self.module.ephemeral();
                         try self.addLocal(pack_id, "tmp.pack2", i128_ty, null);
                         try self.emitValueStore(.{ .ptr = .{ .local = pack_id }, .value = .{ .int = 0 }, .ty = i128_ty });
-                        if (size > 0) {
-                            try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(size) } });
+                        if (data_end > 0) {
+                            try self.emit(.{ .copy_bytes = .{ .destination = .{ .local = pack_id }, .source = slot, .length = @intCast(data_end) } });
                         }
                         pack_ptr = .{ .local = pack_id };
                     }
@@ -1544,7 +1552,7 @@ pub const Lowering = struct {
         const args = try args_list.toOwnedSlice(self.allocator);
         const byval_types = try byval_list.toOwnedSlice(self.allocator);
         const value_ty = switch (ret_class) {
-            .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.smallRegisterBits(self.aggregateSize(call_result) orelse 8), .signed = true } }),
+            .small_1 => try self.simpleType(.{ .int = .{ .bits = sema_mod.singleRegisterBits(call_result), .signed = true } }),
             .small_2 => i128_ty,
             .sse_float, .sse_double, .sse_f32x2, .sse_f32x3, .sse_f32x4, .sse_f64x2, .pair => try self.sseReturnTransport(ret_class),
             .none, .memory => call_result,
@@ -2600,7 +2608,7 @@ pub const Emitter = struct {
                 continue;
             }
             if (param.byval_type) |info| {
-                try writer.print("ptr byval(%struct.{s}) align {d} %arg{d}", .{ structLlvmName(info), aggregateAlign(info), param.local });
+                try writer.print("ptr byval(%struct.{s}) align {d} %arg{d}", .{ structLlvmName(info), byvalAlign(info), param.local });
                 continue;
             }
             try writer.print("{s} %arg{d}", .{ try self.typeString(param.ty), param.local });
@@ -2618,12 +2626,21 @@ pub const Emitter = struct {
     /// The type the alloca, `va_start`, `va_arg` and `va_end` all name.
     const va_list_name = "%kyn.va_list";
 
-    fn aggregateAlign(info: *types.StructInfo) usize {
-        var alignment: u16 = 1;
-        for (info.fields) |field| {
-            alignment = @max(alignment, llvmAlignmentOfType(field.ty));
-        }
-        return alignment;
+    /// The alignment annotation on a `byval` copy, read from the layout rather
+    /// than re-derived from the fields: a third copy of this rule lived here and,
+    /// like `llvmAlignmentOfType`, ignored `packed` and `align(N)`, so a `byval`
+    /// of an aligned aggregate was annotated `align 1` where the layout says 32.
+    ///
+    /// Measured: clang annotates every `byval` with at least 8 --
+    /// `packed` `{ char; int }` (align 1) and `packed, aligned(1..4)` all come out
+    /// `align 8`, while `packed, aligned(16)` comes out `align 16` and the
+    /// `align(32)` of an aligned struct is capped at 16. The annotation describes
+    /// the alignment the callee may assume of the copy it receives, which the
+    /// stack below it always provides, so a layout alignment of 1 does not lower
+    /// it. The bounds are the target's, not the layout's.
+    fn byvalAlign(info: *types.StructInfo) usize {
+        const layout_align: usize = @intCast(@max(1, info.layout.align_));
+        return @max(8, @min(layout_align, 16));
     }
 
     pub fn llvmAlignmentOfType(ty: *types.Type) u16 {
@@ -2911,7 +2928,7 @@ pub const Emitter = struct {
                         const info = call.sret_type orelse return error.OutOfMemory;
                         try writer.print("ptr sret(%struct.{s}) noalias writable %v{d}", .{ structLlvmName(info), local_id });
                     } else if (byval_type) |info| {
-                        const alignment = aggregateAlign(info);
+                        const alignment = byvalAlign(info);
                         try writer.print("ptr byval(%struct.{s}) align {d} %v{d}", .{ structLlvmName(info), alignment, local_id });
                     } else {
                         try writer.print("{s} ", .{try self.typeString(call.arg_types[i])});

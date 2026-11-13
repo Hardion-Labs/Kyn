@@ -574,9 +574,59 @@ struct formed by its members, and a packed aggregate always by memory.**
   `packed, aligned(4) { char; int }` is `size=8, align=4`; `cabi_align` prints
   both from the C side and compares them with what Kyn emits, and checks at
   run time that a Kyn local really is on a 16-byte boundary rather than merely
-  typed as one. Passing an `align(N)` aggregate **by value** to C is refused by
-  `E0473` like any other aggregate parameter, because the classifier does not
-  take the explicit alignment into account; that is a stated limitation.
+  typed as one.
+
+### 10.1 `align(N)` and the by-value classifier
+
+Explicit alignment **does not change how an aggregate travels** — it changes its
+size and its alignment — but it changes *whether* a shape travels at all, because
+padding can push it over the sixteen-byte limit. Measured with `zig cc`:
+
+| C form | size | data ends | transport |
+|---|---|---|---|
+| `align(16) { char }` | 16 | 1 | one `i8` |
+| `align(16) { char; int }` | 16 | 8 | one `i64` |
+| `align(16) { long }` | 16 | 8 | one `i64` |
+| `align(16) { long; char }` | 16 | 9 | `i64, i8` |
+| `align(32) { char }` | 32 | 1 | memory |
+| `align(32) { long; char }` | 32 | 9 | memory |
+
+Two rules follow, and both are now implemented:
+
+1. **The sixteen-byte limit is the padded size.** A shape whose data ends at byte
+   9 but whose size is 32 goes by memory.
+2. **An eightbyte that holds no data consumes no register.** `align(16) { long }`
+   is 16 bytes and still travels in one `i64`, not two; the second eightbyte is
+   trailing padding and clang drops it. The register width follows the *data*, so
+   `align(16) { char }` is an `i8` and not an `i16` or an `i64`.
+
+"Data end" is the layout size minus the trailing padding `align(N)` adds, computed
+from the members by `sema.aggregateDataEnd` and not from the size; that is what
+keeps the classification independent of the modifier.
+
+### 10.2 The `byval` alignment annotation
+
+Measured: clang annotates every `byval` with **at least 8** — `packed { char; int }`
+(alignment 1) and `packed, aligned(1..4)` all come out `align 8`, `packed,
+aligned(16)` comes out `align 16`, and the `align(32)` of an aligned struct is
+capped at 16. The annotation is the alignment the callee may assume of the copy,
+which the stack always provides, so a layout alignment of 1 does not lower it.
+`sema`-based emission used to carry the layout alignment straight through, which
+put `align 1` where clang puts `align 8`; `byvalAlign` now states the bound.
+
+### 10.3 What is still refused
+
+Nothing for `align(N)`: an aligned aggregate crosses by value like any other, and
+`abi/cabi_align_byval` echoes five shapes (including the by-memory one) through C
+in both directions. A **bare array** parameter is still refused, and so is a
+shape the leaf walk cannot classify.
+
+One divergence that is **spelling only**, recorded rather than changed: for a
+struct that is exactly one 16-byte integer member, clang writes the parameter as
+`i128` and Kyn writes `i64, i64`. Measured to interoperate in both directions
+(`{ a: __int128 }` echoed through C returns the value intact), because an `i128`
+register pair and two `i64` registers are the same convention for an INTEGER
+class argument; LLVM splits and rejoins it at the boundary.
 
 ## 11. Bitfields at the boundary
 

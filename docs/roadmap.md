@@ -149,7 +149,8 @@ is selected. Milestones below are directions, not release promises.
   a union classifies as the struct of its members, and a packed aggregate goes by
   memory even when small — with fixtures that call Kyn from C in both directions
   and one that reads the layout back through Kyn's own field access. Bitfields
-  and `align(N)` are implemented too; the design that covers them is below.
+  and `align(N)` are implemented too, and an aligned aggregate crosses the ABI by
+  value; the design that covers them is below.
 - Unions, bitfields and packed structs have a **written design**
   ([design-unions-bitfields-packed.md](design-unions-bitfields-packed.md)): the
   layout and ABI of each were measured with the project toolchain before it was

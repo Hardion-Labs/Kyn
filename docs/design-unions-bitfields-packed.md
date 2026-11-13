@@ -428,10 +428,13 @@ meaning is well defined. `align(0)` is rejected as not a power of two.
 
 A field-level annotation, an alignment that changes the *ABI class* of an
 aggregate (all forms measured here stay `.memory` or keep their natural class),
-and per-target values other than this one. An aligned aggregate passed by value
-to C is still refused by the existing `E0473`, because the classifier does not
-take `align(N)` into account; that is a stated limitation, not a silent
-disagreement.
+and per-target values other than this one.
+
+The by-value classifier **was** brought into this during the increment that
+followed §57, because §57 left `E0473` refusing every aligned aggregate. Measured
+then: the sixteen-byte limit is the padded size, an eightbyte that holds no data
+consumes no register, and the register width follows the data. `abi.md` §10.1
+states those rules and `abi/cabi_align_byval` pins them against C.
 
 ## 8. Out of scope
 
@@ -529,8 +532,8 @@ has followed.
 - **The ABI fixture compares against C on both sides.** `cabi_align` prints
   `sizeof`/`_Alignof` from the C translation unit for the same two shapes and
   checks that a Kyn local really is 16-aligned at runtime (not merely typed so),
-  exiting 30. Passing an aligned aggregate *by value* to C still trips the
-  existing `E0473`; that limitation is now stated in §7.4 instead of implied.
+  exiting 30. §57 left an aligned aggregate *by value* tripping `E0473`; that was
+  closed in the following increment by the measured rules of `abi.md` §10.1.
 
 ### What landed in §56 (bitfields)
 
