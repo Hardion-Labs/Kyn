@@ -464,6 +464,10 @@ align(4) packed struct Record {
   `align`; only `align(` before an aggregate is the modifier.
 - A field's alignment is its type's. There is no field-level annotation: a field
   that needs more alignment is a field of an `align(N)` type.
+- An aligned aggregate may cross the C ABI **by value** like any other; `abi.md`
+  §10.1 gives the measured transport rule. Its size includes the padding, so
+  `align(32)` can push a small aggregate from registers to memory — that is the
+  same choice a C compiler makes for the same shape.
 
 ### 3.8 Bitfields
 

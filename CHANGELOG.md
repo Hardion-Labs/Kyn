@@ -12,6 +12,14 @@ fixes (two constants and the signed-division minimum).
 
 ### Added
 
+- An aggregate with an explicit `align(N)` now crosses the C ABI **by value**;
+  `E0473` used to refuse every one of them. Measured against clang: the
+  sixteen-byte limit is the *padded* size, an eightbyte that holds no data
+  consumes no register, and the register width follows the data — so
+  `align(16) struct { long l; }` is 16 bytes and travels in one `i64`, not two,
+  while `align(32)` goes by memory. Also fixes the `byval` alignment annotation,
+  which carried the layout alignment through and wrote `align 1` where clang
+  writes `align 8`.
 - `align(N)` raises a `struct` or `union`'s alignment to at least `N` and rounds
   its size up to a multiple of it: `align(16) struct Buffer { kind: u8 }` is 16
   bytes with alignment 16, and the emitted LLVM type is the same

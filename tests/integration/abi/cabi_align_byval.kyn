@@ -1,0 +1,42 @@
+align(16) struct Al { c: u8 }
+align(16) struct Al8 { c: u8, i: i32 }
+align(16) struct Same { v: i64 }
+align(16) struct Two { a: i64, b: u8 }
+align(32) struct Big { c: u8 }
+
+extern fn c_echo_al(x: Al) Al;
+extern fn c_echo_al8(x: Al8) Al8;
+extern fn c_echo_same(x: Same) Same;
+extern fn c_echo_two(x: Two) Two;
+extern fn c_echo_big(x: Big) Big;
+extern fn c_report() i32;
+
+fn main() i32 {
+    var score: i32 = 0;
+    // Each echo sends a distinct value and checks that C returned the same one:
+    // a register mismatch loses or swaps a field, and the check fails.
+    var a: Al = Al { c: 7 };
+    var ra: Al = c_echo_al(a);
+    if (ra.c == 7) { score += 1; }
+
+    var a8: Al8 = Al8 { c: 3, i: 123456 };
+    var r8: Al8 = c_echo_al8(a8);
+    if (r8.c == 3 && r8.i == 123456) { score += 1; }
+
+    var s: Same = Same { v: 987654321012 };
+    var rs: Same = c_echo_same(s);
+    if (rs.v == 987654321012) { score += 1; }
+
+    var t: Two = Two { a: 42, b: 9 };
+    var rt: Two = c_echo_two(t);
+    if (rt.a == 42 && rt.b == 9) { score += 1; }
+
+    // 32 bytes with a byte of data: the by-memory path, whose filler register
+    // must not disturb the value.
+    var b: Big = Big { c: 5 };
+    var rb: Big = c_echo_big(b);
+    if (rb.c == 5) { score += 1; }
+
+    var rep: i32 = c_report();
+    return score * 10 + rep;
+}

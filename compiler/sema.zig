@@ -2179,6 +2179,11 @@ pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
     // struct are values, and those are flattened by the leaf walk below.
     if (ty.* == .array) return null;
     const layout = aggregateLayoutGuess(ty) orelse return null;
+    // The sixteen-byte limit is the *size*, which includes the padding `align(N)`
+    // adds: measured, `align(32) struct { long l; }` is 32 bytes and travels by
+    // memory even though its data ends at byte 8. A size of 16 with data beyond
+    // byte 16 cannot happen -- the size is rounded up from the data -- so this
+    // one comparison covers both limbs of the rule.
     if (layout.size > 16) return .memory;
     // A packed aggregate has no guaranteed alignment, so it crosses the boundary
     // by memory even when it is small — measured against clang, which emits
@@ -2197,6 +2202,13 @@ pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
     if (!collectAggregateLeaves(ty, 0, &leaves)) return null;
 
     if (layout.size > 8) {
+        // An eightbyte that holds no data consumes no register. Measured:
+        // `align(16) struct { long l; }` is 16 bytes with its data ending at byte
+        // 8 and travels in ONE `i64`, and `align(16) struct { char c; }` in one
+        // `i8`; only the trailing padding reaches the second eightbyte. Clang
+        // drops those eightbytes, and so does this, or E0473 would refuse a shape
+        // whose transport is perfectly expressible.
+        if (leaves[1].count == 0) return aggregateSingleRegisterClass(leaves[0]) orelse return null;
         // A single leaf that fills both eightbytes is a 16-byte INTEGER, and
         // the two registers it occupies are exactly the halves of one `i128`.
         // Clang classifies `struct { __int128 a; }` as `i128` for that reason,
@@ -2226,19 +2238,34 @@ pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
     }
 
     // The aggregate travels in a single register.
-    if (isFloatOnly(leaves[0])) {
-        if (leaves[0].count == 1) {
-            const single = leaves[0].singleton orelse return null;
+    return aggregateSingleRegisterClass(leaves[0]);
+}
+
+/// The class of an aggregate carried by a single INTEGER or SSE register, decided
+/// by that eightbyte alone. Shared by the one-eightbyte path and the case where a
+/// wider aggregate's second eightbyte holds only trailing padding.
+fn aggregateSingleRegisterClass(eightbyte: EightbyteLeaf) ?BoundaryClass {
+    if (isFloatOnly(eightbyte)) {
+        if (eightbyte.count == 1) {
+            const single = eightbyte.singleton orelse return null;
             return switch (single.bits) {
                 32 => .sse_float,
                 64 => .sse_double,
                 else => null,
             };
         }
-        if (leaves[0].count == 2) return .sse_f32x2;
+        if (eightbyte.count == 2) return .sse_f32x2;
         return null;
     }
     return .small_1;
+}
+
+/// Bits of the integer register that carries the aggregate as `small_1`: the
+/// smallest register covering its *data*, not its padded size. Measured:
+/// `align(16) struct { long l; }` travels in an `i64`, and
+/// `align(16) struct { char c; }` in an `i8`, though both are 16 bytes.
+pub fn singleRegisterBits(ty: *Type) u16 {
+    return smallRegisterBits(aggregateDataEnd(ty) orelse 8);
 }
 
 /// The slot class an eightbyte register transports as.
@@ -2259,6 +2286,36 @@ pub const AggregateLayout = struct {
     size: u64,
     align_: u64,
 };
+
+/// Number of bytes the aggregate's *data* occupies: its layout size minus the
+/// trailing padding that `align(N)` adds. Measured against clang, this is the
+/// figure the boundary cares about -- `align(16) struct { long l; }` is 16 bytes
+/// but its data ends at byte 8, and it still travels in one `i64`, while a shape
+/// whose data passes byte 16 goes by memory even when its size is still 16.
+/// Computing it from the members rather than from the size is what keeps the
+/// classification independent of the alignment modifier.
+pub fn aggregateDataEnd(ty: *Type) ?u64 {
+    if (ty.* != .struct_type) {
+        const layout = aggregateLayoutGuess(ty) orelse return null;
+        return layout.size;
+    }
+    const info = ty.struct_type;
+    var end: u64 = 0;
+    for (info.fields) |field| {
+        const member = aggregateLayoutGuess(field.ty) orelse return null;
+        if (info.is_union) {
+            // Every member starts at 0, so the union's data ends at its largest.
+            end = @max(end, member.size);
+            continue;
+        }
+        const start = if (info.is_packed)
+            end
+        else
+            std.mem.alignForward(u64, end, member.align_);
+        end = start + member.size;
+    }
+    return end;
+}
 
 /// Width in bits of the INTEGER register that carries an eightbyte whose
 /// occupied size fits `size` bytes. Matches Clang's choice of the smallest
@@ -3153,6 +3210,67 @@ test "a union reports itself as a union, not a struct" {
         \\union Loop { inner: Loop }
         \\fn main() i32 { return 0; }
     , "E0403");
+}
+
+test "an align(N) aggregate's data end and register are measured from the data" {
+    // Measured against clang, byte for byte:
+    //   align(16) { u8 }        -> 16 bytes of layout, 1 byte of data, i8
+    //   align(16) { u8, i32 }   -> 16/8 data, one i64
+    //   align(16) { i64 }       -> 16/8 data, one i64  (trailing padding dropped)
+    //   align(16) { i64, u8 }   -> 16/9 data, i64 + i8
+    //   align(32) { u8 }        -> 32 bytes, by memory (over the 16-byte limit)
+    const cases = [_]struct {
+        decl: []const u8,
+        name: []const u8,
+        size: u64,
+        data_end: u64,
+        bits: u16,
+        class: BoundaryClass,
+    }{
+        .{ .decl = "align(16) struct A { c: u8 }", .name = "A", .size = 16, .data_end = 1, .bits = 8, .class = .small_1 },
+        .{ .decl = "align(16) struct B { c: u8, i: i32 }", .name = "B", .size = 16, .data_end = 8, .bits = 64, .class = .small_1 },
+        .{ .decl = "align(16) struct C { v: i64 }", .name = "C", .size = 16, .data_end = 8, .bits = 64, .class = .small_1 },
+        // Data reaching both eightbytes is a register PAIR, not `small_1`; measured
+        // as `i64, i8`, which is what clang emits for the same shape.
+        .{ .decl = "align(16) struct D { a: i64, b: u8 }", .name = "D", .size = 16, .data_end = 9, .bits = 64, .class = .{ .pair = .{ .first = .i64, .second = .i8 } } },
+        .{ .decl = "align(32) struct E { c: u8 }", .name = "E", .size = 32, .data_end = 1, .bits = 8, .class = .memory },
+        .{ .decl = "align(32) struct F { l: i64, c: u8 }", .name = "F", .size = 32, .data_end = 9, .bits = 64, .class = .memory },
+        // Unaligned shapes keep their old classification: the change must only
+        // remove refusals, never reclassify an aggregate that already crosses.
+        .{ .decl = "struct G { a: i64, b: u8 }", .name = "G", .size = 16, .data_end = 9, .bits = 64, .class = .{ .pair = .{ .first = .i64, .second = .i8 } } },
+        .{ .decl = "struct H { c: u8, i: i32 }", .name = "H", .size = 8, .data_end = 8, .bits = 64, .class = .small_1 },
+    };
+    for (cases) |case| {
+        const text = try std.fmt.allocPrint(testing.allocator, "{s}\nfn main() i32 {{ return 0; }}\n", .{case.decl});
+        defer testing.allocator.free(text);
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) return error.UnexpectedDiagnostic;
+        const ty = ctx.typeNamed(case.name) orelse return error.MissingStructType;
+        const layout = aggregateLayoutGuess(ty) orelse return error.MissingLayout;
+        if (layout.size != case.size) {
+            std.debug.print("{s}: expected size {d}, got {d}\n", .{ case.name, case.size, layout.size });
+            return error.UnexpectedDiagnostic;
+        }
+        if (aggregateDataEnd(ty) != case.data_end) {
+            std.debug.print("{s}: expected data end {d}, got {d}\n", .{ case.name, case.data_end, aggregateDataEnd(ty).? });
+            return error.UnexpectedDiagnostic;
+        }
+        if (singleRegisterBits(ty) != case.bits) {
+            std.debug.print("{s}: expected {d} bits, got {d}\n", .{ case.name, case.bits, singleRegisterBits(ty) });
+            return error.UnexpectedDiagnostic;
+        }
+        const class = aggregateBoundaryClassFor(ty, true) orelse {
+            std.debug.print("{s}: refused by the classifier\n", .{case.name});
+            return error.UnexpectedDiagnostic;
+        };
+        if (!class.eql(case.class)) {
+            std.debug.print("{s}: wrong class\n", .{case.name});
+            return error.UnexpectedDiagnostic;
+        }
+    }
 }
 
 test "explicit alignment raises the aggregate's alignment and rounds its size" {

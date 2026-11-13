@@ -284,6 +284,28 @@ else
     bad "System V target accepts the same boundary" "$(cat "$TMP/target-accept.stderr")"
 fi
 
+# The `byval` alignment annotation is a target constant, not the layout's: clang
+# writes at least 8 even for a packed aggregate whose alignment is 1, and caps it
+# at 16. Measured across `packed aligned(1|2|4|16|32)`; asserted on the emitted IR
+# because a too-small annotation does not change values on this target and so no
+# value-checking fixture can catch it.
+byval_probe="$TMP/byval-probe.kyn"
+cat >"$byval_probe" <<'EOF'
+packed struct Tight { c: u8, i: i32 }
+align(32) struct Wide { c: u8 }
+extern fn take_tight(v: Tight) void;
+extern fn take_wide(v: Wide) void;
+fn main() i32 { return 0; }
+EOF
+byval_ll="$TMP/byval-probe.ll"
+if "$KYNC" emit-llvm "$byval_probe" -o "$byval_ll" >/dev/null 2>"$TMP/byval.stderr" \
+    && grep -qF "byval(%struct.__kyn_s_m0_Tight) align 8" "$byval_ll" \
+    && grep -qF "byval(%struct.__kyn_s_m0_Wide) align 16" "$byval_ll"; then
+    ok "byval carries the target's alignment floor and cap"
+else
+    bad "byval carries the target's alignment floor and cap" "$(cat "$TMP/byval.stderr"; grep -o 'byval([^)]*) align [0-9]*' "$byval_ll" 2>/dev/null)"
+fi
+
 scalar_obj="$TMP/target-scalar-aarch64.o"
 if "$KYNC" emit-obj "$ROOT/tests/integration/cases/hello.kyn" --target x86_64-unknown-linux-gnu \
     -o "$scalar_obj" >/dev/null 2>"$TMP/target-vendor.stderr" && [ -s "$scalar_obj" ]; then

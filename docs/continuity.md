@@ -3228,3 +3228,64 @@ assumed feature.
   natural follow-ups are the ones the design lists as out of scope (§8): anonymous
   members, tagged unions, and taking `align(N)` into the ABI classifier so that an
   aligned aggregate can cross the boundary by value instead of being refused.
+
+## 58. `align(N)` across the ABI, and the `byval` annotation
+
+- **Scope.** §57 left every `align(N)` aggregate refused by `E0473` at a C
+  boundary. This increment measured whether the classifier should really refuse,
+  found that it should not, and closed the gap. No new syntax; no change to the
+  four aggregate extensions.
+- **Two rules were measured, and one assumption in §57 turned out to be wrong.**
+  §57 wrote that an aligned aggregate "keeps the class its members would have",
+  which is true, and implied its transport was therefore unchanged, which is
+  **not**. Measured with `zig cc` (§`abi.md` §10.1 table):
+  1. **The sixteen-byte limit is the *padded* size.** `align(32) { long; char }`
+     has 9 bytes of data, is 32 bytes, and goes by memory.
+  2. **An eightbyte that holds no data consumes no register.** `align(16)
+     { long l; }` is 16 bytes and travels in **one** `i64`; `align(16) { char c; }`
+     in one **`i8`** — not an `i16` and not an `i64`. The previous refusal was not
+     conservative-but-safe: it hid shapes whose transport is perfectly ordinary.
+  So the size limits *whether* a shape crosses, while the data decides *how wide*
+  the register is. `sema.aggregateDataEnd` computes the data end from the members,
+  never from the size, which keeps the classification independent of the modifier.
+- **A third copy of the alignment rule was removed, not patched.**
+  `aggregateAlign` recomputed a `%struct`'s alignment as the maximum over its
+  fields — the same defect `llvmAlignmentOfType` had, in a second place. Both now
+  read the layout.
+- **A `byval` annotation I introduced in this increment was wrong and was
+  corrected before committing.** Routing `aggregateAlign` through the layout gave
+  `packed` an `align 1` where clang writes `align 8`. Measured across `packed`
+  `aligned(1|2|4|16|32)`: clang's floor is 8 and its cap is 16, because the
+  annotation describes the copy the callee receives, not the layout.
+  `byvalAlign` now states `max(8, min(layout_align, 16))` and matches all five.
+  Worth recording because the first version of the fixture would not have caught
+  it: it compared values, and a too-small `byval` alignment does not change values
+  on this target.
+- **A divergence found and deliberately not "fixed".** For a struct that is
+  exactly one 16-byte integer, clang writes the parameter `i128` and Kyn writes
+  `i64, i64`. Measured to interoperate in both directions (`{ a: __int128 }`
+  echoed through C returns intact), because an `i128` pair and two `i64`s are the
+  same convention for an INTEGER argument. Changing it would be spelling churn
+  with no behavioural gain, so `abi.md` §10.3 records it instead.
+- **The fixture that "covered" this was not covering it.** `abi/cabi_wide_integer`
+  has no `.exit`, so it returns 0 by default and asserts nothing at the boundary;
+  the real proof for the `i128` claim came from a throwaway two-way echo. This is
+  the second time a fixture's mere presence was mistaken for coverage, and the
+  reason `cabi_align_byval` echoes distinct values and checks them.
+- **Fixtures and tests.** `abi/cabi_align_byval.{kyn,c,exit}` echoes five shapes
+  (register, pair, by-memory, and two padding-only) through C in both directions
+  and exits 50 only if every value survives; a unit test pins the data end,
+  register width and class of eight shapes, including two *unaligned* ones, so the
+  change is shown to remove refusals without reclassifying anything that already
+  crossed.
+- **Gate:** unit **136/136** (was 135), integration **223/0** in Debug and
+  ReleaseSafe (was 222), 902 robustness cases, `zig fmt` clean, 23 documentation
+  links, 142 documented codes, versions `0.1.0-alpha.5`.
+- Next task: the remaining items of design §8 — anonymous struct/union members and
+  tagged unions. The ABI-classifier work this document listed as a follow-up is
+  done.
+- **The `byval` annotation is asserted on the IR, not through values.** Since a
+  too-small annotation does not change values on this target, no value-checking
+  fixture can catch it; `run.sh` now emits a probe with a `packed` and an
+  `align(32)` aggregate and asserts `align 8` and `align 16` in the emitted text.
+  Mutation-checked: the assertion fails against `align 1`, so it is not vacuous.
