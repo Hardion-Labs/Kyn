@@ -3149,6 +3149,10 @@ assumed feature.
   numbers before the checks existed would have been a guess;
   `check_diagnostic_docs.py` enforces that `diagnostics.md` lists exactly what the
   compiler can emit.
+- Git, final for this increment: `930e54f` on `arena/b79eca8b-kyn`, pushed before
+  the turn ended; PR #59 → CI green → merged as **`eef6c24`**, and `main`
+  re-validated in a fresh clone of it (134/134 unit, 217/0 integration, fmt clean,
+  23 documentation links, 139 documented codes).
 - Next task: `align(N)`, the one idea of the design still unimplemented — a fourth
   flag beside `is_union`/`is_packed` that overrides an aggregate's alignment, with
   the same treatment: measure clang's `_Alignas`, state the rule, refuse what the
