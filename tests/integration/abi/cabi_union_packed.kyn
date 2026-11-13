@@ -1,0 +1,24 @@
+union Big3 { a: i64, b: f64, c: [8]u8 }
+packed struct Packed { c: u8, i: i32 }
+struct Holder { tag: u8, u: Big3 }
+
+extern fn c_union_size() i64;
+extern fn c_packed_size() i64;
+extern fn c_verify_kyn() i32;
+
+export fn kyn_round_u(v: Big3) f64 { return v.b + 1.5; }
+export fn kyn_unpack_p(v: Packed) i32 { return (v.c as i32) + v.i; }
+export fn kyn_holder_read(h: Holder) f64 { return h.u.b; }
+export fn kyn_make_u(x: f64) Big3 { return Big3 { b: x }; }
+
+fn main() i32 {
+    var h: Holder = Holder { tag: 7, u: Big3 { b: 4.25 } };
+    var total: i64 = 0;
+    if (c_union_size() == 8) { total += 1; }
+    if (c_packed_size() == 5) { total += 2; }
+    if (kyn_holder_read(h) == 4.25) { total += 4; }
+    if (kyn_round_u(Big3 { b: 2.0 }) == 3.5) { total += 8; }
+    if (kyn_unpack_p(Packed { c: 4, i: 10 }) == 14) { total += 16; }
+    total += c_verify_kyn() as i64;
+    return total as i32;
+}

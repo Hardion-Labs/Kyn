@@ -1,0 +1,7 @@
+// A union value has no "no member" state: an empty initializer would leave the
+// storage uninitialized, which Kyn's initialization rules do not allow.
+union Value { integer: i64, real: f64 }
+fn main() i32 {
+    var v: Value = Value { };
+    return 0;
+}

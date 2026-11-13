@@ -20,9 +20,15 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§54):** the aggregate extensions now
-  have a **written design** (`docs/design-unions-bitfields-packed.md`) — unions,
-  bitfields and packed structs, not implemented. It measures the layout and ABI
+- **Unreleased work on the current branch (§55):** unions and packed structs are
+  **implemented** end to end — overlapping members with no tag, `packed` removing
+  padding and forcing the memory class at the C ABI, `E0484`/`E0485`, and two
+  fixtures that call Kyn from C in both directions plus one that reads the layout
+  back through Kyn's own field access. Bitfields and `align(N)` remain
+  unimplemented; the design covering them is `docs/design-unions-bitfields-packed.md`.
+  The same increment fixed a pre-existing defect where an aggregate field could
+  only be initialized from a literal.
+- **Merged (`4e3973f` .. `bb19a1b`, §54):** the aggregate extensions design. It measures the layout and ABI
   shape of each, decides that bitfield widths live in the type (`u3`), that a
   union carries no tag, and that `packed` means "no padding, align 1" while
   `align(N)` stays out of the increment; it claims only a measured C-compatible
@@ -46,7 +52,7 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   swept against the real compiler — the slice half of the cast table, the
   constant-expression rules, and the safety model's static checks
   (`E0501`–`E0506`, `W0501`, `W0502`). All behave as documented; the one defect
-  was documentation: §3.5 named `E0419` where the compiler emits `E0412`.
+  was documentation: §3.8 named `E0419` where the compiler emits `E0412`.
 - **Merged (`961ccbc` .. `5e0bdaa`, §49):** folded constant integers now lower
   with their real signedness, so literal `-` no longer traps where the
   named-variable form works, and a shift by a constant no longer traps always;
@@ -2073,7 +2079,7 @@ assumed feature.
   (declaration, guard, two unit tests), `compiler/backend/llvm.zig` (constant
   bit pattern), `compiler/types.zig` (`fitsUnsigned` + bounds test), docs
   (`abi.md` new "Exporting globals" section with the §9 line removed,
-  `language-reference.md` §3.3/§3.5, `diagnostics.md` `E0476`, `grammar.md`,
+  `language-reference.md` §3.3/§3.8, `diagnostics.md` `E0476`, `grammar.md`,
   `grammar.ebnf`, `roadmap.md`, `README.md`, `CHANGELOG.md`), and fixtures
   `abi/cabi_exported_globals.{kyn,c,exit}` (scalars, struct, `u8`, C→Kyn→C
   mutation of the same object), `abi/cabi_exported_wide_global.{kyn,c,exit}`
@@ -2579,7 +2585,7 @@ assumed feature.
   design before implementation. The sweep of §5.1/§4.1 is complete; the
   remaining tables that could be swept the same way are the cast table's
   interaction with slices (`isSliceCast`) and the constant-expression rules in
-  §3.5.
+  §3.8 (then §3.5; the section numbers were renumbered in §55).
 - Contract kept: no test was modified to pass; a probe that disagreed with the
   docs was investigated and the docs won (`let x = 5` → `i64`), and a
   behaviour that looked wrong in isolation (`1 << 31 >> 31`) was traced to a
@@ -2591,7 +2597,7 @@ assumed feature.
 - The precedence sweep found two defects in 107 of 346 cases, which makes the
   remaining unswept tables the cheapest next targets after the two design
   decisions: the slice half of the cast table (`isSliceCast`, §5.7) and the
-  constant-expression rules in §3.5. The harness itself is throwaway (it lives
+  constant-expression rules in §3.8. The harness itself is throwaway (it lives
   in `/tmp` and is not in the repo), so a future sweep rewrites it from the
   same idea: derive the oracle from the documented table and compare against
   real execution.
@@ -2612,7 +2618,7 @@ assumed feature.
   const widening, and a `null` array pointer cast to a slice traps (132). A
   `[0]i32` probe was rejected with `E0424` — zero-length arrays do not exist —
   which is a correct rejection of my probe, not a defect.
-- **Constant-expression rules (§3.5).** Every documented constant form compiles
+- **Constant-expression rules (§3.8).** Every documented constant form compiles
   and evaluates correctly at runtime: literals, unary and binary folds, casts,
   enum variants, `array.len`, string literals, struct and array initializers,
   including nested aggregates and a `const` aggregate read into a mutable copy
@@ -2638,7 +2644,7 @@ assumed feature.
   `null` held in a variable is not proven — is documented as "from the
   expression text" and was verified to be exactly that: the inline form is
   rejected, the variable form compiles and traps at runtime.
-- **Defect found: one wrong diagnostic code in the docs.** §3.5 said a
+- **Defect found: one wrong diagnostic code in the docs.** §3.8 said a
   non-constant global initializer is `E0419`; the compiler emits `E0412`, and
   `E0419` is the code for a *local of type `void`*, which does fire correctly
   for its own case. `diagnostics.md` already had both codes right, so only the
@@ -2669,7 +2675,7 @@ assumed feature.
   the unions/bitfields/packed-structs decision — both need a written design
   before implementation, and both are now the only substantial items left on the
   roadmap. The documented tables have been swept: §5.1, §4.1, §5.7 (both halves),
-  §3.5 and safety-model §2. A future increment should write one of those designs
+  §3.8 and safety-model §2. A future increment should write one of those designs
   rather than look for another table.
 - Contract kept: no test was modified to pass; a probe that disagreed with the
   docs was investigated and, where the compiler was right, the probe was
@@ -2679,8 +2685,8 @@ assumed feature.
   `d0ecb4a` on `arena/785da054-kyn`, pushed before the turn ended; PR #47 → CI
   green → merged as **`db81d81`**; `main` re-validated in a fresh clone of
   `db81d81` (109/109 unit, 199/0 integration).
-- The documented tables are now swept: §5.1, §4.1, §5.7 (both halves), §3.5 and
-  safety-model §2. The next increment should therefore **write a design** rather
+- The documented tables are now swept: §5.1, §4.1, §5.7 (both halves), §3.8
+  (then §3.5) and safety-model §2. The next increment should therefore **write a design** rather
   than look for another table; the two candidates are below. If a future session
   finds itself looking for a fifth table, that is the signal that the remaining
   work is the design work, not more sweeping.
@@ -3004,3 +3010,75 @@ assumed feature.
   memory), backend (packed `<{ }>`, `byval`/`sret` alignment, mask-and-shift bit
   access), then the three ABI fixtures and the documentation pass. Step 4 cannot
   land without step 5, as with every ABI change here.
+
+## 55. Unions and packed structs implemented (on `arena/4ba95935-kyn`)
+
+- Base: `main` at `bb19a1b`; `v0.1.0-alpha.5` remains the published baseline.
+  §54 wrote the design for the three aggregate extensions; this increment
+  implements **two of them end to end** and leaves bitfields, whose storage-unit
+  packing is the one genuinely new algorithm and needs the `uN`/`iN` width types
+  first.
+- **What landed, in the design's §10 order.** (1) `StructInfo.is_union` /
+  `is_packed`, the union branch of `aggregateLayoutGuess` (all members at offset
+  0, size and alignment as maxima) and the packed branch (no per-member
+  alignment, alignment 1). (2) `union` as a declaration and `packed` as a
+  modifier before `struct`/`union`, `E0484` for a `packed` that is not followed
+  by an aggregate, `E0485` for a union initializer that does not name exactly one
+  member, and the `E0403`/`E0404` messages now say "union" when the aggregate is
+  one (a new `aggregateLabel` helper, not a second code). (3) Union members are
+  walked at the base offset and a packed aggregate is forced to `.memory` in the
+  classifier. (4) The backend emits packed definitions as `<{ ... }>` and a union
+  as a struct holding its most aligned member, with `field_ptr` mapping every
+  union member to index 0 **in the emitter** so no producer knows the
+  representation. (5) Two ABI fixtures, three error fixtures, five unit tests and
+  one parser pair.
+- **`E0481` from the design was not needed and was not allocated.** The existing
+  `E0403` recursion check already covers a union because it walks the same field
+  list; adding a second code would have been a synonym. The design's §10 now
+  records this rather than leaving a code reserved that no program can reach.
+- **A genuine correctness simplification.** `sizeInBytes` re-derived struct and
+  array layout in the backend while `aggregateLayoutGuess` derived it in sema.
+  With union and packed rules that would have been two copies of the same rules,
+  so the backend now delegates to the one implementation. This is not a
+  refactor for its own sake: it removed a place where the two could disagree.
+- **A pre-existing defect found while testing the feature, and fixed.** An
+  aggregate field could only be initialized from a *literal*; `Wrap { inner: i }`
+  with `i` a variable, or `Wrap { arr: a }` with an array, failed with
+  `E0606: internal: expected an aggregate initializer`. Verified on a fresh clone
+  of `main` before being touched, so it is pre-existing and independent of
+  unions — but a union's natural use (`U { inner: existing }`) reaches it
+  immediately. The fallback now copies the value byte-wise, the same move the ABI
+  uses for a by-memory aggregate. Fixture `aggregate_from_value`.
+- **One source-compatibility consequence, handled deliberately.** `packed`
+  became a keyword, which broke a local named `packed` in the existing
+  `cabi_array_members` fixture. The binding was renamed (the value it holds is
+  unchanged) rather than weakening the keyword: the design decides `packed` is a
+  modifier, and reserving a word is exactly what a modifier does. The single
+  occurrence in the tree confirms the cost is negligible.
+- **Section numbering repaired.** `language-reference.md` §3 had two
+  pre-existing duplicate numbers (§3.3 and §3.5). Adding two sections made that
+  worse, so the sequence was renumbered 3.1–3.8 and the three references in this
+  record that pointed at the old §3.5 (constant-expression rules) now point at
+  §3.8.
+- **Gate:** unit **131/131** (was 122: five sema, two parser, one backend); integration
+  **210/0** in Debug **and** ReleaseSafe (was 204: `cabi_union_packed`,
+  `cabi_union_packed_layout`, `aggregate_from_value`, and three error
+  fixtures); `zig fmt --check` clean; 902 robustness cases clean; 23
+  documentation links; **135** documented codes (was 133: `E0484`, `E0485`);
+  versions `0.1.0-alpha.5`.
+- **Validated by execution, not only by IR inspection:** the C harness calls the
+  Kyn exports with a union by value (8-byte, `i64` class), a packed struct by
+  value (`byval`, `align 1`), a union nested in a struct, and receives a union
+  *returned* from Kyn; and a second fixture reads the layout back through Kyn's
+  own field access at bytes 1 and 4 of a packed struct and byte 8 of a nested
+  union, which is what proves the layouts agree rather than that they are both
+  self-consistent.
+- **Limitations, stated rather than implied:** bitfields are not implemented (no
+  `u3` width type, no `uN` packing, `E0482`/`E0483` unallocated); `align(N)` is
+  not implemented; a union has no tag, so reading a non-live member is undefined
+  behaviour and is recorded in `safety-model.md` §3; the packed layout and its
+  ABI are specified for `x86_64` Linux only, like the rest of the aggregate ABI.
+- Next task: the bitfield half — `uN`/`iN` width types, the storage-unit run rule
+  of design §4.1 (`E0482`/`E0483`), a bitfield run as one leaf of the storage
+  unit's width in the classifier, and mask-and-shift access in the backend — then
+  `align(N)` as a fourth flag.

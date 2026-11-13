@@ -152,6 +152,8 @@ unsupported construct or an internal compiler invariant violation.
 | `E0478` | `va_arg` has no concrete scalar type in context |
 | `E0479` | `va_arg` retrieval type is not the promoted width the caller passed |
 | `E0480` | `va_arg` used outside a variadic function |
+| `E0484` | `packed` modifier is not attached to a `struct` or `union` declaration |
+| `E0485` | a union initializer does not name exactly one member |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

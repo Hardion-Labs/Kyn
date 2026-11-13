@@ -103,6 +103,13 @@ pub const SliceInfo = struct {
 
 pub const StructInfo = struct {
     name: []const u8,
+    /// A `union`: all members start at offset 0, the size is the largest
+    /// member's and the alignment the largest member's, so the layout is the
+    /// struct rule with "sum" replaced by "maximum".
+    is_union: bool = false,
+    /// A `packed struct`/`packed union`: members are not aligned and the
+    /// aggregate's alignment is 1.
+    is_packed: bool = false,
     /// Unique backend identifier; `name` remains the source-level spelling.
     llvm_name: []const u8 = "",
     owner_module_id: u32 = 0,

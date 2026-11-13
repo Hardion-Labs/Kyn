@@ -366,7 +366,7 @@ See [the ABI guide](abi.md#variadic-declarations) and
 [receiving a C variadic argument list](abi.md#receiving-a-c-variadic-argument-list)
 for the full contract.
 
-### 3.3 Structs
+### 3.4 Structs
 
 ```kyn
 struct Point {
@@ -380,12 +380,60 @@ struct Point {
 - A struct cannot contain itself by value (`E0403`), directly or through an
   array. Recursion through a pointer is allowed.
 - Struct values are created with a struct initializer. Every field must be
-  specified exactly once; order does not matter. A repeated field name is
+  specified exactly once; order does not matter. A field's value may be any
+  expression of its type — a literal, a variable, a field read, a call result —
+  and an aggregate field is copied in whole. A repeated field name is
   `E0404` rather than the last value silently winning, and the rule applies to
   nested initializers as well.
 - Field access is `.` on a value and `->` on a pointer.
 
-### 3.4 Enums
+### 3.5 Unions
+
+```kyn
+union Value {
+    integer: i64,
+    real: f64,
+}
+
+fn main() i32 {
+    var v: Value = Value { real: 1.5 };
+    v.integer = 7;
+    return v.integer as i32;
+}
+```
+
+- A `union` has the same body syntax as a `struct`, but its members **overlap**:
+  every one starts at offset 0, the size is the largest member's and the
+  alignment the most aligned member's.
+- An initializer names **exactly one** member, because naming one is what says
+  which is live; naming none or several is `E0485`. A repeated field name is
+  `E0404`, as in a struct.
+- There is **no tag**. The program decides which member is live and reading a
+  different one reinterprets the same storage — undefined behaviour, exactly as
+  in C, and not checked.
+- A union cannot contain itself by value (`E0403`), and a diagnostic about one
+  says "union", not "struct".
+
+### 3.6 Packed structs and unions
+
+```kyn
+packed struct Packet {
+    kind: u8,
+    length: u32,
+}
+```
+
+- `packed` before `struct` or `union` removes the padding between members and
+  makes the aggregate's alignment 1, so `{ kind: u8, length: u32 }` is 5 bytes
+  with `length` at offset 1 instead of 8 bytes at offset 4.
+- It is a modifier, so anything other than an aggregate after it is `E0484`.
+- A packed aggregate crosses the C ABI **by memory** even when it is small,
+  because it has no guaranteed alignment; that matches what a C compiler does
+  with `__attribute__((packed))`.
+- Bitfields are **not** part of the language yet; there is no `u3`-style width
+  type and no `name: u32: 3` syntax.
+
+### 3.7 Enums
 
 ```kyn
 enum Color: u8 {
@@ -402,7 +450,7 @@ enum Color: u8 {
   backing integer. Use `as`.
 - Values must fit the backing type (`E0408`).
 
-### 3.5 Globals
+### 3.8 Globals
 
 ```kyn
 const GREETING: *const u8 = "Kyn";

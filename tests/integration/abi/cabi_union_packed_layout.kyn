@@ -1,0 +1,22 @@
+union U { c: u8, i: i32, d: f64 }
+struct Probe { head: u8, u: U }
+packed struct P { c: u8, i: i32 }
+
+extern fn c_write(ptr: *u8);
+extern fn c_read_byte(p: *const u8) i32;
+
+fn main() i32 {
+    // The Kyn layout writes a struct whose union member is at Kyn's offset; C
+    // reads the bytes back at *its* offsets. Agreement means the layouts match.
+    var probe: Probe = Probe { head: 0xAB, u: U { d: 1.0 } };
+    var p: P = P { c: 0x11, i: 0x22334455 };
+    var raw: *u8 = &p as *u8;
+    var score: i32 = 0;
+    if (c_read_byte(raw) == 0x11) { score += 1; }
+    if (c_read_byte(raw + 1) == 0x55) { score += 2; }
+    if (c_read_byte(raw + 4) == 0x22) { score += 4; }
+    var probe_raw: *u8 = &probe as *u8;
+    if (c_read_byte(probe_raw + 8) == 0x00) { score += 8; }
+    c_write(raw);
+    return score;
+}

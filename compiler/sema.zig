@@ -244,6 +244,8 @@ pub const Sema = struct {
                         .llvm_name = try std.fmt.allocPrint(self.allocator, "__kyn_s_m{d}_{s}", .{ decl.span.source_id, sd.name }),
                         .owner_module_id = decl.span.source_id,
                         .is_public = decl.is_public,
+                        .is_union = sd.is_union,
+                        .is_packed = sd.is_packed,
                     };
                     const ty = try self.allocator.create(Type);
                     ty.* = .{ .struct_type = info };
@@ -361,11 +363,19 @@ pub const Sema = struct {
         }
     }
 
+    /// What to call an aggregate in a diagnostic. A union is not a struct, and
+    /// saying "struct 'V'" about a union sends the reader to the wrong
+    /// declaration.
+    fn aggregateLabel(self: *Sema, info: *types.StructInfo) []const u8 {
+        _ = self;
+        return if (info.is_union) "union" else "struct";
+    }
+
     fn resolveStruct(self: *Sema, sd: *ast.StructDecl) Error!void {
         const info = sd.ty.?.struct_type;
         if (info.complete) return;
         if (info.resolving) {
-            try self.reporter.err("E0403", sd.span, "struct '{s}' contains itself by value", .{sd.name});
+            try self.reporter.err("E0403", sd.span, "{s} '{s}' contains itself by value", .{ self.aggregateLabel(info), sd.name });
             return;
         }
         info.resolving = true;
@@ -374,13 +384,13 @@ pub const Sema = struct {
         var seen = std.StringHashMap(void).init(self.allocator);
         for (sd.fields, 0..) |*field, i| {
             if (seen.contains(field.name)) {
-                try self.reporter.err("E0404", field.span, "duplicate field '{s}' in struct '{s}'", .{ field.name, sd.name });
+                try self.reporter.err("E0404", field.span, "duplicate field '{s}' in {s} '{s}'", .{ field.name, self.aggregateLabel(info), sd.name });
             } else {
                 try seen.put(field.name, {});
             }
             const ty = try self.resolveType(field.ty_expr);
             if (containsIncompleteByValue(ty)) {
-                try self.reporter.err("E0403", field.span, "struct '{s}' contains itself by value", .{sd.name});
+                try self.reporter.err("E0403", field.span, "{s} '{s}' contains itself by value", .{ self.aggregateLabel(info), sd.name });
             }
             field.ty = ty;
             fields[i] = .{ .name = field.name, .ty = ty, .index = @intCast(i) };
@@ -1657,7 +1667,7 @@ pub const Sema = struct {
             return self.prims.invalid;
         }
         if (ty.* != .struct_type) {
-            try self.reporter.err("E0456", initializer.type_expr.span, "type '{s}' is not a struct", .{self.typeName(ty)});
+            try self.reporter.err("E0456", initializer.type_expr.span, "type '{s}' is not a struct or union", .{self.typeName(ty)});
             for (initializer.fields) |field| _ = try self.checkExpr(field.value, null);
             return self.prims.invalid;
         }
@@ -1692,6 +1702,18 @@ pub const Sema = struct {
                 try self.reporter.err("E0457", field.span, "struct '{s}' has no field '{s}'", .{ info.name, field.name });
                 _ = try self.checkExpr(field.value, null);
             }
+        }
+        if (info.is_union) {
+            // A union has no "all members set" state: naming one member is what
+            // says which one is live, and naming two would claim both are. The
+            // fields loop above already rejected a repeated or unknown name, so
+            // what is left is counting what was written.
+            if (initializer.fields.len == 0) {
+                try self.reporter.err("E0485", expr.span, "union '{s}' initializer must name exactly one member", .{info.name});
+            } else if (initializer.fields.len > 1) {
+                try self.reporter.err("E0485", initializer.fields[1].span, "union '{s}' initializer must name exactly one member, found {d}", .{ info.name, initializer.fields.len });
+            }
+            return ty;
         }
         for (info.fields, 0..) |struct_field, i| {
             if (!assigned[i]) {
@@ -2111,6 +2133,12 @@ pub fn aggregateBoundaryClassFor(ty: *Type, systemv: bool) ?BoundaryClass {
     if (ty.* == .array) return null;
     const layout = aggregateLayoutGuess(ty) orelse return null;
     if (layout.size > 16) return .memory;
+    // A packed aggregate has no guaranteed alignment, so it crosses the boundary
+    // by memory even when it is small — measured against clang, which emits
+    // `sret`/`byval` for a 5-byte `{ char; int; }` that would otherwise travel in
+    // one `i64`. Register transport would also be wrong: the loads it implies are
+    // unaligned by construction.
+    if (ty.* == .struct_type and ty.struct_type.is_packed) return .memory;
     if (ty.* != .struct_type) {
         // A non-struct aggregate (a slice) travels as one packed INTEGER
         // value, matching the C struct `{ T *ptr; size_t len; }`.
@@ -2273,7 +2301,14 @@ fn collectAggregateLeaves(ty: *Type, base_offset: u64, leaves: *[2]EightbyteLeaf
             var offset = base_offset;
             for (info.fields) |field| {
                 const layout = aggregateLayoutGuess(field.ty) orelse return false;
-                offset = std.mem.alignForward(u64, offset, layout.align_);
+                // Every union member starts where the union does, so the walk
+                // records them all at the same offset and the eightbyte merges
+                // them — which is exactly how clang classifies a union.
+                if (info.is_union) {
+                    if (!collectAggregateLeaves(field.ty, base_offset, leaves)) return false;
+                    continue;
+                }
+                if (!info.is_packed) offset = std.mem.alignForward(u64, offset, layout.align_);
                 if (!collectAggregateLeaves(field.ty, offset, leaves)) return false;
                 offset += layout.size;
             }
@@ -2383,10 +2418,21 @@ pub fn aggregateLayoutGuess(ty: *Type) ?AggregateLayout {
             var align_: u64 = 1;
             for (info.fields) |field| {
                 const field_layout = aggregateLayoutGuess(field.ty) orelse return null;
-                size = std.mem.alignForward(u64, size, field_layout.align_);
+                if (info.is_union) {
+                    // Members overlap: every one starts at offset 0, the aggregate
+                    // is as large as its largest member and as aligned as its most
+                    // aligned one. One branch instead of a parallel layout pass.
+                    size = @max(size, field_layout.size);
+                    align_ = @max(align_, field_layout.align_);
+                    continue;
+                }
+                if (!info.is_packed) size = std.mem.alignForward(u64, size, field_layout.align_);
                 size += field_layout.size;
                 align_ = @max(align_, field_layout.align_);
             }
+            // A packed aggregate has alignment 1 by definition, and its size
+            // already ends on a member boundary because nothing was rounded.
+            if (info.is_packed) break :blk .{ .size = size, .align_ = 1 };
             size = std.mem.alignForward(u64, size, align_);
             break :blk .{ .size = size, .align_ = align_ };
         },
@@ -2771,6 +2817,144 @@ test "semantic records the type a va_arg retrieves" {
             }
         }
         try testing.expect(found);
+    }
+}
+
+test "semantic accepts a union and a packed struct" {
+    try expectClean(
+        \\union Value { integer: i64, real: f64 }
+        \\packed struct Packet { kind: u8, length: u32 }
+        \\fn main() i32 {
+        \\    var v: Value = Value { real: 1.5 };
+        \\    var p: Packet = Packet { kind: 1, length: 2 };
+        \\    v.integer = 7;
+        \\    return (v.integer + p.length as i64) as i32;
+        \\}
+    );
+}
+
+test "a union initializer must name exactly one member" {
+    // Naming one member is what says which is live; naming two would claim
+    // both, and naming none would leave the value uninitialized.
+    try expectOnlyError(
+        \\union Value { integer: i64, real: f64 }
+        \\fn main() i32 {
+        \\    var v: Value = Value { };
+        \\    return 0;
+        \\}
+    , "E0485");
+    try expectOnlyError(
+        \\union Value { integer: i64, real: f64 }
+        \\fn main() i32 {
+        \\    var v: Value = Value { integer: 1, real: 2.0 };
+        \\    return 0;
+        \\}
+    , "E0485");
+}
+
+test "a union reports itself as a union, not a struct" {
+    try expectSemanticError(
+        \\union Loop { inner: Loop }
+        \\fn main() i32 { return 0; }
+    , "E0403");
+}
+
+test "union layout is the largest member and packed layout has no padding" {
+    // The measured numbers from the design document: `union { u8, i32, f64 }` is
+    // 8/8, and a packed `{ u8, i32 }` is 5 bytes with alignment 1 where the
+    // unpacked form is 8/4.
+    const cases = [_]struct { decl: []const u8, size: u64, alignment: u64 }{
+        .{ .decl = "union F { x: f32, i: i32 }", .size = 4, .alignment = 4 },
+        .{ .decl = "union S { c: u8 }", .size = 1, .alignment = 1 },
+        .{ .decl = "union Big { d: [3]f64 }", .size = 24, .alignment = 8 },
+        .{ .decl = "packed struct P { c: u8, i: i32 }", .size = 5, .alignment = 1 },
+        .{ .decl = "packed struct P2 { i: i32, d: f64 }", .size = 12, .alignment = 1 },
+        .{ .decl = "struct Natural { c: u8, i: i32 }", .size = 8, .alignment = 4 },
+        .{ .decl = "struct Nested { c: u8, u: Pre }", .size = 16, .alignment = 8 },
+        .{ .decl = "packed union PU { c: u8, d: f64 }", .size = 8, .alignment = 1 },
+        .{ .decl = "union U { c: u8, i: i32, d: f64 }", .size = 8, .alignment = 8 },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        // `U` is declared in every program because one case nests it.
+        const text = try std.fmt.allocPrint(a,
+            \\union Pre {{ c: u8, i: i32, d: f64 }}
+            \\{s}
+            \\fn main() i32 {{ return 0; }}
+        , .{case.decl});
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) {
+            for (ctx.reporter.list.items) |diag| std.debug.print("  {s}: {s}\n", .{ diag.code, diag.message });
+            return error.UnexpectedDiagnostic;
+        }
+        // The declaration under test is the one whose name is not `Pre`.
+        var found: ?*Type = null;
+        for (ctx.program.?.decls) |decl| {
+            switch (decl.kind) {
+                .struct_decl => |sd| if (!std.mem.eql(u8, sd.name, "Pre")) {
+                    found = sd.ty;
+                },
+                else => {},
+            }
+        }
+        const ty = found orelse return error.MissingStructType;
+        const layout = aggregateLayoutGuess(ty) orelse return error.MissingLayout;
+        try testing.expectEqual(case.size, layout.size);
+        try testing.expectEqual(case.alignment, layout.align_);
+    }
+}
+
+test "a packed aggregate crosses the C boundary by memory" {
+    // Measured: clang passes a 5-byte packed struct with sret/byval rather than
+    // in one register, so a packed aggregate is never a register class here.
+    const cases = [_]struct { decl: []const u8, expected: BoundaryClass }{
+        .{ .decl = "packed struct P { c: u8, i: i32 }", .expected = .memory },
+        .{ .decl = "packed struct Small { c: u8 }", .expected = .memory },
+        .{ .decl = "struct Natural { c: u8, i: i32 }", .expected = .small_1 },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const text = try std.fmt.allocPrint(a, "{s}\nfn main() i32 {{ return 0; }}\n", .{case.decl});
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) return error.UnexpectedDiagnostic;
+        const sd = ctx.program.?.decls[0].kind.struct_decl;
+        const class = aggregateBoundaryClassFor(sd.ty.?, true) orelse return error.MissingClass;
+        try testing.expect(case.expected.eql(class));
+    }
+}
+
+test "a union classifies as the struct of its members" {
+    // Measured against clang: `union { u8, i32, f64 }` travels in one i64, a
+    // 1-byte union in an i8, and a 24-byte union by memory.
+    const cases = [_]struct { decl: []const u8, expected: BoundaryClass }{
+        .{ .decl = "union U { c: u8, i: i32, d: f64 }", .expected = .small_1 },
+        .{ .decl = "union S { c: u8 }", .expected = .small_1 },
+        .{ .decl = "union Big { d: [3]f64 }", .expected = .memory },
+        .{ .decl = "union Two { a: i32, b: i32 }", .expected = .small_1 },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const text = try std.fmt.allocPrint(a, "{s}\nfn main() i32 {{ return 0; }}\n", .{case.decl});
+        var ctx: SemTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        if (ctx.reporter.hasErrors()) return error.UnexpectedDiagnostic;
+        const sd = ctx.program.?.decls[0].kind.struct_decl;
+        const class = aggregateBoundaryClassFor(sd.ty.?, true) orelse return error.MissingClass;
+        try testing.expect(case.expected.eql(class));
     }
 }
 

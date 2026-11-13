@@ -1,0 +1,7 @@
+// A union initializer names exactly one member: naming two would claim both are
+// live, and the language has no tag to say otherwise.
+union Value { integer: i64, real: f64 }
+fn main() i32 {
+    var v: Value = Value { integer: 1, real: 2.0 };
+    return 0;
+}

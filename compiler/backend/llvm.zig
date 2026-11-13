@@ -1990,7 +1990,21 @@ pub const Lowering = struct {
                 }
             },
             else => {
-                try self.reporter.err("E0606", expr.span, "internal: expected an aggregate initializer", .{});
+                // A value of the aggregate's own type, not a literal: an
+                // aggregate initializer can take any expression that produces
+                // one — a variable, a field, a call result. The copy is the same
+                // byte-wise move the C ABI uses for a by-memory aggregate, so
+                // there is no second representation to keep in step.
+                const source = try self.lowerLvalue(expr);
+                const size = sizeInBytes(ty) orelse {
+                    try self.reporter.err("E0606", expr.span, "internal: expected an aggregate initializer", .{});
+                    return;
+                };
+                try self.emit(.{ .copy_bytes = .{
+                    .destination = dest,
+                    .source = source,
+                    .length = @intCast(size),
+                } });
             },
         }
     }
@@ -2308,18 +2322,14 @@ fn sizeInBytes(ty: *types.Type) ?usize {
         .pointer => 8,
         .slice => 16,
         .enum_type => |info| sizeInBytes(info.backing),
-        .array => |array| (sizeInBytes(array.elem) orelse return null) * array.len,
-        .struct_type => |info| blk: {
-            var size: usize = 0;
-            var alignment: usize = 1;
-            for (info.fields) |field| {
-                const fsize = sizeInBytes(field.ty) orelse break :blk null;
-                const falign: usize = Emitter.llvmAlignmentOfType(field.ty);
-                size = std.mem.alignForward(usize, size, falign);
-                size += fsize;
-                alignment = @max(alignment, falign);
-            }
-            break :blk std.mem.alignForward(usize, size, alignment);
+
+        // A struct/union/array is laid out in exactly one place — the semantic
+        // analyzer's guess, which the classifier and the ABI read too — so the
+        // backend cannot drift from it. Re-deriving it here would need a second
+        // copy of the union and packed rules.
+        .struct_type, .array => blk: {
+            const layout = sema_mod.aggregateLayoutGuess(ty) orelse break :blk null;
+            break :blk @intCast(layout.size);
         },
         else => null,
     };
@@ -2370,13 +2380,27 @@ pub const Emitter = struct {
         try writer.writeByte('\n');
 
         for (self.module.structs.items) |info| {
-            try writer.print("%struct.{s} = type {{ ", .{structLlvmName(info)});
+            if (info.is_union) {
+                // A union has no LLVM type. It is emitted as a struct holding one
+                // aggregate of the member with the greatest alignment, which is
+                // enough bytes: every member then sits at offset 0 and LLVM's
+                // layout of this type matches the measured size and alignment.
+                try self.emitUnionType(writer, info);
+                continue;
+            }
+            // `packed` must reach the definition as `<{ ... }>`; a plain `{ }`
+            // would make LLVM re-insert the padding the source removed. The
+            // field GEPs are unchanged, so the two forms are interchangeable to
+            // the rest of the emitter.
+            const open: []const u8 = if (info.is_packed) "type <{ " else "type { ";
+            const close: []const u8 = if (info.is_packed) " }>" else " }";
+            try writer.print("%struct.{s} = {s}", .{ structLlvmName(info), open });
             for (info.fields, 0..) |field, i| {
                 if (i > 0) try writer.writeAll(", ");
                 try self.emitType(writer, field.ty);
             }
             if (info.fields.len == 0) try writer.writeAll("i8");
-            try writer.writeAll(" }\n");
+            try writer.print("{s}\n", .{close});
         }
         if (self.module.structs.items.len > 0) try writer.writeByte('\n');
 
@@ -2712,7 +2736,11 @@ pub const Emitter = struct {
             .field_ptr => |field| {
                 try writer.print("  %t{d} = getelementptr inbounds %struct.{s}, ptr ", .{ field.dst, structLlvmName(field.struct_ty) });
                 try self.emitValue(writer, field.base, null);
-                try writer.print(", i32 0, i32 {d}\n", .{field.field});
+                // Every union member lives in the single emitted member, so the
+                // declared index becomes 0 there. This is the one place that
+                // knows the representation, so no producer has to.
+                const index: u32 = if (field.struct_ty.is_union) 0 else field.field;
+                try writer.print(", i32 0, i32 {d}\n", .{index});
             },
             .elem_ptr => |element| {
                 if (element.is_array) {
@@ -2882,6 +2910,30 @@ pub const Emitter = struct {
 
     fn emitType(self: *Emitter, writer: *std.Io.Writer, ty: *types.Type) !void {
         try writer.writeAll(try self.typeString(ty));
+    }
+
+    /// Emits a union as a struct with one member placed so that the struct's
+    /// measured size and alignment are the union's. Choosing the member with the
+    /// greatest alignment (ties broken by size) needs no padding array: that
+    /// member alone already gives the union's size and alignment, because both
+    /// are maxima over the same members.
+    fn emitUnionType(self: *Emitter, writer: *std.Io.Writer, info: *types.StructInfo) !void {
+        var chosen: ?*types.Type = null;
+        var chosen_align: usize = 0;
+        var chosen_size: usize = 0;
+        for (info.fields) |field| {
+            const size = sizeInBytes(field.ty) orelse 0;
+            const align_ = llvmAlignmentOfType(field.ty);
+            const better = align_ > chosen_align or (align_ == chosen_align and size > chosen_size);
+            if (chosen == null or better) {
+                chosen = field.ty;
+                chosen_align = align_;
+                chosen_size = size;
+            }
+        }
+        try writer.print("%struct.{s} = type {{ ", .{structLlvmName(info)});
+        if (chosen) |ty| try writer.writeAll(try self.typeString(ty)) else try writer.writeAll("i8");
+        try writer.writeAll(" }\n");
     }
 
     /// The LLVM spelling of a register scalar.
@@ -3237,6 +3289,61 @@ test "lowering declares a variadic extern and passes promoted arguments" {
     // No half-width or half-filled argument survives to the call site.
     try testing.expect(std.mem.indexOf(u8, ll, "call i32 @printf(ptr %t0, i1 ") == null);
     try testing.expect(std.mem.indexOf(u8, ll, ", float ") == null);
+}
+
+test "a union is emitted as one member and a packed struct as <{ }>" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const text =
+        \\union U { c: u8, i: i32 }
+        \\packed struct P { c: u8, i: i32 }
+        \\fn main() i32 {
+        \\    var u: U = U { i: 7 };
+        \\    var p: P = P { c: 1, i: 2 };
+        \\    u.c = 3;
+        \\    return (u.i + p.i) as i32;
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // The union is not an LLVM type: it is emitted as a struct holding its most
+    // aligned member, which already has the union's size and alignment.
+    try testing.expect(std.mem.indexOf(u8, ll, "%struct.__kyn_s_m0_U = type { i32 }") != null);
+    // `packed` must reach the definition, or LLVM re-inserts the padding.
+    try testing.expect(std.mem.indexOf(u8, ll, "%struct.__kyn_s_m0_P = type <{ i8, i32 }>") != null);
+    // Every union member is at index 0 of the emitted single member, so a field
+    // access through either name uses the same index and never goes out of range.
+    try testing.expect(std.mem.indexOf(u8, ll, "getelementptr inbounds %struct.__kyn_s_m0_U, ptr %v4, i32 0, i32 0") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "%struct.__kyn_s_m0_U, ptr %v4, i32 0, i32 1") == null);
+    try testing.expect(std.mem.indexOf(u8, ll, "%struct.__kyn_s_m0_P, ptr %v5, i32 0, i32 1") != null);
 }
 
 test "lowering an exported variadic function emits va_start, va_arg and va_end" {

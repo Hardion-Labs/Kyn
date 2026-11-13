@@ -161,7 +161,18 @@ pub const Parser = struct {
                 try self.reporter.err("E0203", self.peek().span, "expected 'fn', 'const', 'var' or 'let' after 'export'", .{});
                 return null;
             },
-            .kw_struct => return try self.parseStruct(),
+            .kw_struct => return try self.parseStruct(false, false),
+            .kw_union => return try self.parseStruct(true, false),
+            .kw_packed => {
+                // `packed` is a modifier, not a declaration: it takes its
+                // meaning from the aggregate keyword that follows it.
+                const packed_span = self.advance().span;
+                if (self.check(.kw_struct)) return try self.parseStruct(false, true);
+                if (self.check(.kw_union)) return try self.parseStruct(true, true);
+                try self.reporter.err("E0484", packed_span, "'packed' is only allowed before a 'struct' or 'union' declaration", .{});
+                self.synchronize(.semicolon);
+                return null;
+            },
             .kw_enum => return try self.parseEnum(),
             .kw_const, .kw_var, .kw_let => return try self.parseGlobalVar(),
             else => {
@@ -252,9 +263,10 @@ pub const Parser = struct {
         return decl;
     }
 
-    fn parseStruct(self: *Parser) !?*ast.Decl {
+    fn parseStruct(self: *Parser, is_union: bool, is_packed: bool) !?*ast.Decl {
         const start = self.peek().span;
-        _ = try self.expect(.kw_struct, "to begin struct declaration");
+        const keyword: token.Kind = if (is_union) .kw_union else .kw_struct;
+        _ = try self.expect(keyword, if (is_union) "to begin union declaration" else "to begin struct declaration");
         if (!self.check(.identifier)) {
             try self.reporter.err("E0207", self.peek().span, "expected struct name, found {s}", .{token.describe(self.peek().kind)});
             return null;
@@ -294,7 +306,13 @@ pub const Parser = struct {
         }
 
         const struct_decl = try self.allocator.create(ast.StructDecl);
-        struct_decl.* = .{ .span = Span.join(start, self.peek().span), .name = name_tok.lexeme, .fields = try fields.toOwnedSlice(self.allocator) };
+        struct_decl.* = .{
+            .span = Span.join(start, self.peek().span),
+            .name = name_tok.lexeme,
+            .fields = try fields.toOwnedSlice(self.allocator),
+            .is_union = is_union,
+            .is_packed = is_packed,
+        };
 
         const decl = try self.allocator.create(ast.Decl);
         decl.* = .{ .span = Span.join(start, self.peek().span), .kind = .{ .struct_decl = struct_decl } };
@@ -1361,6 +1379,46 @@ test "variadic function with a body is rejected" {
     _ = try parseTest(ctx.src.text, &ctx);
     try testing.expect(ctx.reporter.hasErrors());
     try testing.expectEqualStrings("E0474", ctx.reporter.list.items[0].code);
+}
+
+test "parse union and packed declarations" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\union U { c: u8, i: i32 }
+        \\packed struct P { c: u8, i: i32 }
+        \\packed union PU { c: u8, d: f64 }
+        \\struct Plain { c: u8 }
+    );
+    defer ctx.deinit();
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    try testing.expectEqual(@as(usize, 4), program.decls.len);
+
+    const union_decl = program.decls[0].kind.struct_decl;
+    try testing.expect(union_decl.is_union);
+    try testing.expect(!union_decl.is_packed);
+
+    const packed_struct = program.decls[1].kind.struct_decl;
+    try testing.expect(!packed_struct.is_union);
+    try testing.expect(packed_struct.is_packed);
+
+    const packed_union = program.decls[2].kind.struct_decl;
+    try testing.expect(packed_union.is_union);
+    try testing.expect(packed_union.is_packed);
+
+    // A plain struct is neither, so the flags cannot default to true.
+    const plain = program.decls[3].kind.struct_decl;
+    try testing.expect(!plain.is_union);
+    try testing.expect(!plain.is_packed);
+}
+
+test "a 'packed' that does not modify an aggregate is rejected" {
+    var ctx: TestContext = undefined;
+    try ctx.init("packed enum E: u8 { A }");
+    defer ctx.deinit();
+    _ = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(ctx.reporter.hasErrors());
+    try testing.expectEqualStrings("E0484", ctx.reporter.list.items[0].code);
 }
 
 test "parse a function type" {
