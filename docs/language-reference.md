@@ -49,7 +49,7 @@ struct
 true    var     while
 ```
 
-`for` is reserved for future use and is not accepted by the parser.
+`for` introduces a C-style loop; see §4.3.
 
 ### 1.5 Primitive type names
 
@@ -720,7 +720,33 @@ while (count < 10) {
 - Conditions must have type `bool` (`E0463`). There is no truthiness.
 - `else` may be omitted or followed by `if` or a block.
 - `break` and `continue` are valid only inside a loop (`E0415`).
-- There is no `for`, `switch`, `match`, `goto` or labeled control flow.
+- There is no `switch`, `goto` or labeled control flow. Flow control is `if`,
+  `while`, `for` (§4.3) and `match` (§3.12).
+
+### 4.3 `for`
+
+```kyn
+for (var i: i32 = 0; i < 10; i += 1) {
+    if (i == 3) { continue; }   // runs the step, so `i` still advances
+    if (i == 8) { break; }
+}
+```
+
+- The shape is C's: `for (init; cond; step) { body }`. **Every clause is
+  optional**, so `for (;;)` is an intentional infinite loop whose only exit is
+  `break`, and `for (; i < n;)` is a loop that advances elsewhere.
+- The initializer may be a local declaration or an expression. A declared variable
+  is scoped to the **whole statement** — condition, step and body — and does not
+  exist afterwards (`E0427`). That is the one thing this form gives over `while`,
+  so it is part of the design rather than an incidental detail.
+- The condition must be `bool` (`E0463`); there is no truthiness. An **omitted**
+  condition means "always" and is written by leaving the clause out.
+- `continue` jumps to the step, not past it, so the increment still runs. This is
+  the reason the step is its own block in the lowering rather than the tail of the
+  body.
+- `break` leaves the innermost loop, as in `while` (`E0415` outside one). A
+  `continue` in the initializer is not inside the loop and is rejected.
+- The step is evaluated for its effect; its value is discarded.
 
 ## 5. Expressions
 
@@ -1029,7 +1055,7 @@ meaningful).
 The following are rejected or simply not part of v0.1:
 
 - isolated module namespaces, package registries and module re-exports (basic relative-path and qualified-alias imports are implemented);
-- `for`, `switch`, `match`, `do`, `goto`, labels;
+- `switch`, `do`, `goto`, labels;
 - `defer`, `errdefer`, exceptions, closures, lambdas;
 - const-polymorphic slice constructors and additional slice ergonomics;
 - generics, traits, interfaces, operator overloading;

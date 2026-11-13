@@ -14,7 +14,7 @@ enum        := "enum" IDENT (":" type)? "{" (variant ("," variant)* ","?)? "}"
 global      := ("const"|"let"|"var") IDENT (":" type)? ("=" expr)? ";"
 export global := "export" global
 type        := "*" ["const"] type | "[" "]" ["const"] type | "[" expr "]" type | IDENT | primitive
-statement   := block | if | while | return | break | continue | local | expr ";"
+statement   := block | if | while | for | match | return | break | continue | local | expr ";"
 expression  := assignment, with precedence documented in the language reference
 ```
 
@@ -28,7 +28,11 @@ expression  := assignment, with precedence documented in the language reference
 - `else if` is parsed as a nested `if` statement, not a special production.
 - An omitted function return type means `void`.
 - `extern fn` has no body and ends with `;`.
-- `for` is a reserved keyword but has no production.
+- `for (init; cond; step) { }` follows C's shape; every clause is optional and an
+  omitted condition means "always". The initializer may be a declaration, whose
+  variable is scoped to the whole statement.
+- `match` arms are `pattern => block` separated by commas, with `_` as the
+  wildcard. The form is spelled out in [grammar.ebnf](grammar.ebnf).
 - Expressions have no comma operator and no ternary operator.
 - Assignment is right-associative and is checked as an expression, so
   `a = b = c` parses; the checker still requires each target to be an lvalue

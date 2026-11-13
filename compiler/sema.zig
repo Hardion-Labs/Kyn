@@ -988,6 +988,38 @@ pub const Sema = struct {
         }
     }
 
+    /// `for (init; cond; step) { body }`.
+    ///
+    /// The whole statement is one scope: the initializer's variable is visible in
+    /// the condition, the step and the body, and gone afterwards. That is the only
+    /// reason to prefer `for` over `while` here -- the counter does not leak -- so
+    /// the scope is part of the form rather than an incidental detail.
+    ///
+    /// An omitted condition means "always": an intentional infinite loop, whose
+    /// only exit is `break`. There is no truthiness, so the omitted form is spelled
+    /// by leaving the clause out, not by writing a non-bool condition.
+    fn checkFor(self: *Sema, for_stmt: *ast.Stmt.ForStmt) Error!void {
+        try self.pushScope();
+        defer self.popScope();
+
+        // The initializer may declare a variable, which the rest of the loop sees.
+        // A declaration is a statement, so it goes through the same check a `var`
+        // anywhere else does -- there is no second declaration rule here.
+        if (for_stmt.init) |init_stmt| try self.checkStmt(init_stmt);
+
+        if (for_stmt.cond) |cond| {
+            const cond_ty = try self.checkExpr(cond, self.prims.bool);
+            try self.requireBool(cond, cond_ty);
+        }
+        // The step is evaluated for its effect; its value is discarded, as an
+        // expression statement's would be.
+        if (for_stmt.step) |step| _ = try self.checkExpr(step, null);
+
+        self.loop_depth += 1;
+        defer self.loop_depth -= 1;
+        try self.checkBlock(for_stmt.body);
+    }
+
     fn checkBlock(self: *Sema, block: *ast.Block) Error!void {
         try self.pushScope();
         defer self.popScope();
@@ -1013,6 +1045,7 @@ pub const Sema = struct {
                 defer self.loop_depth -= 1;
                 try self.checkBlock(while_stmt.body);
             },
+            .for_stmt => |for_stmt| try self.checkFor(for_stmt),
             .return_stmt => |ret_stmt| try self.checkReturn(stmt.span, ret_stmt.value),
             .break_stmt, .continue_stmt => {
                 if (self.loop_depth == 0) {

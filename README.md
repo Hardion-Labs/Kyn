@@ -214,13 +214,14 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | ✅ Slices (`[]T`, `[]const T`) | `&array as []T`, `slice[a..b]`, `.len`, runtime bounds |
 | ❌ Generics or traits | Planned |
 | ✅ `match` over integers, `bool`, enums and tagged unions, with an exhaustive arm list | Implemented |
-| ❌ `defer`, `for`, closures or exceptions | Planned |
+| ❌ `defer`, closures or exceptions | Planned |
+| ✅ `for` loops | C-style `for (init; cond; step)`, every clause optional, init scoped to the loop |
 | ✅ Variadic `extern` and `export` functions | C default promotions out; context-typed `va_arg()` in |
 | ✅ Unions and packed structs | Overlapping members, no tag; `packed` removes padding and forces the memory class at the C ABI |
 | ✅ Bitfields | Width in the type (`u3`), packed storage units, C-compatible subset stated in `abi.md` §11 |
 | ✅ Anonymous members | Inline `struct`/`union` with no name; its field names promote, transitively |
 | ✅ Explicit alignment | `align(N)` raises an aggregate's alignment, rounds its size, composes with `packed`, and crosses the C ABI by value |
-| ❌ Indirect calls and first-class function values | Planned |
+| ✅ Indirect calls and first-class function values | `fn(..)..` values, a function name in value position is its address |
 | ✅ Fixed-array dynamic indexes | Bounds-checked at runtime; trap on out-of-range |
 | ✅ Integer division and remainder | Zero divisor traps; signed `INT_MIN / -1` traps |
 | ✅ Integer arithmetic | `+`, `-`, `*`, unary `-`, shifts and division traps on overflow/out-of-range or zero |

@@ -1,0 +1,38 @@
+// The four properties of `for` that are worth a value each, with the weights
+// chosen so the total stays under 256 (an exit status keeps only the low 8 bits).
+fn main() i32 {
+    var score: i32 = 0;
+
+    // 1. The counter advances and the sum is right.
+    var sum: i32 = 0;
+    for (var i: i32 = 0; i < 5; i += 1) { sum += i; }
+    if (sum == 10) { score += 1; }
+
+    // 2. `continue` runs the step: without that this would never terminate.
+    var hits: i32 = 0;
+    for (var i: i32 = 0; i < 5; i += 1) {
+        if (i == 2) { continue; }
+        hits += i;
+    }
+    if (hits == 8) { score += 2; }
+
+    // 3. Every clause may be omitted: an infinite loop exited by `break`, and a
+    //    loop with only a condition.
+    var n: i32 = 0;
+    for (;;) { n += 1; if (n == 3) { break; } }
+    var m: i32 = 0;
+    for (; m < 4;) { m += 1; }
+    if (n == 3 && m == 4) { score += 4; }
+
+    // 4. Nested loops: `break` and `continue` act on the innermost one.
+    var total: i32 = 0;
+    for (var i: i32 = 0; i < 3; i += 1) {
+        for (var j: i32 = 0; j < 10; j += 1) {
+            if (j == 2) { break; }
+            total += 1;
+        }
+    }
+    if (total == 6) { score += 8; }
+
+    return score * 10;
+}
