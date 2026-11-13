@@ -2784,3 +2784,11 @@ assumed feature.
   against the compiler rather than inferred from the older prose, and one piece
   of older prose (`abi.md`'s flat "`export` is likewise rejected") was corrected
   to say *why* it is rejected today and where the design goes.
+- Git, final for this increment: design commit `4b8f4a0` and record `ffc0431` on
+  `arena/0eb15e2d-kyn`, pushed before the turn ended; PR #49 → CI green →
+  merged as **`e0170ed`**; `main` re-validated in a fresh clone of `e0170ed`
+  (109/109 unit, 199/0 integration, 22 documentation links).
+- The design is now the specification the next increment implements; its §10
+  gives the order, and step 4 (backend emission) cannot land without step 5's
+  C-interop fixture, which is the rule this project has followed for every ABI
+  change. The unions/bitfields/packed-structs decision remains undesigned.
