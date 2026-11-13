@@ -18,6 +18,11 @@ is selected. Milestones below are directions, not release promises.
   arithmetic no longer traps where the named-variable form works; and the
   duplicate `E0216`/`E0420` check is deduplicated in favour of the documented
   `E0420`. Both came from sweeping the tables in §5.1 and §4.1.
+- The slice half of the cast table (§5.7), the constant-expression rules (§3.5)
+  and the safety model's static checks (`E0501`–`E0506`, `W0501`, `W0502`) were
+  swept against the real compiler and all behave as documented; one wrong
+  diagnostic code in §3.5 was corrected. The checks now have unit coverage
+  pinning each documented `E0506` context and each `W0501` terminator.
 
 - A struct initializer that repeats a field is `E0404`; the documented "exactly
   once" rule was previously unenforced and the last value won.

@@ -690,3 +690,99 @@ test "analyzer checks constant subslice bounds and null slice sources" {
     try ctx.run();
     try testing.expect(!ctx.reporter.hasErrors());
 }
+
+test "every documented provable-null context is rejected" {
+    // `safety-model.md` §2.8 names six places where a provably `null` pointer
+    // is rejected: dereference, field access through a pointer, pointer index,
+    // array-pointer slice, and array-pointer-to-slice cast. The analysis works
+    // from the expression text, so each is written inline — a `null` in a
+    // variable is not proven, and the runtime trap covers that case.
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    return *(null as *i32);
+        \\}
+    , "E0506");
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    return (null as *i32)[0];
+        \\}
+    , "E0506");
+    try expectAnalyzerError(
+        \\struct P { x: i32 }
+        \\fn main() i32 {
+        \\    return (null as *P)->x;
+        \\}
+    , "E0506");
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let s: []i32 = (null as *[4]i32)[..];
+        \\    return s.len as i32;
+        \\}
+    , "E0506");
+    try expectAnalyzerError(
+        \\fn main() i32 {
+        \\    let s: []i32 = (null as *[4]i32) as []i32;
+        \\    return s.len as i32;
+        \\}
+    , "E0506");
+}
+
+test "a null in a variable is not proven, only the inline form is" {
+    // The documented limit: provenance is not tracked through a variable. The
+    // program compiles and the runtime trap is what stops it, which is why the
+    // two cases here differ. Asserting the clean compile keeps the limit
+    // honest rather than silently "fixing" it into a false diagnostic.
+    var ctx: AnalyzerTest = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    let p: *i32 = null;
+        \\    return p[0];
+        \\}
+    );
+    defer ctx.deinit();
+    try ctx.run();
+    try testing.expect(!ctx.reporter.hasErrors());
+}
+
+test "unreachable statements after every terminator are warned once" {
+    const cases = [_][]const u8{
+        \\fn main() i32 {
+        \\    return 1;
+        \\    let x: i32 = 2;
+        \\    return x;
+        \\}
+        ,
+        \\fn main() i32 {
+        \\    while (true) {
+        \\        break;
+        \\        let y: i32 = 1;
+        \\    }
+        \\    return 0;
+        \\}
+        ,
+        \\fn main() i32 {
+        \\    var i: i32 = 0;
+        \\    while (i < 3) {
+        \\        i += 1;
+        \\        continue;
+        \\        let z: i32 = 1;
+        \\    }
+        \\    return i;
+        \\}
+        ,
+    };
+    for (cases) |text| {
+        var ctx: AnalyzerTest = undefined;
+        try ctx.init(text);
+        defer ctx.deinit();
+        try ctx.run();
+        var found: usize = 0;
+        for (ctx.reporter.list.items) |diag| {
+            if (std.mem.eql(u8, diag.code, "W0501")) found += 1;
+        }
+        // One statement is unreachable, so exactly one warning names it; the
+        // warning is not an error and must not fail the program.
+        try testing.expectEqual(@as(usize, 1), found);
+        try testing.expect(!ctx.reporter.hasErrors());
+    }
+}

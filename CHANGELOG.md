@@ -39,6 +39,11 @@ Exported globals, and two constant-representation fixes.
 
 ### Fixed
 
+- `language-reference.md` §3.5 named the wrong diagnostic for a non-constant
+  global initializer: it said `E0419`, which is the code for a local of type
+  `void`, while the compiler emits `E0412` ("global initializer is not
+  constant"). The table in `diagnostics.md` was already right and only the
+  language reference disagreed, so the reference now matches the compiler.
 - A folded constant integer now lowers with the signedness it actually has. A
   `comptime_int` carries no width or sign in the type system, and the overflow
   and shift checks read `intInfo()` directly, which answers `bits = 0, signed =
