@@ -559,7 +559,37 @@ enum Color: u8 {
   backing integer. Use `as`.
 - Values must fit the backing type (`E0408`).
 
-### 3.11 Globals
+### 3.11 `match`
+
+```kyn
+match (color) {
+    Color.Red => { return 1; },
+    Color.Green => { return 2; },
+    _ => { return 3; },
+}
+```
+
+- The scrutinee is evaluated **exactly once**, and its value is compared with
+  each pattern in source order. That matters if the scrutinee calls a function:
+  the side effect happens once, not once per arm.
+- A pattern is an expression compared for equality, so it must have the same
+  type as the scrutinee — the rule `==` uses (`E0431`/`E0432` apply, and a
+  mismatch is `E0494`). Patterns are constants: literals and enum variants.
+- The scrutinee must be an integer, `bool` or enum (`E0494`).
+- **The arm list must be exhaustive**, which means it must contain `_ => { ... }`
+  (`E0495`). There is no fall-through and no implicit "do nothing", so a match
+  that could silently miss a value is a hole. Listing every variant of an enum
+  is not by itself accepted as exhaustive: the variant list belongs to a
+  declaration, and accepting it would need a second notion of exhaustiveness.
+- At most one wildcard arm, and no arm may follow it: both would be unreachable
+  (`E0496`). A repeated pattern value is also unreachable (`E0496`).
+- `break` and `continue` inside an arm act on the enclosing loop, exactly as they
+  would without the match.
+- Like `if` and `while`, a match needs no trailing `;`.
+- An exhaustive match whose arms all return terminates its function, so it can be
+  the last statement of a non-`void` function.
+
+### 3.12 Globals
 
 ```kyn
 const GREETING: *const u8 = "Kyn";
@@ -592,12 +622,16 @@ statement =
     block
   | "if" "(" expr ")" block [ "else" ( if-statement | block ) ]
   | "while" "(" expr ")" block
+  | "match" "(" expr ")" "{" match-arm { "," match-arm } "}"
+  | "for" ...                                 ; reserved, not implemented
   | "return" [ expr ] ";"
   | "break" ";"
   | "continue" ";"
   | ("let" | "var" | "const") ident [ ":" Type ] [ "=" expr ] ";"
   | expr ";"
   | ";"
+
+match-arm = ( "_" | expr ) "=>" block
 ```
 
 ### 4.1 Local declarations

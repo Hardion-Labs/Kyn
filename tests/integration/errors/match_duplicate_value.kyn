@@ -1,0 +1,10 @@
+// Two arms matching the same value: the second can never run. Letting the later
+// one silently win is the same class of hole as a missing wildcard.
+fn main() i32 {
+    var x: i32 = 1;
+    match (x) {
+        1 => { return 10; },
+        1 => { return 20; },
+        _ => { return 30; },
+    }
+}

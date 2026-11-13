@@ -7,11 +7,20 @@ promised between alpha releases.
 ## [Unreleased]
 
 Exported globals, the callee side of variadics, the aggregate extensions
-(unions, packed structs, bitfields, explicit alignment, anonymous members), and
-three representation fixes (two constants and the signed-division minimum).
+(unions, packed structs, bitfields, explicit alignment, anonymous members), the
+`match` statement, and three representation fixes (two constants and the
+signed-division minimum).
 
 ### Added
 
+- **`match`** dispatches on an integer, `bool` or enum. The scrutinee is evaluated
+  exactly once and compared against each arm in source order; the arm list must
+  contain a wildcard (`E0495`), because Kyn has no fall-through and no implicit
+  "do nothing". Enumerating every variant is deliberately not accepted as
+  exhaustive — the variant list belongs to a declaration, and accepting it would
+  need a second notion of exhaustiveness. One wildcard at most, nothing after it,
+  and no repeated pattern value (`E0496`). The lowering is a chain of the `icmp
+  eq` that `==` already emits, so no new IR instruction was added.
 - An inline `struct { ... }` or `union { ... }` with no name is an **anonymous
   member**: it occupies its own space and its field names promote into the
   enclosing aggregate, transitively. `struct Packet { kind: u8, struct { length:

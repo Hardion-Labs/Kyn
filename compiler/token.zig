@@ -31,6 +31,7 @@ pub const Kind = enum {
     kw_else,
     kw_while,
     kw_for,
+    kw_match,
     kw_break,
     kw_continue,
     kw_as,
@@ -71,6 +72,7 @@ pub const Kind = enum {
     dotdot,
     ellipsis,
     arrow,
+    fat_arrow,
     at,
 
     // operators
@@ -147,6 +149,7 @@ pub const keywords = std.StaticStringMap(Kind).initComptime(.{
     .{ "else", .kw_else },
     .{ "while", .kw_while },
     .{ "for", .kw_for },
+    .{ "match", .kw_match },
     .{ "break", .kw_break },
     .{ "continue", .kw_continue },
     .{ "as", .kw_as },
@@ -178,6 +181,7 @@ pub fn keywordKind(text: []const u8) ?Kind {
 
 pub fn describe(kind: Kind) []const u8 {
     return switch (kind) {
+        .fat_arrow => "'=>'",
         .identifier => "identifier",
         .int_literal => "integer literal",
         .float_literal => "float literal",
@@ -200,6 +204,7 @@ pub fn describe(kind: Kind) []const u8 {
         .kw_else => "'else'",
         .kw_while => "'while'",
         .kw_for => "'for'",
+        .kw_match => "'match'",
         .kw_break => "'break'",
         .kw_continue => "'continue'",
         .kw_as => "'as'",
