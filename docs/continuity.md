@@ -2557,3 +2557,14 @@ assumed feature.
   docs was investigated and the docs won (`let x = 5` → `i64`), and a
   behaviour that looked wrong in isolation (`1 << 31 >> 31`) was traced to a
   documented rule and left alone.
+- Git, final for this increment: implementation commit `e3870b9` and record
+  `063df54` on `arena/9888b78f-kyn`, pushed before the turn ended; PR #45 → CI
+  green → merged as **`961ccbc`**; `main` re-validated in a fresh clone of
+  `961ccbc` (106/106 unit, 199/0 integration).
+- The precedence sweep found two defects in 107 of 346 cases, which makes the
+  remaining unswept tables the cheapest next targets after the two design
+  decisions: the slice half of the cast table (`isSliceCast`, §5.7) and the
+  constant-expression rules in §3.5. The harness itself is throwaway (it lives
+  in `/tmp` and is not in the repo), so a future sweep rewrites it from the
+  same idea: derive the oracle from the documented table and compare against
+  real execution.
