@@ -430,10 +430,46 @@ packed struct Packet {
 - A packed aggregate crosses the C ABI **by memory** even when it is small,
   because it has no guaranteed alignment; that matches what a C compiler does
   with `__attribute__((packed))`.
-- Bitfields are **not** part of the language yet; there is no `u3`-style width
-  type and no `name: u32: 3` syntax.
+### 3.7 Bitfields
 
-### 3.7 Enums
+```kyn
+struct Wire {
+    kind: u3,
+    tag: u5,
+}
+```
+
+- An integer type may have any width from 1 to 128: `u1`…`u128`, `i1`…`i128`.
+  A width that is not a whole number of bytes makes the field a **bitfield**, and
+  adjacent bitfields pack into one storage unit.
+- The width lives in the **type**, not in a colon suffix. There is no
+  `name: u32: 3` syntax, so `w.kind` really is a `u3` and the ordinary promotion
+  rules apply to it.
+- Layout rules, which are deterministic and identical on every target:
+  1. A field's unit is the smallest of 1, 2, 4 or 8 bytes that can hold its
+     width.
+  2. A field never straddles a boundary of its own unit width. `{kind: u3, tag:
+     u5}` is one byte; `{a: u3, b: u5, c: u12}` places `c` at **bit 16**, not bit
+     8, because bits 8..19 do not fit the 2-byte block that starts at byte 0.
+  3. A non-bitfield member closes the run's byte range, and a later bitfield
+     resumes after it.
+  4. A `packed` aggregate inserts no padding, so its run takes a unit wide enough
+     for the whole run and a field may cross a boundary the aligned form forbids.
+- Layouts the emitted type cannot mirror are **rejected** with `E0489` rather
+  than laid out in a way that would silently disagree with the code generator. The
+  one common shape this refuses is two runs whose units would overlap, such as
+  `{a: u31, b: u33}`; C accepts that shape by making both runs share one 8-byte
+  unit, and Kyn does not claim that rule.
+- **C compatibility is limited and stated:** a bitfield struct is C compatible
+  when its widths sum to at most 8 bits, with no non-bitfield member, matched
+  against the C struct that declares each member `unsigned char`. Wider runs are
+  laid out by the rules above and are deterministic, but a boundary that depends
+  on them is outside what the project promises. Fixture `cabi_bitfields` covers
+  the compatible subset in both directions.
+- A union member cannot be a bitfield (`E0487`): overlapping runs have no defined
+  bit positions.
+
+### 3.8 Enums
 
 ```kyn
 enum Color: u8 {
@@ -450,7 +486,7 @@ enum Color: u8 {
   backing integer. Use `as`.
 - Values must fit the backing type (`E0408`).
 
-### 3.8 Globals
+### 3.9 Globals
 
 ```kyn
 const GREETING: *const u8 = "Kyn";

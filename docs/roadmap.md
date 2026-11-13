@@ -135,6 +135,13 @@ is selected. Milestones below are directions, not release promises.
 
 ## Next direction
 
+- **Bitfields are implemented**, with the width in the type: `kind: u3` is a real
+  `u3`, adjacent bitfields pack into a 1/2/4/8-byte storage unit, reads
+  sign-extend or zero-extend and writes mask so neighbours survive. The layout is a
+  deterministic documented rule; the C-compatible subset is narrow and stated
+  (widths summing to at most 8 bits), and a shape whose unit would overlap bytes
+  already emitted is refused with `E0489` rather than emitted in a form that
+  disagrees with it. `align(N)` remains unimplemented.
 - **Unions and packed structs are implemented.** A `union` overlaps its members
   (every one at offset 0, size and alignment from the largest) and has no tag, so
   the program owns which member is live; `packed struct`/`packed union` removes

@@ -16,6 +16,12 @@ const sema_mod = @import("../sema.zig");
 
 pub const Error = error{OutOfMemory};
 
+/// The error set of the constant- and type-emitting helpers. Declared explicitly
+/// rather than inferred: `emitConstant` and `emitEmittedMemberConstant` call each
+/// other, and two inferred error sets that reference each other are a dependency
+/// loop Zig rejects.
+pub const ConstantError = error{ OutOfMemory, WriteFailed };
+
 const FnCtx = struct {
     function: *ir.Function,
     /// Set when this function retrieves arguments with `va_arg()`, which is the
@@ -47,6 +53,12 @@ pub const Lowering = struct {
     /// back end lowers. A target without it never reaches here: the front end
     /// rejects such boundaries, so this only has to agree with `Sema`.
     target_supports_c_abi: bool = true,
+    /// The bitfield reference of the last `field_ptr` `lowerLvalue` produced.
+    /// `lowerLvalue` returns only the pointer and a bitfield store needs the bit
+    /// position too; threading it through every lvalue call site would touch a
+    /// dozen places for one case. Valid only immediately after `lowerLvalue`,
+    /// which is how its two callers use it.
+    pending_bitfield: ?ir.BitfieldRef = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -368,6 +380,36 @@ pub const Lowering = struct {
     /// untouched upper byte bits into memory, and the C ABI requires the full
     /// byte to be defined for aggregate eightbytes (Clang's `_Bool` is a
     /// full `i8`).
+    /// A store to a location that may be a bitfield. `bitfield` is the reference
+    /// the `field_ptr` carried, so this is the only place that has to know a
+    /// write merges bits rather than overwriting storage.
+    fn emitFieldStore(self: *Lowering, ptr: ir.Value, value: ir.Value, ty: *types.Type, bitfield: ?ir.BitfieldRef) Error!void {
+        const ref = bitfield orelse return self.emitValueStore(.{ .ptr = ptr, .value = value, .ty = ty });
+        const unit = ref.unit;
+        const current = try self.reg(unit);
+        try self.emit(.{ .load = .{ .dst = current, .ptr = ptr, .ty = unit } });
+        // The value arrives as the field's own type; it has to be widened to the
+        // unit before the shift, and `bit_insert` masks it to the field width.
+        const widened = try self.reg(unit);
+        try self.emit(.{ .cast = .{
+            .dst = widened,
+            .kind = .zext,
+            .from = ty,
+            .to = unit,
+            .value = value,
+        } });
+        const merged = try self.reg(unit);
+        try self.emit(.{ .bit_insert = .{
+            .dst = merged,
+            .current = .{ .reg = current },
+            .value = .{ .reg = widened },
+            .unit = unit,
+            .bit_offset = ref.bit_offset,
+            .width = ref.width,
+        } });
+        try self.emit(.{ .store = .{ .ptr = ptr, .value = .{ .reg = merged }, .ty = unit } });
+    }
+
     fn emitValueStore(self: *Lowering, args: struct { ptr: ir.Value, value: ir.Value, ty: *types.Type }) Error!void {
         if (args.ty.* != .bool) {
             try self.emit(.{ .store = .{ .ptr = args.ptr, .value = args.value, .ty = args.ty } });
@@ -738,6 +780,7 @@ pub const Lowering = struct {
             .base = base,
             .struct_ty = info,
             .field = field_index,
+            .bitfield = bitfieldRefOf(info, field_index),
         } });
         return .{ .reg = pointer };
     }
@@ -1006,6 +1049,7 @@ pub const Lowering = struct {
                 }
                 const ptr = try self.lowerLvalue(expr);
                 const ty = expr.ty orelse return .none;
+                if (try self.loadBitfield(expr, ptr)) |value| break :blk value;
                 const dst = try self.reg(ty);
                 try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = ty } });
                 break :blk .{ .reg = dst };
@@ -1238,13 +1282,14 @@ pub const Lowering = struct {
         _ = expr;
         const target_ty = assign.target.ty orelse return .none;
         const ptr = try self.lowerLvalue(assign.target);
+        const bitfield = self.pendingBitfieldRef();
 
         if (assign.op == .assign) {
             if (target_ty.isAggregate() and isAggregateInitializer(assign.value)) {
                 try self.lowerAggregateInto(ptr, target_ty, assign.value);
             } else {
                 const value = try self.lowerExpr(assign.value);
-                try self.emitValueStore(.{ .ptr = ptr, .value = value, .ty = target_ty });
+                try self.emitFieldStore(ptr, value, target_ty, bitfield);
             }
             const dst = try self.reg(target_ty);
             try self.emit(.{ .load = .{ .dst = dst, .ptr = ptr, .ty = target_ty } });
@@ -1861,7 +1906,74 @@ pub const Lowering = struct {
         return .{ .reg = dst };
     }
 
+    /// The field a `field` expression names, when that field is a bitfield. The
+    /// lvalue path has already produced a GEP to the storage unit, so the read is
+    /// a load and a slice; returning null means "not a bitfield" and the caller
+    /// takes the ordinary load path.
+    fn loadBitfield(self: *Lowering, expr: *ast.Expr, ptr: ir.Value) Error!?ir.Value {
+        const field = switch (expr.kind) {
+            .field => |f| f,
+            else => return null,
+        };
+        const base_ty = field.base.ty orelse return null;
+        const struct_ty = if (base_ty.* == .pointer) base_ty.pointer.elem else base_ty;
+        if (struct_ty.* != .struct_type) return null;
+        const info = struct_ty.struct_type;
+        if (info.placed.len <= field.field_index) return null;
+        const placed = info.placed[field.field_index];
+        if (placed.bit_offset == 0 and !sema_mod.isBitfield(info.fields[field.field_index].ty)) return null;
+        const field_ty = info.fields[field.field_index].ty;
+        if (!sema_mod.isBitfield(field_ty)) return null;
+
+        const unit_ty = placed.storage_ty orelse return null;
+        const unit = try self.reg(unit_ty);
+        try self.emit(.{ .load = .{ .dst = unit, .ptr = ptr, .ty = unit_ty } });
+        // The slice happens in the unit's width, so the result carries the unit's
+        // type; narrowing it to the field's own type is what makes the rest of
+        // the expression see `u3` rather than `u8`.
+        const sliced = try self.reg(unit_ty);
+        try self.emit(.{ .bit_extract = .{
+            .dst = sliced,
+            .value = .{ .reg = unit },
+            .unit = unit_ty,
+            .bit_offset = placed.bit_offset,
+            .width = @intCast(field_ty.int.bits),
+            .signed = field_ty.int.signed,
+        } });
+        const wide = try self.reg(field_ty);
+        try self.emit(.{ .cast = .{
+            .dst = wide,
+            .kind = .trunc,
+            .from = unit_ty,
+            .to = field_ty,
+            .value = .{ .reg = sliced },
+        } });
+        return .{ .reg = wide };
+    }
+
+    /// The bit position of a field, when it is a bitfield. Kept next to the
+    /// `field_ptr` producers so both of them derive it the same way, from the one
+    /// place that computed it.
+    fn bitfieldRefOf(info: *types.StructInfo, field_index: u32) ?ir.BitfieldRef {
+        if (info.is_union) return null;
+        if (info.placed.len <= field_index) return null;
+        const placed = info.placed[field_index];
+        if (!sema_mod.isBitfield(info.fields[field_index].ty)) return null;
+        const field_ty = info.fields[field_index].ty;
+        return .{
+            .unit = placed.storage_ty.?,
+            .bit_offset = placed.bit_offset,
+            .width = @intCast(field_ty.int.bits),
+            .signed = field_ty.int.signed,
+        };
+    }
+
+    fn pendingBitfieldRef(self: *Lowering) ?ir.BitfieldRef {
+        return self.pending_bitfield;
+    }
+
     fn lowerLvalue(self: *Lowering, expr: *ast.Expr) Error!ir.Value {
+        self.pending_bitfield = null;
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 const sym = ident.sym orelse return .none;
@@ -1891,12 +2003,18 @@ pub const Lowering = struct {
                     if (base_ptr == .none) break :blk .none;
                 }
                 const dst = try self.reg(try self.makePointer(struct_ty, base_ty.* == .pointer and base_ty.pointer.is_const));
+                const bitfield_ref = bitfieldRefOf(struct_ty.struct_type, field.field_index);
                 try self.emit(.{ .field_ptr = .{
                     .dst = dst,
                     .base = base_ptr,
                     .struct_ty = struct_ty.struct_type,
                     .field = field.field_index,
+                    .bitfield = bitfield_ref,
                 } });
+                // Only a *direct* field lvalue can be a bitfield target; an index
+                // or a dereference produces no `field_ptr`, so the flag stays
+                // cleared and the ordinary store path is taken.
+                self.pending_bitfield = if (std.meta.activeTag(expr.kind) == .field) bitfield_ref else null;
                 break :blk .{ .reg = dst };
             },
             .index => |index| blk: {
@@ -1953,17 +2071,19 @@ pub const Lowering = struct {
                     const field_ty = info.fields[field.index].ty;
                     const field_ptr_ty = try self.makePointer(field_ty, false);
                     const dst = try self.reg(field_ptr_ty);
+                    const bitfield_ref = bitfieldRefOf(info, field.index);
                     try self.emit(.{ .field_ptr = .{
                         .dst = dst,
                         .base = dest,
                         .struct_ty = info,
                         .field = field.index,
+                        .bitfield = bitfield_ref,
                     } });
                     if (field_ty.isAggregate()) {
                         try self.lowerAggregateInto(.{ .reg = dst }, field_ty, field.value);
                     } else {
                         const value = try self.lowerExpr(field.value);
-                        try self.emitValueStore(.{ .ptr = .{ .reg = dst }, .value = value, .ty = field_ty });
+                        try self.emitFieldStore(.{ .reg = dst }, value, field_ty, bitfield_ref);
                     }
                 }
             },
@@ -2395,9 +2515,14 @@ pub const Emitter = struct {
             const open: []const u8 = if (info.is_packed) "type <{ " else "type { ";
             const close: []const u8 = if (info.is_packed) " }>" else " }";
             try writer.print("%struct.{s} = {s}", .{ structLlvmName(info), open });
-            for (info.fields, 0..) |field, i| {
+            // The emitted members are *units*, not source fields: a bitfield run
+            // is one integer and a gap is an explicit padding array, so LLVM's
+            // layout of this type reproduces the bit positions sema computed.
+            // Emitting one member per source field would give every bitfield its
+            // own byte and silently disagree with `aggregateLayoutGuess`.
+            for (info.emitted, 0..) |member, i| {
                 if (i > 0) try writer.writeAll(", ");
-                try self.emitType(writer, field.ty);
+                try self.emitType(writer, member);
             }
             if (info.fields.len == 0) try writer.writeAll("i8");
             try writer.print("{s}\n", .{close});
@@ -2683,6 +2808,52 @@ pub const Emitter = struct {
                 try self.emitValue(writer, offset.base, null);
                 try writer.print(", i64 {d}\n", .{offset.offset});
             },
+            .bit_extract => |extract| {
+                // Two shifts in the unit's own width put the field's low bit at
+                // bit 0 and its top bit at the unit's top, so the second shift
+                // decides the extension: `lshr` for `uN`, `ashr` for `iN`. Doing
+                // it in the unit width is what makes a 3-bit field of an 8-bit
+                // unit need no mask constant.
+                const unit_bits = unitBitWidth(extract.unit);
+                // Both shifts are computed from the *field* width, so a field
+                // that fills its whole unit gives shift_up = 0 rather than
+                // underflowing, and `i128` fields are as valid as `u3` ones.
+                const shift_down: u16 = unit_bits - extract.width;
+                // The field must lie inside its unit by construction; computing
+                // the shift this way makes a violation a visible trap instead of
+                // a silent wrap, which is how the 128-bit unit bug was found.
+                const shift_up: u16 = std.math.sub(u16, std.math.sub(u16, unit_bits, extract.width) catch unreachable, @intCast(extract.bit_offset)) catch unreachable;
+                const shifted = self.module.ephemeral();
+                try writer.print("  %t{d} = shl i{d} ", .{ shifted, unit_bits });
+                try self.emitValue(writer, extract.value, null);
+                try writer.print(", {d}\n", .{shift_up});
+                try writer.print("  %t{d} = {s} i{d} %t{d}, {d}\n", .{
+                    extract.dst,
+                    if (extract.signed) "ashr" else "lshr",
+                    unit_bits,
+                    shifted,
+                    shift_down,
+                });
+            },
+            .bit_insert => |insert| {
+                // `(current & ~mask) | ((value << offset) & mask)`: the only way to
+                // write one field without disturbing its neighbours in the unit.
+                // Spelled as separate instructions because LLVM's textual IR takes
+                // one operand pair per instruction.
+                const unit_bits = unitBitWidth(insert.unit);
+                const mask: u64 = bitMask(insert.width) << @intCast(insert.bit_offset);
+                const keep = self.module.ephemeral();
+                try writer.print("  %t{d} = and i{d} ", .{ keep, unit_bits });
+                try self.emitValue(writer, insert.current, null);
+                try writer.print(", {d}\n", .{(~mask) & bitMaskAll(unit_bits)});
+                const placed = self.module.ephemeral();
+                try writer.print("  %t{d} = shl i{d} ", .{ placed, unit_bits });
+                try self.emitValue(writer, insert.value, null);
+                try writer.print(", {d}\n", .{insert.bit_offset});
+                const masked = self.module.ephemeral();
+                try writer.print("  %t{d} = and i{d} %t{d}, {d}\n", .{ masked, unit_bits, placed, mask });
+                try writer.print("  %t{d} = or i{d} %t{d}, %t{d}\n", .{ insert.dst, unit_bits, keep, masked });
+            },
             .copy_bytes => |copy| {
                 try writer.writeAll("  call void @llvm.memcpy.p0.p0.i64(ptr ");
                 try self.emitValue(writer, copy.destination, null);
@@ -2737,9 +2908,15 @@ pub const Emitter = struct {
                 try writer.print("  %t{d} = getelementptr inbounds %struct.{s}, ptr ", .{ field.dst, structLlvmName(field.struct_ty) });
                 try self.emitValue(writer, field.base, null);
                 // Every union member lives in the single emitted member, so the
-                // declared index becomes 0 there. This is the one place that
-                // knows the representation, so no producer has to.
-                const index: u32 = if (field.struct_ty.is_union) 0 else field.field;
+                // declared index becomes 0 there, and a bitfield shares the unit
+                // its run collapsed into. This is the one place that knows the
+                // representation, so no producer has to.
+                const index: u32 = if (field.struct_ty.is_union)
+                    0
+                else if (field.struct_ty.placed.len > field.field)
+                    field.struct_ty.placed[field.field].emitted_index
+                else
+                    field.field;
                 try writer.print(", i32 0, i32 {d}\n", .{index});
             },
             .elem_ptr => |element| {
@@ -2826,7 +3003,7 @@ pub const Emitter = struct {
     }
 
     // The label needs a formatted index; handled by a small buffer.
-    fn emitConstant(self: *Emitter, writer: *std.Io.Writer, constant: ir.Constant, ty: *types.Type) !void {
+    fn emitConstant(self: *Emitter, writer: *std.Io.Writer, constant: ir.Constant, ty: *types.Type) ConstantError!void {
         switch (constant) {
             .scalar => |value| try self.emitValue(writer, value, ty),
             .array => |elements| {
@@ -2841,17 +3018,63 @@ pub const Emitter = struct {
                 try writer.writeAll("]");
             },
             .struct_fields => |fields| {
+                // Keyed by the *emitted* member, because that is the LLVM type:
+                // a bitfield's value goes into its run's unit (shifted and
+                // masked) and a padding member is zeros. Indexing `fields` by
+                // declaration would emit the wrong number of initializers the
+                // moment a run collapsed two fields into one unit.
                 const info = ty.struct_type;
                 try writer.writeAll("{ ");
-                for (fields, 0..) |field, i| {
+                for (info.emitted, 0..) |member, i| {
                     if (i > 0) try writer.writeAll(", ");
-                    try self.emitType(writer, info.fields[i].ty);
+                    try self.emitType(writer, member);
                     try writer.writeByte(' ');
-                    try self.emitConstant(writer, field, info.fields[i].ty);
+                    try self.emitEmittedMemberConstant(writer, info, fields, i);
                 }
                 try writer.writeAll(" }");
             },
         }
+    }
+
+    /// The initializer for one *emitted* member of an aggregate. Ordinarily this
+    /// is the declared field's own constant; for a bitfield run it is the unit
+    /// with every field of that run shifted and masked into place.
+    fn emitEmittedMemberConstant(
+        self: *Emitter,
+        writer: *std.Io.Writer,
+        info: *types.StructInfo,
+        fields: []ir.Constant,
+        emitted_index: usize,
+    ) ConstantError!void {
+        var unit: u64 = 0;
+        var any_bitfield = false;
+        for (info.fields, 0..) |field, i| {
+            if (i >= info.placed.len) break;
+            const placed = info.placed[i];
+            if (placed.emitted_index != emitted_index) continue;
+            if (!sema_mod.isBitfield(field.ty)) {
+                // The member is this very field: emit it directly.
+                try self.emitConstant(writer, fields[i], field.ty);
+                return;
+            }
+            any_bitfield = true;
+            const value: u64 = switch (fields[i]) {
+                .scalar => |v| switch (v) {
+                    .int => |bits| @bitCast(@as(i64, @truncate(bits))),
+                    else => 0,
+                },
+                else => 0,
+            };
+            const width: u6 = @intCast(field.ty.int.bits);
+            const mask: u64 = if (width >= 64) std.math.maxInt(u64) else (@as(u64, 1) << width) - 1;
+            unit |= (value & mask) << @intCast(placed.bit_offset);
+        }
+        if (any_bitfield) {
+            try writer.print("{d}", .{unit});
+            return;
+        }
+        // A padding member, or a member with no initializer of its own.
+        try writer.writeAll("zeroinitializer");
     }
 
     fn emitFloatValue(
@@ -2968,6 +3191,23 @@ pub const Emitter = struct {
             .abi_vec2_f32, .abi_v2f32_f32, .abi_v2f32_v2f32 => 4,
             else => 8,
         };
+    }
+
+    fn unitBitWidth(ty: *types.Type) u16 {
+        return switch (ty.*) {
+            .int => |info| info.bits,
+            else => 8,
+        };
+    }
+
+    fn bitMask(width: u16) u64 {
+        if (width >= 64) return std.math.maxInt(u64);
+        return (@as(u64, 1) << @intCast(width)) - 1;
+    }
+
+    fn bitMaskAll(unit_bits: u16) u64 {
+        if (unit_bits >= 64) return std.math.maxInt(u64);
+        return (@as(u64, 1) << @intCast(unit_bits)) - 1;
     }
 
     fn typeString(self: *Emitter, ty: *types.Type) ![]const u8 {
@@ -3289,6 +3529,65 @@ test "lowering declares a variadic extern and passes promoted arguments" {
     // No half-width or half-filled argument survives to the call site.
     try testing.expect(std.mem.indexOf(u8, ll, "call i32 @printf(ptr %t0, i1 ") == null);
     try testing.expect(std.mem.indexOf(u8, ll, ", float ") == null);
+}
+
+test "bitfields collapse into one storage unit and read/write through masks" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const text =
+        \\struct Wire { kind: u3, tag: u5 }
+        \\struct Three { a: u3, b: u5, c: u12 }
+        \\fn main() i32 {
+        \\    var w: Wire = Wire { kind: 5, tag: 21 };
+        \\    w.tag = 3;
+        \\    return (w.kind as i32) + (w.tag as i32);
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // 3 + 5 bits fit one 8-bit unit, so the two declarations are one member.
+    // Emitting `{ i3, i5 }` would give each field its own byte.
+    try testing.expect(std.mem.indexOf(u8, ll, "%struct.__kyn_s_m0_Wire = type { i8 }") != null);
+    // The second field is at bit 3, so its mask is 0b00000111 shifted by 3.
+    try testing.expect(std.mem.indexOf(u8, ll, "and i8 %t") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, ", 248") != null);
+    // A read shifts the field down and narrows; a write merges with `or`.
+    try testing.expect(std.mem.indexOf(u8, ll, "lshr i8") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "or i8") != null);
+    // A bitfield has no storage of its own, so no store or load may name its
+    // width. The value still passes through `i3` in casts, which is the field's
+    // own type and is what makes `w.kind + 1` mean what it says.
+    try testing.expect(std.mem.indexOf(u8, ll, "store i3") == null);
+    try testing.expect(std.mem.indexOf(u8, ll, "load i3") == null);
+    try testing.expect(std.mem.indexOf(u8, ll, "store i8") != null);
 }
 
 test "a union is emitted as one member and a packed struct as <{ }>" {

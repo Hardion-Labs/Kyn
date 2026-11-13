@@ -129,6 +129,17 @@ pub const CastKind = enum {
     bool_to_float,
 };
 
+/// A store through a bitfield `field_ptr` names this rather than the field, so
+/// the write merges bits into the storage unit instead of overwriting it.
+pub const BitfieldRef = struct {
+    /// The unit's integer type, as emitted.
+    unit: *types.Type,
+    bit_offset: u32,
+    /// The field's own width and signedness, for the narrowing cast.
+    width: u16,
+    signed: bool,
+};
+
 pub const Inst = union(enum) {
     checked_binary: struct {
         dst: u32,
@@ -171,6 +182,31 @@ pub const Inst = union(enum) {
         from: *Type,
         to: *Type,
         value: Value,
+    },
+    /// Reads `width` bits at `bit_offset` from an integer storage unit, zero- or
+    /// sign-extending to the destination integer type. `value` is the loaded
+    /// unit, so a bitfield read is one load plus this instruction.
+    bit_extract: struct {
+        dst: u32,
+        value: Value,
+        unit: *Type,
+        bit_offset: u32,
+        width: u16,
+        signed: bool,
+    },
+    /// Returns `unit` with `width` bits at `bit_offset` replaced by the low bits
+    /// of `value`; every other bit of the unit is preserved. A bitfield write is
+    /// one load, this instruction and one store, which is what keeps the
+    /// neighbouring fields intact.
+    bit_insert: struct {
+        dst: u32,
+        /// The unit's current contents, whose unrelated bits are preserved.
+        current: Value,
+        /// The new field value, already narrowed/zero-extended to `unit`.
+        value: Value,
+        unit: *Type,
+        bit_offset: u32,
+        width: u16,
     },
     byte_offset: struct {
         dst: u32,
@@ -216,6 +252,11 @@ pub const Inst = union(enum) {
         dst: u32,
         base: Value,
         struct_ty: *types.StructInfo,
+        /// Non-null when the field is a bitfield: the pointer names the storage
+        /// unit and a store through it must merge the bits rather than overwrite
+        /// the unit. Carried here because this is the instruction that resolves a
+        /// field to its storage, so it is also the one that knows the offset.
+        bitfield: ?BitfieldRef = null,
         /// The field's index in the declaration, which is what field lookup and
         /// diagnostics use. A union is emitted as a struct with a single member,
         /// so the emitted index is 0 for every member; the emitter resolves that

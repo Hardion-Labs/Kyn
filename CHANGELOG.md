@@ -6,11 +6,27 @@ promised between alpha releases.
 
 ## [Unreleased]
 
-Exported globals, the callee side of variadics, unions and packed structs, and
-three representation fixes (two constants and the signed-division minimum).
+Exported globals, the callee side of variadics, the three aggregate extensions
+(unions, packed structs, bitfields), and three representation fixes (two
+constants and the signed-division minimum).
 
 ### Added
 
+- Integer types may now have any width from 1 to 128, written `u1`..`u128` and
+  `i1`..`i128`, and an adjacent run of such fields packs into one storage unit
+  instead of one byte each: `struct Wire { kind: u3, tag: u5 }` is one byte,
+  `w.kind` is a real `u3` and `w.tag = 3` leaves `w.kind` untouched. The layout is
+  a deterministic documented rule — a unit of 1, 2, 4 or 8 bytes and no field
+  straddling a boundary of its own unit width, which is why `{a: u3, b: u5, c:
+  u12}` puts `c` at bit 16 rather than bit 8. Reads zero-extend for `uN` and
+  sign-extend for `iN`; writes mask and merge. A union member cannot be a bitfield
+  (`E0487`); a width of 0 or above 128 is `E0486`; a layout whose unit would
+  overlap bytes already emitted is refused with `E0489` rather than emitted in a
+  form that disagrees with it. The C-compatible subset is narrow and stated in
+  `abi.md` §11 — widths summing to at most 8 bits with no non-bitfield member —
+  because C's `unsigned a:3` uses a 4-byte unit where a bare width uses a 1-byte
+  one, so a wider run agrees on size without agreeing on contents. `align(N)`
+  remains unimplemented.
 - Aggregates may now overlap and be unaligned. `union Value { integer: i64,
   real: f64 }` puts every member at offset 0 and takes its size and alignment
   from the largest, so `Value { real: 1.5 }` initializes one member and

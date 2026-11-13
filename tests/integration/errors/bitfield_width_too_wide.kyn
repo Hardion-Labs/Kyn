@@ -1,0 +1,4 @@
+// The backend's widest integer instruction is 128 bits, so a wider type would
+// silently reach instructions that only handle 128.
+struct Huge { a: u200 }
+fn main() i32 { return 0; }
