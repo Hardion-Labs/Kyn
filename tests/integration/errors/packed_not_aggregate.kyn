@@ -1,0 +1,4 @@
+// `packed` is a modifier, so it takes its meaning from the aggregate keyword
+// that follows it. Attached to anything else there is nothing to pack.
+packed enum Color: u8 { Red }
+fn main() i32 { return 0; }

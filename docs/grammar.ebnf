@@ -16,7 +16,7 @@ program        = { import_decl | declaration } , end_of_file ;
 import_decl    = "import" , string_literal , [ "as" , identifier ] , ";" ;
 
 declaration    = [ "private" ] ,
-                 ( function_decl | extern_decl | export_decl | struct_decl
+                 ( function_decl | extern_decl | export_decl | aggregate_decl
                  | enum_decl | global_var | export_global ) ;
 
 (* Functions *)
@@ -36,9 +36,10 @@ parameter_list = parameter , { "," , parameter } ;
 
 parameter      = identifier , ":" , type ;
 
-(* Structs and enums *)
+(* Aggregates and enums *)
 
-struct_decl    = "struct" , identifier , "{" , [ field_list ] , "}" ;
+aggregate_decl = [ "packed" ] , ( "struct" | "union" ) , identifier ,
+                 "{" , [ field_list ] , "}" ;
 
 field_list     = field , { "," , field } , [ "," ] ;
 

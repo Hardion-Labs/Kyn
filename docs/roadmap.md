@@ -135,13 +135,22 @@ is selected. Milestones below are directions, not release promises.
 
 ## Next direction
 
-- Unions, bitfields and packed structs now have a **written design**
+- **Unions and packed structs are implemented.** A `union` overlaps its members
+  (every one at offset 0, size and alignment from the largest) and has no tag, so
+  the program owns which member is live; `packed struct`/`packed union` removes
+  padding and sets alignment 1. Both cross the C ABI as measured against clang —
+  a union classifies as the struct of its members, and a packed aggregate goes by
+  memory even when small — with fixtures that call Kyn from C in both directions
+  and one that reads the layout back through Kyn's own field access. Bitfields
+  and `align(N)` remain unimplemented; the design that covers them is below.
+- Unions, bitfields and packed structs have a **written design**
   ([design-unions-bitfields-packed.md](design-unions-bitfields-packed.md)): the
   layout and ABI of each were measured with the project toolchain before it was
   written, `packed` forces the memory class, a union classifies as the struct of
   its members, bitfield widths live in the type (`u3`) rather than in a colon
-  syntax, and `align(N)` is deliberately excluded. It is not implemented; the
-  plan and the C-compatible bitfield subset are in the document.
+  syntax, and `align(N)` is deliberately excluded. The union and packed halves
+  are implemented; the bitfield half is not, and the plan plus the C-compatible
+  bitfield subset are in the document.
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
 - First-class function values and indirect calls are implemented: `fn(P) R`
   names a signature, a function name decays to a value in value position, the

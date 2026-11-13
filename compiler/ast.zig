@@ -86,6 +86,13 @@ pub const StructDecl = struct {
     span: Span,
     name: []const u8,
     fields: []StructField,
+    /// A `union`: every member starts at offset 0 and the size is the largest
+    /// member's, so only one is live at a time. The program owns that choice;
+    /// there is no tag.
+    is_union: bool = false,
+    /// A `packed struct`/`packed union`: no padding between members and an
+    /// alignment of 1, which is what makes it cross the C ABI by memory.
+    is_packed: bool = false,
     ty: ?*Type = null,
     sym: ?*symbol.Symbol = null,
 };

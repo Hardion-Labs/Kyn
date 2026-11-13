@@ -1,0 +1,25 @@
+// An aggregate initializer may take any expression of the aggregate's type, not
+// only a literal: a variable, an element, or a value read through a pointer. The
+// copy is byte-wise, the same move the C ABI uses for a by-memory aggregate, so a
+// union, a nested struct and an array element all behave alike.
+//
+// Expected exit is 20: four checks worth five each.
+struct Inner { a: i32, b: i32 }
+union U { inner: Inner, whole: i64 }
+struct Wrap { inner: Inner, arr: [2]i32 }
+
+fn main() i32 {
+    var inner: Inner = Inner { a: 3, b: 4 };
+    var w: Wrap = Wrap { inner: inner, arr: [5, 6] };
+    var u: U = U { inner: inner };
+    var p: *Inner = &inner;
+    var from_ptr: Inner = Inner { a: p->a, b: p->b };
+    var second: Inner = Inner { a: w.arr[1], b: w.arr[0] };
+
+    var score: i32 = 0;
+    if (w.inner.b == 4) { score += 5; }
+    if (u.inner.a == 3) { score += 5; }
+    if (from_ptr.a == 3 && from_ptr.b == 4) { score += 5; }
+    if (second.a == 6 && second.b == 5) { score += 5; }
+    return score;
+}

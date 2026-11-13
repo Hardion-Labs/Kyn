@@ -538,12 +538,33 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
   supported by the selected target/classifier (including a struct whose only
   field is a slice and singleton `enum` members with 1-bit backings)
   (`E0473`);
-- unions, bitfields, packed structs and explicit alignment — designed but not
-  implemented: see
+- bitfields and explicit alignment — designed but not implemented: see
   [the aggregate-extensions design](design-unions-bitfields-packed.md), which
-  measures the layout and the ABI shape of each and orders the work;
+  measures the layout and the ABI shape of each and orders the work. Unions and
+  packed structs are implemented; see §10;
 - calling conventions other than `x86_64` Linux System V;
 - linking against Kyn-specific runtime support (there is none yet).
 
 These restrictions are diagnosed where the type checker can see them, rather
 than producing a silently incompatible ABI.
+
+## 10. Unions and packed structs at the boundary
+
+Both follow from one measured fact: **clang classifies a union exactly as the
+struct formed by its members, and a packed aggregate always by memory.**
+
+- **A union** has the size of its largest member and the alignment of its most
+  aligned one, with every member at offset 0. It therefore travels in the same
+  class the equivalent struct would: measured, `union { char c; int i; double d; }`
+  is 8 bytes and arrives in one `i64`, `union { char c; }` in an `i8`, and
+  `union { double d[3]; }` by `sret`/`byval`. Kyn emits it as a struct holding its
+  most aligned member — LLVM has no union type — and every member access uses
+  that member's index, so the emitted IR is valid for both names.
+- **A packed struct or union** is `size = sum of members`, `align = 1`, and it
+  crosses the boundary by memory **even when it is small**. Measured: a 5-byte
+  packed `{ char c; int i; }` is passed with `byval`/`sret` where the unpacked
+  8-byte form travels in one `i64`. The emitted definition uses the packed
+  `<{ ... }>` form, without which LLVM would re-insert the padding the source
+  removed.
+- Reading a union member other than the live one is undefined behaviour, as in
+  C; the language has no tag and does not claim to check it.

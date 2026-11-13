@@ -146,6 +146,11 @@ compile time:
 - uninitialized reads that the conservative analysis cannot prove;
 - data races;
 - invalid pointer provenance after integer casts;
+- reading a union member that is not the live one. A union's members overlap, so
+  reading a different member reinterprets the same storage; the language has no
+  tag and does not claim to track which member was written last. This is the one
+  place Kyn knowingly permits a reinterpretation, and it is the same trust an
+  `extern` call already implies.
 - reading past the arguments a caller actually passed to a variadic function.
   `va_arg()` advances the same cursor C does, and neither language can know how
   many arguments arrived: the count is a convention (`printf`'s format string,

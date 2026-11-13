@@ -6,10 +6,28 @@ promised between alpha releases.
 
 ## [Unreleased]
 
-Exported globals, the callee side of variadics, and three representation fixes
-(two constants and the signed-division minimum).
+Exported globals, the callee side of variadics, unions and packed structs, and
+three representation fixes (two constants and the signed-division minimum).
 
 ### Added
+
+- Aggregates may now overlap and be unaligned. `union Value { integer: i64,
+  real: f64 }` puts every member at offset 0 and takes its size and alignment
+  from the largest, so `Value { real: 1.5 }` initializes one member and
+  `v.integer = 7` reinterprets the same storage; an initializer must name
+  exactly one member (`E0485`), and there is deliberately no tag — the program
+  owns which member is live, as in C. `packed struct Packet { kind: u8, length:
+  u32 }` removes the padding and sets alignment 1, so the struct is 5 bytes with
+  `length` at offset 1; `packed` before anything but an aggregate is `E0484`.
+  Both are laid out and cross the C ABI as measured against clang: a union
+  classifies exactly as the struct of its members (8-byte `{char,int,double}` in
+  one `i64`, 24-byte `{double[3]}` by `sret`/`byval`), and a packed aggregate
+  goes by memory even when small, which is why it is emitted with the LLVM
+  packed `<{ ... }>` form. Fixtures `cabi_union_packed` (C calls Kyn with and
+  receives from Kyn a union, a packed struct and a nested union) and
+  `cabi_union_packed_layout` (offsets read back through Kyn's own field access).
+  Bitfields and `align(N)` are not implemented; the design covering them is in
+  `docs/design-unions-bitfields-packed.md`.
 
 - A Kyn function may now receive a C variadic argument list. `export fn` takes
   `...` after at least one fixed parameter, and the trailing arguments are read
@@ -60,6 +78,13 @@ Exported globals, the callee side of variadics, and three representation fixes
   them through.
 
 ### Fixed
+- An aggregate initializer now accepts any expression of the aggregate's own
+  type, not only a literal. `Wrap { inner: i }` where `i` is an `Inner` variable,
+  and `Wrap { arr: a }` where `a` is an array, previously failed with an
+  "internal: expected an aggregate initializer" error at lowering time — a
+  pre-existing defect, independent of unions, that the union work made easy to
+  reach. The value is copied byte-wise, the same move the C ABI uses for a
+  by-memory aggregate, so there is no second representation to keep in step.
 - Signed division by a type whose minimum has no positive counterpart no longer
   breaks compilation. Lowering the `INT_MIN / -1` guard computed the minimum as
   `-(1 << (bits - 1))`, which overflows for `i128` and made the **compiler**

@@ -1,7 +1,13 @@
 # Design: unions, bitfields and packed structs
 
-Status: **design, not implemented.** This document decides the three aggregate
-extensions `abi.md` §9 lists as unsupported, in the order they should be built.
+Status: **partly implemented (§55).** Unions and packed structs are implemented
+end to end (steps 1–4 of §10 for those two, with their fixtures); bitfields are
+not, because their storage-unit packing is the one genuinely new algorithm here
+and it needs the `uN`/`iN` width types first. §10 of this document records what
+landed and what remains.
+
+This document decides the three aggregate extensions `abi.md` §9 lists as
+unsupported, in the order they should be built.
 Each one lands in the same four places — parser, type model, layout/classifier,
 backend — so deciding them together is cheaper than three designs that discover
 the same constraints.
@@ -370,6 +376,38 @@ has followed.
    `language-reference.md` §3.3/§3.4 gain the union, the bitfield width types and
    the `packed` modifier; `diagnostics.md` gains `E0481`–`E0484`; `roadmap.md`,
    `README.md` and `CHANGELOG.md` record the change.
+
+### What landed in §55
+
+- **Step 1 (type model):** `StructInfo.is_union` / `is_packed`, the union branch
+  of `aggregateLayoutGuess` (max size/align, members overlapping at 0) and the
+  packed branch (no per-member alignment, alignment 1). Unit tests pin the
+  measured numbers.
+- **Step 2 (parser + resolver):** `union` and the `packed` modifier, `E0484` for
+  a `packed` that is not followed by an aggregate, `E0485` for a union
+  initializer that does not name exactly one member, and the `E0403`/`E0404`
+  messages now say "union" when the aggregate is one. `E0481` was **not**
+  needed: the existing `E0403` "contains itself by value" check already covers
+  a union, because it walks the same field list, so allocating a second code
+  would have added a synonym — the diagnostic names the union instead.
+- **Step 3 (leaf walk + classifier):** union members are walked at the base
+  offset, and a packed aggregate is forced to `.memory`. Unit tests assert the
+  class of each measured shape against clang's answer.
+- **Step 4 (backend):** packed definitions are emitted as `<{ ... }>`; a union is
+  emitted as a struct holding its most aligned member, and `field_ptr` maps every
+  union member to index 0 **in the emitter**, so no producer has to know the
+  representation. `sizeInBytes` now delegates to `aggregateLayoutGuess` instead of
+  re-deriving struct/array layout — two copies of the union and packed rules
+  would have been a correctness hazard, and this removes the second copy.
+- **Step 5 (tests):** `cabi_union_packed` (C calls Kyn with and receives from
+  Kyn a union by value, a packed struct by value, and a union nested in a
+  struct; exit 255) and `cabi_union_packed_layout` (the layout is read back
+  through Kyn's own field access and compared against C's offsets at bytes 1 and
+  4 of a packed struct and byte 8 of a nested union; exit 15), plus three error
+  fixtures and five unit tests.
+- **Not landed:** bitfields (the storage-unit rule of §4.1, `uN`/`iN` width
+  types, `E0482`/`E0483`) and `align(N)`. `E0481`–`E0483` remain unallocated in
+  `diagnostics.md` because no program can reach them yet.
 
 ## 11. How this document was checked before being published
 

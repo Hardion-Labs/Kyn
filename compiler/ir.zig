@@ -216,6 +216,10 @@ pub const Inst = union(enum) {
         dst: u32,
         base: Value,
         struct_ty: *types.StructInfo,
+        /// The field's index in the declaration, which is what field lookup and
+        /// diagnostics use. A union is emitted as a struct with a single member,
+        /// so the emitted index is 0 for every member; the emitter resolves that
+        /// from `struct_ty.is_union` instead of every producer remembering it.
         field: u32,
     },
     elem_ptr: struct {
