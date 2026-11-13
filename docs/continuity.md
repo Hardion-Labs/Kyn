@@ -2444,3 +2444,12 @@ assumed feature.
 - Contract kept: no test was modified to pass; the doc lines that were wrong
   about shipped features were corrected to match the compiler, not the compiler
   to match the doc.
+- Git, final for this increment: implementation commit `4469484` and record
+  `6d990bc` on `arena/9aa72244-kyn`, pushed before the turn ended; PR #43 → CI
+  green → merged as **`fe9c964`**; `main` re-validated in a fresh clone of
+  `fe9c964` (102/102 unit, 198/0 integration).
+- The differential-sweep method used here was inexpensive and found three
+  defects in a table that had been read but never exercised, so the two
+  remaining documented tables are the cheapest next targets: the operator table
+  in §5.1 against real precedence and associativity, and the local-declaration
+  rules in §4.1.
