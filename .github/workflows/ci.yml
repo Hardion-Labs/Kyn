@@ -61,7 +61,9 @@ jobs:
             done
             # The failing fixture's own diagnostics land on the lines after the
             # `FAIL`, which is where a compile or link error states its reason.
-            printf '%s\n' "$output" | grep -vE '^  ok ' | tail -n 40 | while IFS= read -r line; do
+            # A failing case prints its reason indented under `FAIL`, so those
+            # lines are the ones worth surfacing.
+            printf '%s\n' "$output" | grep -E '^       ' | tail -n 30 | while IFS= read -r line; do
               printf '::error::%s\n' "$line"
             done
           fi
