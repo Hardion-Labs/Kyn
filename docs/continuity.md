@@ -20,12 +20,17 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§50):** the remaining documented
-  tables were swept against the real compiler — the slice half of the cast
-  table, the constant-expression rules, and the safety model's static checks
-  (`E0501`/`E0502`/`E0503`/`E0504`/`E0505`/`E0506`, `W0501`, `W0502`). All behave
-  as documented; the one defect was documentation: §3.5 named `E0419` where the
-  compiler emits `E0412`.
+- **Unreleased work on the current branch (§51):** the callee side of variadics
+  now has a written design (`docs/design-callee-variadics.md`) — not
+  implemented. It decides `export fn` may be variadic, `va_arg()` takes its type
+  from context, `va_start`/`va_end` are implicit, and it records the measured
+  `x86_64` System V representation plus a hand-assembled prototype that executed
+  against C before any compiler code exists.
+- **Merged (`db81d81` .. `e5520ee`, §50):** the remaining documented tables were
+  swept against the real compiler — the slice half of the cast table, the
+  constant-expression rules, and the safety model's static checks
+  (`E0501`–`E0506`, `W0501`, `W0502`). All behave as documented; the one defect
+  was documentation: §3.5 named `E0419` where the compiler emits `E0412`.
 - **Merged (`961ccbc` .. `5e0bdaa`, §49):** folded constant integers now lower
   with their real signedness, so literal `-` no longer traps where the
   named-variable form works, and a shift by a constant no longer traps always;
@@ -2663,3 +2668,119 @@ assumed feature.
   than look for another table; the two candidates are below. If a future session
   finds itself looking for a fifth table, that is the signal that the remaining
   work is the design work, not more sweeping.
+
+## 51. Design for the callee side of variadics (on `arena/0eb15e2d-kyn`)
+
+- Base: `main` at `e5520ee`; `v0.1.0-alpha.5` remains the published baseline.
+  §50 closed with the instruction that the next increment should **write a
+  design rather than look for another table**, and named two candidates. This is
+  the first: receiving a C variable argument list.
+- **What this increment is, and is not.** It is a specification:
+  `docs/design-callee-variadics.md`. It is **not** an implementation, and
+  nothing in the record claims otherwise. No compiler source file changed, which
+  is why the unit and integration counts are unchanged (109/109, 199/0) — the
+  only gates that could move are the documentation ones, and the links count
+  moved from 21 to 22 with the new document.
+- **Measure first, in the style §39 established.** The design rests on
+  measurements taken on this repository's toolchain before any design text was
+  written, because the whole shape of the feature depends on them:
+  - `va_list` on this target is `[1 x %struct.__va_list_tag]` with
+    `%struct.__va_list_tag = { i32, i32, ptr, ptr }` (24 bytes, 8-byte aligned),
+    and the `llvm.va_start.p0`/`llvm.va_end.p0` intrinsics take a **pointer to
+    it**, which is why the entry allocation is the array and not the tag;
+  - `va_arg ptr %ap, <ty>` is a first-class instruction in this LLVM, so the
+    older `llvm.va_arg` intrinsic (which was removed) is not needed and must not
+    be emitted;
+  - a prototype of the exact IR shape the design specifies was hand-written,
+    assembled, linked against C and **executed**: three `i32` arguments → 42,
+    **zero** arguments → 0, negative arguments correct, and a mixed `i32` then
+    `f64` retrieval → 42.5 exact, which exercises both the general-purpose and
+    the SSE register save areas.
+  This is the same discipline as §39's `-target` experiment: the design does not
+  assume the ABI, it reports what the target does.
+- **The three questions the design had to answer**, none of which the language
+  settled before:
+  1. *What type is a retrieved argument?* Chosen: **`va_arg()` takes its type
+     from context**, like an integer literal or a `null`. Two alternatives were
+     considered and rejected in writing — turbofish (`va_arg::<i32>()`, which
+     would add generic syntax for one builtin) and one builtin per type
+     (`va_arg_i32()`, …), which is duplication of the type system in the
+     standard surface. The chosen form needs **no new type-system machinery**,
+     because the checker already has an expected type in every position where
+     retrieval is meaningful; a `va_arg()` with no expected type is rejected
+     rather than defaulted, because guessing `i32` would silently misread a
+     `double`.
+  2. *What is the state it advances?* Chosen: **no user-visible `va_list`.**
+     `va_start`/`va_end` are implicit, emitted at entry and before each `return`
+     (and on the trap path), so the programmer cannot mis-pair them and no
+     ownership rule is invented for a type that exists nowhere else. The cost is
+     stated in the design: a variadic body cannot forward its list, which is a
+     separate later feature.
+  3. *Which functions may be variadic?* Chosen: **`export` and `extern` only.**
+     The current rule rejects every body, on the recorded ground that a Kyn
+     function "has a fixed signature"; that ground disappears once a body can
+     read the list. `E0474` is therefore **narrowed**, not relaxed: an internal
+     `fn` stays rejected because all its callers are Kyn and could pass a fixed
+     list, so its variadic tail would be provably never used.
+- **A consequence that had to be designed, not discovered later.** The caller
+  side already promotes `i8`/`i16`/`bool`/`enum` → `i32`, `u8`/`u16` → `u32`,
+  `f32` → `f64`, `char` → `u32`. A callee retrieving `i8` would read the right
+  bytes with the wrong width, so the retrieval types are restricted to the
+  promoted ones and a narrow request is `E0479` with the promoted type named in
+  the message. That rule is derived from `sema.promoteVariadic`, which was read
+  in place rather than restated from memory.
+- **Diagnostics allocated:** `E0478` (no concrete scalar type from context),
+  `E0479` (retrieval type is not a promoted width), `E0480` (`va_arg` outside a
+  variadic function), and the narrowed `E0474`. All three new codes were checked
+  to be **unused** in the compiler and undocumented before being assigned, so
+  none collides. `va_arg` was also verified to be an ordinary identifier today
+  (a bare `va_arg()` currently reports `E0427 unknown identifier`), so the
+  parser needs no new token.
+- **Every factual claim in the document was verified against the code before the
+  document was committed**, since a design that misstates the present is worse
+  than none: `E0474` really does fire for `export` with a body today; `va_arg`
+  is not reserved; `E0478`–`E0480` are free; a non-System V target still rejects
+  an aggregate boundary with `E0473` while `x86_64` accepts the same program.
+- **Scope deliberately excluded**, each with a reason in the document: a
+  `va_list` parameter type and `v`-style forwarding, `va_copy`, retrieving an
+  aggregate by value, and `va_arg` on non-System V targets (where `va_list` may
+  not be the measured struct — the design requires gating by target rather than
+  emitting the wrong shape, mirroring how aggregate boundaries are gated).
+- **Honesty about what stays unchecked**, recorded for `safety-model.md` §3:
+  arity and the retrieval type are not checked, cannot be checked from the
+  callee side, and stay undefined exactly as in C. The language supplies the
+  mechanism and the programmer owns the protocol — the same position it already
+  takes on pointer provenance.
+- Files changed: `docs/design-callee-variadics.md` (new, 10 sections including
+  the implementation plan), `docs/abi.md` (the "`export` is likewise rejected"
+  paragraph now says why, and points at the design), `docs/roadmap.md`,
+  `README.md` (documentation table row). No compiler source file was touched.
+- Validation: `zig build` OK; `zig build test` **109/109** and integration
+  **199/0** in Debug and ReleaseSafe, both unchanged and expected to be — a
+  documentation increment cannot move them, and running them is how that claim
+  is checked rather than assumed; `zig fmt --check` clean; docs links **22**
+  (21 → 22 with the new document); documented codes 130 (unchanged; the three
+  new codes are allocated in the design, not yet emitted, so they are not added
+  to `diagnostics.md` yet); versions consistent at `0.1.0-alpha.5`.
+- **The hand-assembled prototype is not in the repository.** It was a scratch
+  measurement in `/tmp`, deliberately not committed: it is not a test, it does
+  not run in CI, and committing IR that no build produces would suggest
+  coverage that does not exist. The design records its exact results so the
+  measurement can be repeated, and step 5 of the plan replaces it with a real
+  fixture once the compiler emits the IR itself.
+- Limitations: this is a design with no implementation, so nothing here is
+  usable from Kyn source today. The measurements cover `x86_64` Linux only,
+  which is the only target the existing aggregate ABI supports. The design does
+  not specify `va_arg` for a target whose `va_list` differs; it requires one to
+  be gated, which is a constraint on future work rather than a decision about
+  it. No sanitizer gate exists in this repo.
+- Next task: **implement the design**, in the order of its §10 — AST builtin
+  expression, checker diagnostics, IR instruction set, backend emission, then
+  the C-interop fixture that C calls with three / zero / negative / `f64`
+  arguments. The second candidate, unions/bitfields/packed structs, remains
+  undesigned and is the natural follow-on once this one is code.
+- Contract kept: no test was modified; no compiler behaviour was changed to fit
+  the document; every claim about current behaviour in the document was checked
+  against the compiler rather than inferred from the older prose, and one piece
+  of older prose (`abi.md`'s flat "`export` is likewise rejected") was corrected
+  to say *why* it is rejected today and where the design goes.

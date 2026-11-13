@@ -18,6 +18,11 @@ is selected. Milestones below are directions, not release promises.
   arithmetic no longer traps where the named-variable form works; and the
   duplicate `E0216`/`E0420` check is deduplicated in favour of the documented
   `E0420`. Both came from sweeping the tables in §5.1 and §4.1.
+- The callee side of variadics now has a **written design**
+  ([design-callee-variadics.md](design-callee-variadics.md)): `export fn` may be
+  variadic, `va_arg()` takes its type from context, `va_start`/`va_end` are
+  implicit, and the ABI was measured and executed by hand before any compiler
+  code was written. It is not implemented; the plan is at the end of the design.
 - The slice half of the cast table (§5.7), the constant-expression rules (§3.5)
   and the safety model's static checks (`E0501`–`E0506`, `W0501`, `W0502`) were
   swept against the real compiler and all behave as documented; one wrong
