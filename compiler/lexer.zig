@@ -79,7 +79,10 @@ pub const Lexer = struct {
                 '%' => try self.twoOrOne(.percent, .percent_equal, start, '='),
                 '^' => try self.twoOrOne(.caret, .caret_equal, start, '='),
                 '!' => try self.twoOrOne(.bang, .bang_equal, start, '='),
-                '=' => try self.twoOrOne(.equal, .equal_equal, start, '='),
+                // `=>` opens a match arm. It shares its first byte with `=` and
+                // `==`, so it is probed in the same order `twoOrOne` uses: one
+                // past `=`, a `>` wins, then a second `=` makes `==`.
+                '=' => try self.lexEqualOrArrow(start),
                 '&' => try self.lexAmp(start),
                 '|' => try self.lexPipe(start),
                 '<' => try self.lexLess(start),
@@ -104,6 +107,21 @@ pub const Lexer = struct {
     fn single(self: *Lexer, kind: Kind, start: usize) !void {
         self.pos += 1;
         try self.emit(kind, start, self.pos);
+    }
+
+    fn lexEqualOrArrow(self: *Lexer, start: usize) !void {
+        self.pos += 1;
+        if (self.pos < self.text.len and self.text[self.pos] == '>') {
+            self.pos += 1;
+            try self.emit(.fat_arrow, start, self.pos);
+            return;
+        }
+        if (self.pos < self.text.len and self.text[self.pos] == '=') {
+            self.pos += 1;
+            try self.emit(.equal_equal, start, self.pos);
+            return;
+        }
+        try self.emit(.equal, start, self.pos);
     }
 
     fn twoOrOne(self: *Lexer, one: Kind, two: Kind, start: usize, second: u8) !void {
@@ -543,6 +561,22 @@ test "lexer reports unterminated string" {
     _ = try lexer.tokenize();
     try testing.expect(rep.hasErrors());
     try testing.expectEqualStrings("E0104", rep.list.items[0].code);
+}
+
+test "lexer tells '=>' apart from '=' and '=='" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The three share a first byte, so the order of the probes is what decides:
+    // `>` wins over a second `=`, which wins over the bare `=`.
+    var src = try source.Source.init(a, "test.kyn", "= => == =");
+    var rep = diagnostics.Reporter.init(a, &src);
+    var lexer = Lexer.init(a, &src, &rep);
+    const tokens = try lexer.tokenize();
+    try testing.expectEqual(Kind.equal, tokens[0].kind);
+    try testing.expectEqual(Kind.fat_arrow, tokens[1].kind);
+    try testing.expectEqual(Kind.equal_equal, tokens[2].kind);
+    try testing.expectEqual(Kind.equal, tokens[3].kind);
 }
 
 test "lexer reports invalid byte" {

@@ -651,6 +651,7 @@ pub const Parser = struct {
                 return stmt;
             },
             .kw_if => return try self.parseIf(),
+            .kw_match => return try self.parseMatch(),
             .kw_while => return try self.parseWhile(),
             .kw_return => return try self.parseReturn(),
             .kw_break => {
@@ -725,6 +726,56 @@ pub const Parser = struct {
 
         const stmt = try self.allocator.create(ast.Stmt);
         stmt.* = .{ .span = Span.join(start.span, self.peek().span), .kind = .{ .var_decl = var_decl } };
+        return stmt;
+    }
+
+    /// `match (value) { pattern => { body }, ... , _ => { body } }`. A pattern is
+    /// an expression the value is compared against; `_` matches anything and is
+    /// what makes the arm list exhaustive.
+    fn parseMatch(self: *Parser) Error!?*ast.Stmt {
+        const start = self.peek().span;
+        _ = self.advance();
+        _ = try self.expect(.l_paren, "after 'match'");
+        const value = (try self.parseExpr()) orelse try self.errorExpr(self.peek().span);
+        _ = try self.expect(.r_paren, "after match value");
+        if (!try self.expect(.l_brace, "to begin match arms")) return null;
+
+        var arms: std.ArrayList(ast.Stmt.MatchArm) = .empty;
+        while (!self.check(.r_brace) and !self.check(.eof)) {
+            const arm_start = self.peek().span;
+            var pattern: ?*ast.Expr = null;
+            // `_` is the wildcard. It is not a keyword, so it is recognised here
+            // and stays usable as an ordinary identifier everywhere else.
+            if (self.check(.identifier) and std.mem.eql(u8, self.peek().lexeme, "_")) {
+                _ = self.advance();
+            } else {
+                pattern = try self.parseExpr();
+            }
+            if (!try self.expect(.fat_arrow, "after match pattern")) {
+                self.synchronize(.comma);
+                _ = self.match(.comma);
+                continue;
+            }
+            const body = try self.parseBlock();
+            try arms.append(self.allocator, .{
+                .span = Span.join(arm_start, body.span),
+                .pattern = pattern,
+                .body = body,
+            });
+            if (!self.match(.comma)) break;
+        }
+        _ = try self.expect(.r_brace, "to close match");
+        // No trailing `;`: like `if` and `while`, a brace-delimited statement does
+        // not need one, and requiring it here would be a rule of its own.
+
+        const payload = try self.allocator.create(ast.Stmt.MatchStmt);
+        payload.* = .{
+            .span = Span.join(start, self.peek().span),
+            .value = value,
+            .arms = try arms.toOwnedSlice(self.allocator),
+        };
+        const stmt = try self.allocator.create(ast.Stmt);
+        stmt.* = .{ .span = payload.span, .kind = .{ .match_stmt = payload } };
         return stmt;
     }
 
@@ -1715,4 +1766,31 @@ test "parse open-ended and bounded slice expressions" {
     const bounded = stmts[3].kind.var_decl.init.?.kind.slice;
     try testing.expect(bounded.start != null);
     try testing.expect(bounded.end != null);
+}
+
+test "parse a match with patterns and a wildcard" {
+    var ctx: TestContext = undefined;
+    try ctx.init(
+        \\fn main() i32 {
+        \\    match (x) {
+        \\        1 => { return 1; },
+        \\        2 => { return 2; },
+        \\        _ => { return 3; },
+        \\    }
+        \\}
+    );
+    defer ctx.deinit();
+
+    const program = try parseTest(ctx.src.text, &ctx);
+    try testing.expect(!ctx.reporter.hasErrors());
+    const stmts = program.decls[0].kind.fn_decl.body.?.stmts;
+    try testing.expectEqual(@as(usize, 1), stmts.len);
+
+    const match_stmt = stmts[0].kind.match_stmt;
+    try testing.expectEqual(@as(usize, 3), match_stmt.arms.len);
+    // The first two arms name a pattern; the last is the wildcard, which is what
+    // makes the list exhaustive.
+    try testing.expect(match_stmt.arms[0].pattern != null);
+    try testing.expect(match_stmt.arms[1].pattern != null);
+    try testing.expect(match_stmt.arms[2].pattern == null);
 }

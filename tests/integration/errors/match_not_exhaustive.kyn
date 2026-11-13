@@ -1,0 +1,11 @@
+// Every value the scrutinee can take must be handled. Kyn has no fall-through and
+// no implicit "do nothing", so a match that could silently miss a value is a hole;
+// the wildcard arm is what makes the list exhaustive.
+fn main() i32 {
+    var x: i32 = 3;
+    match (x) {
+        1 => { return 1; },
+        2 => { return 2; },
+    }
+    return 0;
+}

@@ -1,0 +1,14 @@
+enum Color: u8 { Red, Green, Blue }
+fn name(c: Color) i32 {
+    match (c) {
+        Color.Red => { return 1; },
+        Color.Green => { return 2; },
+        _ => { return 3; },
+    }
+}
+fn main() i32 {
+    if (name(Color.Red) != 1) { return 10; }
+    if (name(Color.Green) != 2) { return 11; }
+    if (name(Color.Blue) != 3) { return 12; }
+    return 42;
+}

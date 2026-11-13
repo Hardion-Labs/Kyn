@@ -188,7 +188,26 @@ pub const Stmt = struct {
         return_stmt: *ReturnStmt,
         break_stmt: void,
         continue_stmt: void,
+        match_stmt: *MatchStmt,
         empty: void,
+    };
+
+    /// `match (value) { pattern => { body }, ... , _ => { body } }`.
+    ///
+    /// One arm per pattern, and at least one pattern must be the wildcard or the
+    /// match is not exhaustive -- a match without one would silently do nothing for
+    /// a value no arm names, which is the kind of hole Kyn refuses elsewhere.
+    pub const MatchStmt = struct {
+        span: Span,
+        value: *Expr,
+        arms: []MatchArm,
+    };
+
+    pub const MatchArm = struct {
+        span: Span,
+        /// Null for the wildcard arm `_`.
+        pattern: ?*Expr,
+        body: *Block,
     };
 
     pub const IfStmt = struct {

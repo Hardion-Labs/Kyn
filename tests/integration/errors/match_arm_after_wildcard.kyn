@@ -1,0 +1,9 @@
+// An arm after `_` is unreachable: the wildcard already matched every value.
+fn main() i32 {
+    var x: i32 = 1;
+    match (x) {
+        _ => { },
+        1 => { },
+    }
+    return 0;
+}

@@ -856,6 +856,7 @@ pub const Lowering = struct {
             .block => |block| try self.lowerBlock(block),
             .if_stmt => |if_stmt| try self.lowerIf(if_stmt),
             .while_stmt => |while_stmt| try self.lowerWhile(while_stmt),
+            .match_stmt => |match_stmt| try self.lowerMatch(match_stmt),
             .return_stmt => |ret_stmt| {
                 if (ret_stmt.value) |expr| {
                     const function = self.currentFunction();
@@ -965,6 +966,45 @@ pub const Lowering = struct {
         if (if_stmt.else_branch) |else_stmt| try self.lowerStmt(else_stmt);
         if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
 
+        try self.switchBlock(merge_block);
+    }
+
+    /// A `match` lowers to a chain of equality tests, one per arm, ending at the
+    /// wildcard arm's body.
+    ///
+    /// The scrutinee is evaluated **once**, into a temporary, and every test
+    /// compares against that same value: re-evaluating it per arm would make a
+    /// match on a call observable. The comparison is the `icmp eq` that `==`
+    /// emits, so an enum variant, a literal and a widened integer behave exactly
+    /// as they do outside a match.
+    fn lowerMatch(self: *Lowering, match_stmt: *ast.Stmt.MatchStmt) Error!void {
+        const value_ty = match_stmt.value.ty orelse return;
+        const scrutinee = try self.lowerExpr(match_stmt.value);
+        const slot = self.module.ephemeral();
+        try self.addLocal(slot, "tmp.match", value_ty, null);
+        try self.emitValueStore(.{ .ptr = .{ .local = slot }, .value = scrutinee, .ty = value_ty });
+
+        const merge_block = try self.newBlock();
+        for (match_stmt.arms) |arm| {
+            const pattern = arm.pattern orelse {
+                try self.lowerBlock(arm.body);
+                if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
+                continue;
+            };
+            const next_arm = try self.newBlock();
+            const arm_block = try self.newBlock();
+            const loaded = try self.reg(value_ty);
+            try self.emit(.{ .load = .{ .dst = loaded, .ptr = .{ .local = slot }, .ty = value_ty } });
+            const pattern_value = try self.lowerExpr(pattern);
+            const cond = try self.reg(try self.simpleType(.bool));
+            try self.emit(.{ .icmp = .{ .dst = cond, .op = .eq, .ty = value_ty, .lhs = .{ .reg = loaded }, .rhs = pattern_value } });
+            try self.emit(.{ .cbr = .{ .cond = .{ .reg = cond }, .then_block = arm_block, .else_block = next_arm } });
+            try self.switchBlock(arm_block);
+            try self.lowerBlock(arm.body);
+            if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
+            try self.switchBlock(next_arm);
+        }
+        if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
         try self.switchBlock(merge_block);
     }
 

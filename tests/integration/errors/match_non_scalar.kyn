@@ -1,0 +1,9 @@
+// A struct is not comparable with `==`, so it cannot be a match scrutinee either.
+struct S { a: i32 }
+fn main() i32 {
+    var s: S = S { a: 1 };
+    match (s) {
+        _ => { },
+    }
+    return 0;
+}

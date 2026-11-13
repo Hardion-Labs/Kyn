@@ -82,6 +82,17 @@ pub const Analyzer = struct {
             .block => |block| try self.checkBlock(block),
             .if_stmt => |if_stmt| try self.checkIf(if_stmt),
             .while_stmt => |while_stmt| try self.checkWhile(while_stmt),
+            .match_stmt => |match_stmt| {
+                // The scrutinee is evaluated once; each arm's block is a path of
+                // its own, so what is known after the match is only what holds on
+                // every path. Nothing is learned from an arm's pattern, which keeps
+                // the flow analysis conservative rather than wrong.
+                try self.checkExpr(match_stmt.value);
+                for (match_stmt.arms) |arm| {
+                    if (arm.pattern) |pattern| try self.checkExpr(pattern);
+                    try self.checkBlock(arm.body);
+                }
+            },
             .return_stmt => |ret_stmt| {
                 if (ret_stmt.value) |value| try self.checkExpr(value);
             },
@@ -391,6 +402,18 @@ fn stmtTerminates(stmt: *ast.Stmt) bool {
         else
             false,
         .while_stmt => false,
+        // An exhaustive match terminates when every one of its arms does: the
+        // wildcard guarantees one of them runs. Checked only when the arm list is
+        // exhaustive, since `sema` rejects a non-exhaustive one but the analyzer
+        // may already be looking at the tree.
+        .match_stmt => |match_stmt| blk: {
+            var has_wildcard = false;
+            for (match_stmt.arms) |arm| {
+                if (arm.pattern == null) has_wildcard = true;
+                if (!sema_mod.blockAlwaysReturns(arm.body)) break :blk false;
+            }
+            break :blk has_wildcard;
+        },
         else => false,
     };
 }

@@ -767,6 +767,65 @@ pub const Sema = struct {
         }
     }
 
+    /// `match (value) { pattern => { ... }, ..., _ => { ... } }`.
+    ///
+    /// Two rules, both decided here rather than left to the backend:
+    /// 1. **The arm list must be exhaustive**, which means it must contain `_`.
+    ///    Kyn has no fall-through and no implicit "do nothing", so a match that
+    ///    could silently miss a value would be a hole. Enumerating every variant
+    ///    of an enum is *not* enough to count as exhaustive here: the value's type
+    ///    is an integer at the boundary and the variant list is a property of a
+    ///    declaration, so requiring `_` keeps the check honest without a second
+    ///    notion of exhaustiveness.
+    /// 2. **A pattern is compared for equality with the value**, so its type must
+    ///    be the value's or convert to it. Patterns are constant expressions --
+    ///    a literal or an enum variant -- because the comparison is compiled as a
+    ///    branch, not evaluated at runtime.
+    fn checkMatch(self: *Sema, match_stmt: *ast.Stmt.MatchStmt) Error!void {
+        const value_ty = try self.checkExpr(match_stmt.value, null);
+        if (!value_ty.isInteger() and value_ty.* != .bool and value_ty.* != .enum_type) {
+            try self.reporter.err("E0494", match_stmt.value.span, "cannot match on a value of type '{s}'; a match scrutinee must be an integer, bool or enum", .{self.typeName(value_ty)});
+        }
+
+        var saw_wildcard = false;
+        var seen_values = std.AutoHashMap(i128, void).init(self.allocator);
+        for (match_stmt.arms) |*arm| {
+            if (arm.pattern) |pattern| {
+                if (saw_wildcard) {
+                    // An arm after `_` can never run: `_` matches everything.
+                    try self.reporter.err("E0496", pattern.span, "unreachable match arm: the wildcard '_' above already matches every value", .{});
+                }
+                const pattern_ty = try self.checkExpr(pattern, value_ty);
+                // The same rule `==` uses: the arm is that comparison, so a
+                // pattern that could not be written as `value == pattern` is not a
+                // pattern. One rule, not a second one that could drift.
+                if (!Type.eql(value_ty, pattern_ty)) {
+                    try self.reporter.err("E0494", pattern.span, "match pattern of type '{s}' cannot be compared with value of type '{s}'", .{
+                        self.typeName(pattern_ty), self.typeName(value_ty),
+                    });
+                }
+                // A repeated constant can never run either, and silently letting
+                // the later arm win is the same class of hole as a missing `_`.
+                if ((try self.evalConstInt(pattern))) |value| {
+                    if (seen_values.contains(value)) {
+                        try self.reporter.err("E0496", pattern.span, "unreachable match arm: the value {d} is already matched above", .{value});
+                    } else {
+                        try seen_values.put(value, {});
+                    }
+                }
+            } else {
+                if (saw_wildcard) {
+                    try self.reporter.err("E0495", arm.span, "duplicate wildcard arm in match", .{});
+                }
+                saw_wildcard = true;
+            }
+            try self.checkBlock(arm.body);
+        }
+        if (!saw_wildcard) {
+            try self.reporter.err("E0495", match_stmt.span, "match is not exhaustive: add a '_ => {{ ... }}' arm to handle the remaining values", .{});
+        }
+    }
+
     fn checkBlock(self: *Sema, block: *ast.Block) Error!void {
         try self.pushScope();
         defer self.popScope();
@@ -784,6 +843,7 @@ pub const Sema = struct {
                 try self.checkBlock(if_stmt.then_branch);
                 if (if_stmt.else_branch) |else_stmt| try self.checkStmt(else_stmt);
             },
+            .match_stmt => |match_stmt| try self.checkMatch(match_stmt),
             .while_stmt => |while_stmt| {
                 const cond_ty = try self.checkExpr(while_stmt.cond, self.prims.bool);
                 try self.requireBool(while_stmt.cond, cond_ty);
@@ -2996,6 +3056,17 @@ fn stmtAlwaysReturns(stmt: *ast.Stmt) bool {
             // the purpose of reachability; we keep this conservative.
             _ = while_stmt;
             break :blk false;
+        },
+        // An exhaustive match returns when every arm does: the wildcard
+        // guarantees one arm runs, so a function whose body ends in such a match
+        // has no path that falls off the end.
+        .match_stmt => |match_stmt| blk: {
+            var has_wildcard = false;
+            for (match_stmt.arms) |arm| {
+                if (arm.pattern == null) has_wildcard = true;
+                if (!blockAlwaysReturns(arm.body)) break :blk false;
+            }
+            break :blk has_wildcard;
         },
         else => false,
     };

@@ -162,6 +162,9 @@ unsupported construct or an internal compiler invariant violation.
 | `E0491` | an alignment is not a power of two, or is larger than 4096 |
 | `E0492` | `align(N)` is not attached to a `struct` or `union` declaration |
 | `E0493` | a name promoted out of an anonymous member collides with another field of the same aggregate |
+| `E0494` | a `match` scrutinee is not an integer, `bool` or enum, or a pattern's type cannot be compared with it |
+| `E0495` | a `match` has no wildcard arm, so it is not exhaustive; or more than one wildcard |
+| `E0496` | a `match` arm can never run: it follows the wildcard, or it repeats a value already matched |
 
 ## Static analyzer (`E05xx`, `W05xx`)
 

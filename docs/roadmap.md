@@ -135,6 +135,12 @@ is selected. Milestones below are directions, not release promises.
 
 ## Next direction
 
+- **`match` is implemented** over integers, `bool` and enums, and is the base a
+  tagged union will extend. It lowers to a chain of equality branches on a value
+  evaluated once, which is the same `icmp eq` that `==` emits. The arm list must
+  be exhaustive (`E0495`, `E0496`). A tagged union is the natural next step: it
+  needs a payload-carrying enum shape plus a way to bind that payload in an arm,
+  which is the one part of this construct that does not exist yet.
 - **Bitfields are implemented**, with the width in the type: `kind: u3` is a real
   `u3`, adjacent bitfields pack into a 1/2/4/8-byte storage unit, reads
   sign-extend or zero-extend and writes mask so neighbours survive. The layout is a

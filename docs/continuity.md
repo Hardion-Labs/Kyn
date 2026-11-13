@@ -3355,3 +3355,52 @@ assumed feature.
 - Next task: **tagged unions** (sum types, `match` over a tag) — the last item on
   the design's out-of-scope list that is a language feature rather than a target
   restriction.
+
+## §60 — `match` over integers, `bool` and enums
+
+Tagged unions were the registered next task, but a sum type cannot be consumed
+without a dispatch construct, and the language had none: `match`/`switch` were
+not even keywords and `for` is reserved but unparsed (`E0221`). So this increment
+is the prerequisite, not a detour — a tagged union now needs only the payload
+half.
+
+- **Syntax.** `match (value) { pat => { ... }, ..., _ => { ... } }`. `=>` is a new
+  token (`fat_arrow`) and shares a first byte with `=` and `==`, so the probe is
+  ordered `>` → `=` → bare `=`. A match needs no trailing `;`, like `if`/`while`.
+  `_` is not a keyword: the parser recognises it only in arm position, so it stays
+  usable as an ordinary identifier.
+- **Exhaustiveness is the central decision.** The arm list must contain `_`
+  (`E0495`). Enumerating every variant of an enum is deliberately *not* accepted:
+  the variant list is a property of a declaration, and accepting it would create a
+  second notion of exhaustiveness that can drift from the first. Requiring `_`
+  keeps one rule.
+- **Unreachable arms are errors, not shadowing** (`E0496`): an arm after `_`, a
+  second `_`, and a repeated pattern value.
+- **A pattern is compared for equality**, so its type rule is the one `==` already
+  uses (`Type.eql`; `E0431`/`E0432` semantics) rather than a parallel check. The
+  scrutinee must be integer, `bool` or enum (`E0494`).
+- **The scrutinee is evaluated exactly once**, into a temp; every test compares
+  that same value. Confirmed by a fixture whose scrutinee counts its calls — the
+  distinction is observable and is the reason the value is not re-lowered per arm.
+- **Termination.** An exhaustive match whose arms all return terminates its
+  function, so a non-`void` body may end in one. Both `sema.stmtAlwaysReturns` and
+  `analyzer.stmtTerminates` learn it; the analyzer also walks arm bodies and
+  patterns.
+- **Lowering.** A chain of `cbr` over the `icmp eq` that `==` emits — the same
+  shape as `lowerIf`, no new IR instruction. `break`/`continue` inside an arm act
+  on the enclosing loop because the loop stacks are untouched by the match.
+- **A false lead, recorded so it is not repeated.** Three fixture failures
+  (`exit=87` for a total of 1111, `47` for 303, `15` vs an expected `14`) were
+  **not** compiler bugs: an exit status keeps only the low 8 bits, so 1111→87 and
+  303→47 are exact truncations, and 15 was my own arithmetic missing the matched
+  arm's own `+1`. Fixture totals must stay under 256 and be summed explicitly.
+  A speculatively added "block order matters" comment and a merge-block
+  reordering were removed after the simple form, identical to `lowerIf`, was shown
+  to produce the same results on every case — there was no bug to work around.
+- **Gate:** unit **139/139** (was 137), integration **233/0** in Debug and
+  ReleaseSafe (was 227), robustness 902, `zig fmt` clean, 23 documentation links,
+  **146** documented codes (was 143), versions `0.1.0-alpha.5`.
+- Git: `c7f07d2` on `arena/114bb6a9-kyn`, pushed.
+- **Next task: tagged unions** — a payload-carrying enum shape plus binding in an
+  arm. `match` is in place; what is missing is the declaration form and the arm
+  that names a payload. `for` remains reserved and unparsed.

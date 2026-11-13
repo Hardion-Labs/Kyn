@@ -1,0 +1,46 @@
+// The three properties a `match` has to get right. The weights are powers of two
+// and the total fits in a byte, because an exit status keeps only the low 8 bits.
+// The running total starts at 1: the matched arm itself adds it.
+// 1. The scrutinee is evaluated exactly once, so its side effect happens once.
+// 2. `break` inside an arm leaves the enclosing loop, not the arm.
+// 3. A `match` on `bool` compares as `==` does.
+var calls: i32 = 0;
+
+fn next() i32 {
+    calls += 1;
+    return 7;
+}
+
+fn flip(b: bool) bool {
+    match (b) {
+        true => { return false; },
+        false => { return true; },
+        _ => { return b; },
+    }
+}
+
+fn main() i32 {
+    var score: i32 = 0;
+
+    match (next()) {
+        1 => { score += 100; },
+        7 => { score += 1; },
+        _ => { score += 1000; },
+    }
+    if (calls == 1 && score == 1) { score += 2; }
+
+    var i: i32 = 0;
+    var hits: i32 = 0;
+    while (i < 10) {
+        match (i) {
+            3 => { break; },
+            _ => { hits += 1; },
+        }
+        i += 1;
+    }
+    if (i == 3 && hits == 3) { score += 4; }
+
+    if (flip(true) == false && flip(false) == true) { score += 8; }
+
+    return score;
+}
