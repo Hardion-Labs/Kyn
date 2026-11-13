@@ -748,6 +748,32 @@ for (var i: i32 = 0; i < 10; i += 1) {
   `continue` in the initializer is not inside the loop and is rejected.
 - The step is evaluated for its effect; its value is discarded.
 
+### 4.4 `defer`
+
+```kyn
+fn write(fd: i32, buf: *const u8, len: usize) i32 {
+    defer { close(fd); }
+    return send(fd, buf, len);
+}
+```
+
+- The body runs when the **enclosing block** is left, however it is left: falling
+  off the end, `return`, `break` or `continue`. It belongs to its block, not to the
+  function — an inner block's defers have run by the time the next statement
+  executes.
+- Several defers in one block run in **reverse source order**, so a defer
+  registered later can rely on what an earlier one did being still undone later.
+- On `return`, the return expression is evaluated **before** the defers run, so a
+  defer that changes a variable cannot change what is returned.
+- Inside a loop body, a defer runs once **per iteration** — including the iteration
+  that `break`s or `continue`s out.
+- A defer body may not leave: `return`, `break` and `continue` inside one are
+  `E0511`, because the body runs while the block is already being left.
+- A defer in a block that never runs registers nothing, since the whole block was
+  never entered.
+- There is no `defer`-ordering between a `defer` and a `break` that skips it: the
+  defers of the blocks a jump leaves all run, innermost first.
+
 ## 5. Expressions
 
 ### 5.1 Precedence and associativity
@@ -1056,7 +1082,7 @@ The following are rejected or simply not part of v0.1:
 
 - isolated module namespaces, package registries and module re-exports (basic relative-path and qualified-alias imports are implemented);
 - `switch`, `do`, `goto`, labels;
-- `defer`, `errdefer`, exceptions, closures, lambdas;
+- `errdefer`, exceptions, closures, lambdas;
 - const-polymorphic slice constructors and additional slice ergonomics;
 - generics, traits, interfaces, operator overloading;
 - variadic Kyn functions without a C caller (a variadic declaration must be

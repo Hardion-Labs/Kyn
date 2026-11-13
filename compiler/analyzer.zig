@@ -96,6 +96,7 @@ pub const Analyzer = struct {
             .if_stmt => |if_stmt| try self.checkIf(if_stmt),
             .while_stmt => |while_stmt| try self.checkWhile(while_stmt),
             .for_stmt => |for_stmt| try self.checkFor(for_stmt),
+            .defer_stmt => |defer_stmt| try self.checkBlock(defer_stmt.body),
             .match_stmt => |match_stmt| {
                 // The scrutinee is evaluated once; each arm's block is a path of
                 // its own, so what is known after the match is only what holds on

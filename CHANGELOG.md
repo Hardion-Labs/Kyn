@@ -13,6 +13,15 @@ signed-division minimum).
 
 ### Added
 
+- **`defer`**, which runs its body when the enclosing block is left -- falling off
+  the end, `return`, `break` or `continue`. It belongs to its block, not to the
+  function, and several in one block run in reverse source order. On `return` the
+  value is computed first, so a defer that changes a variable cannot change what is
+  returned. Inside a loop body it runs once per iteration, including the one that
+  breaks or continues. `return`, `break` and `continue` inside a defer are
+  `E0511`: the body runs while the block is already being left, so it cannot leave
+  again -- the lowering would recurse through the statement that is unwinding, which
+  was a stack overflow before the rule was added.
 - **`for` loops**, in C's shape: `for (var i: i32 = 0; i < n; i += 1) { ... }`.
   Every clause is optional, so `for (;;)` is an intentional infinite loop exited
   only by `break`, and an omitted condition means "always" rather than requiring a

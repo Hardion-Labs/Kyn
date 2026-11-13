@@ -104,6 +104,7 @@ statement      = block
                | while_statement
                | for_statement
                | match_statement
+               | defer_statement
                | return_statement
                | break_statement
                | continue_statement
@@ -128,6 +129,8 @@ match_statement = "match" , "(" , expression , ")" , "{" ,
                   [ match_arm , { "," , match_arm } , [ "," ] ] , "}" ;
 
 match_arm      = ( wildcard | pattern ) , "=>" , block ;
+
+defer_statement = "defer" , block ;
 
 wildcard       = "_" ;
 

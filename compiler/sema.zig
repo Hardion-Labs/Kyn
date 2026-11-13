@@ -50,6 +50,9 @@ pub const Sema = struct {
     scope: ?*Scope = null,
     next_symbol_id: u32 = 1,
     loop_depth: u32 = 0,
+    /// Nonzero while checking a `defer` body, which may not leave the block it
+    /// belongs to. Recorded so the diagnostic can name the real reason.
+    defer_depth: u32 = 0,
     current_fn: ?*ast.FnDecl = null,
     /// The target whose C ABI the boundary checks apply. Defaults to the host,
     /// which is the only target the System V classifier is defined for; the
@@ -1020,6 +1023,28 @@ pub const Sema = struct {
         try self.checkBlock(for_stmt.body);
     }
 
+    /// `defer { body }`.
+    ///
+    /// A deferred body runs while the enclosing block is being left, so it cannot
+    /// leave again: a `return` there would have to unwind the statement that is
+    /// already unwinding, which the lowering cannot express and a reader cannot
+    /// reason about. Both `return` and the loop jumps are therefore rejected,
+    /// with `E0511` rather than the ordinary `E0415` -- the reason is not "outside
+    /// a loop" but "inside a defer".
+    fn checkDefer(self: *Sema, defer_stmt: *ast.Stmt.DeferStmt) Error!void {
+        const saved_depth = self.loop_depth;
+        const saved_defer = self.defer_depth;
+        // Zeroing the loop depth makes `break`/`continue` fail the ordinary loop
+        // rule; the defer depth makes `return` and the jumps report the defer.
+        self.loop_depth = 0;
+        self.defer_depth += 1;
+        defer {
+            self.loop_depth = saved_depth;
+            self.defer_depth = saved_defer;
+        }
+        try self.checkBlock(defer_stmt.body);
+    }
+
     fn checkBlock(self: *Sema, block: *ast.Block) Error!void {
         try self.pushScope();
         defer self.popScope();
@@ -1048,17 +1073,27 @@ pub const Sema = struct {
             .for_stmt => |for_stmt| try self.checkFor(for_stmt),
             .return_stmt => |ret_stmt| try self.checkReturn(stmt.span, ret_stmt.value),
             .break_stmt, .continue_stmt => {
-                if (self.loop_depth == 0) {
-                    try self.reporter.err("E0415", stmt.span, "'{s}' is only valid inside a loop", .{
-                        if (stmt.kind == .break_stmt) "break" else "continue",
-                    });
+                const rendered = if (stmt.kind == .break_stmt) "break" else "continue";
+                if (self.defer_depth > 0) {
+                    // The jump would leave the very block whose defer is running.
+                    try self.reporter.err("E0511", stmt.span, "'{s}' is not allowed inside 'defer': the body runs while the enclosing block is being left", .{rendered});
+                } else if (self.loop_depth == 0) {
+                    try self.reporter.err("E0415", stmt.span, "'{s}' is only valid inside a loop", .{rendered});
                 }
+            },
+            .defer_stmt => |defer_stmt| {
+                try self.checkDefer(defer_stmt);
             },
             .empty => {},
         }
     }
 
     fn checkReturn(self: *Sema, span: Span, value: ?*ast.Expr) Error!void {
+        if (self.defer_depth > 0) {
+            try self.reporter.err("E0511", span, "'return' is not allowed inside 'defer': the body runs while the enclosing block is being left", .{});
+            if (value) |expr| _ = try self.checkExpr(expr, null);
+            return;
+        }
         const fn_decl = self.currentFunction() orelse {
             try self.reporter.err("E0416", span, "return outside a function", .{});
             return;
