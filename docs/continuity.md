@@ -2993,6 +2993,10 @@ assumed feature.
 - Gate: `zig build` OK; 122/122 unit; 204/0 integration; `zig fmt --check` clean;
   23 documentation links (22 → 23); 133 documented codes (unchanged);
   versions `0.1.0-alpha.5`.
+- Git, final for this increment: `d472f88` on `arena/6a7eb579-kyn`, pushed
+  before the turn ended; PR #55 → CI green → merged as **`4e3973f`**, and `main`
+  re-validated in a fresh clone of it (122/122 unit, 204/0 integration, 23
+  documentation links, 133 documented codes, both design documents present).
 - Next task: **implement this design in the order of its §10** — type model
   (`is_union`/`is_packed`, layout branches), parser and resolver (`union`,
   `packed`, `uN` widths, `E0481`–`E0484`), leaf walk and classifier (union
