@@ -13,6 +13,16 @@ signed-division minimum).
 
 ### Added
 
+- **Tagged unions.** A variant may carry a payload -- `Circle(f64)` -- which makes
+  the enum a sum type whose value is `{ tag, payload }`: an ordinary struct whose
+  second member is a union of every payload. Measured against clang rather than
+  assumed: 16 bytes, alignment 8, payload at offset 8 for `Circle(f64) |
+  Rect(i32)`, and `{ i32, i64 }` at the boundary. `match` binds the payload in an
+  arm (`Shape.Circle(r) => ...`), as a copy, so the arm may keep it. The
+  discriminant is assigned, never declared (`E0507`), because it is what the tag
+  holds and two variants sharing it could not be told apart. Construction checks
+  arity and payload type (`E0509`); a payload-less variant cannot be bound
+  (`E0510`); a payload with no known size is refused (`E0508`).
 - **`match`** dispatches on an integer, `bool` or enum. The scrutinee is evaluated
   exactly once and compared against each arm in source order; the arm list must
   contain a wildcard (`E0495`), because Kyn has no fall-through and no implicit

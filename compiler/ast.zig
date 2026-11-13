@@ -110,6 +110,13 @@ pub const EnumVariantDecl = struct {
     name: []const u8,
     value_expr: ?*Expr,
     value: i128 = 0,
+    /// The type this variant carries, or null for a plain variant.
+    ///
+    /// A variant with a payload turns the enum into a **tagged union**: the
+    /// value is the discriminator plus a union of every variant's payload, and
+    /// an explicit value (`Blue = 4`) is not allowed on such a variant because
+    /// the discriminant is not the program's to choose -- see `sema`.
+    payload_expr: ?*TypeExpr = null,
 };
 
 pub const EnumDecl = struct {
@@ -207,7 +214,19 @@ pub const Stmt = struct {
         span: Span,
         /// Null for the wildcard arm `_`.
         pattern: ?*Expr,
+        /// The name the payload is bound to, or null when the arm binds nothing.
+        /// Filled from `Variant(name)`; a plain `Variant` arm binds nothing, and a
+        /// wildcard can bind nothing because it names no variant to read from.
+        binding: ?Binding = null,
         body: *Block,
+    };
+
+    pub const Binding = struct {
+        span: Span,
+        name: []const u8,
+        /// The payload's type, filled by sema from the variant.
+        ty: ?*Type = null,
+        sym: ?*symbol.Symbol = null,
     };
 
     pub const IfStmt = struct {

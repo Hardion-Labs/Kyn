@@ -134,6 +134,23 @@ Example: `*(null as *i32)` or `(null as *[4]i32)[..]`. The analysis does not
 prove arbitrary runtime pointer provenance, but any pointer exactly `null` is
 trapped dynamically when dereferenced or sliced.
 
+### 2.9 Tagged unions (`E0507`–`E0510`)
+
+A tagged union's tag is assigned, never declared (`E0507`), so two variants cannot
+share a discriminant and every `match` arm is reachable for exactly one variant.
+Construction checks the payload's arity and type (`E0509`); a payload that has no
+known size is refused (`E0508`); binding a payload from a variant that carries none
+is `E0510` rather than an uninitialized local.
+
+**Reading the payload is checked by the tag, not by the type system.** The payload
+union overlaps every variant's payload, so a program that reads `Rect`'s payload out
+of a `Circle` value would reinterpret bytes. Kyn prevents that in exactly one way:
+the only construct that exposes a payload is an arm, and an arm runs only when the
+tag matches — which is the reason payload binding is part of `match` rather than a
+cast or an accessor. What is **not** checked is a value whose tag the program wrote
+directly, which is not expressible: there is no way to assign a tag, and a `union`
+member written by hand is the separate, documented trust boundary of §3.
+
 ## 3. Checks that do not exist yet
 
 The following are **not** checked at runtime or, in the dynamic case, at

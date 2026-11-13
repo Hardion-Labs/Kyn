@@ -1,0 +1,4 @@
+// `S.C` is a value only when C carries nothing. With a payload it is a
+// constructor, and naming it alone would have to invent the payload.
+enum S { C(f64) }
+fn main() i32 { var s: S = S.C; return 0; }

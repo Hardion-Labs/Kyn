@@ -101,7 +101,16 @@ pub const Lowering = struct {
         for (program.decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |sd| if (sd.ty) |ty| try self.collectStructType(ty),
-                .enum_decl => |ed| if (ed.ty) |ty| try self.module.addEnum(ty.enum_type),
+                .enum_decl => |ed| if (ed.ty) |ty| {
+                    const info = ty.enum_type;
+                    try self.module.addEnum(info);
+                    // A tagged union's value is `{ tag, payload }`. Registering it
+                    // through `collectStructType` also registers the payload union
+                    // it holds, since that walk recurses into the fields -- so the
+                    // synthesised types reach the emitter by the same route a
+                    // declared struct does, with no second path to keep in step.
+                    if (info.value_ty) |value_ty| try self.collectStructType(value_ty);
+                },
                 else => {},
             }
         }
@@ -350,6 +359,14 @@ pub const Lowering = struct {
             } },
             else => unreachable,
         };
+    }
+
+    /// A `*Type` for an aggregate whose `StructInfo` is already built. Used for
+    /// the tagged-union pieces the analyzer synthesises rather than interns.
+    fn typeOfAggregate(self: *Lowering, info: *types.StructInfo) Error!*types.Type {
+        const ty = try self.allocator.create(types.Type);
+        ty.* = .{ .struct_type = info };
+        return ty;
     }
 
     fn addLocal(self: *Lowering, id: u32, name: []const u8, ty: *types.Type, padding: ?u16) Error!void {
@@ -984,6 +1001,30 @@ pub const Lowering = struct {
         try self.addLocal(slot, "tmp.match", value_ty, null);
         try self.emitValueStore(.{ .ptr = .{ .local = slot }, .value = scrutinee, .ty = value_ty });
 
+        // What every arm compares is the *tag*: a tagged union's value is a struct
+        // and cannot be compared, and the discriminant is exactly what decides the
+        // arm. Read once, into its own local, so every test compares the same
+        // integer -- and a plain enum, whose value already is the discriminant,
+        // keeps its single local.
+        const is_tagged = value_ty.* == .enum_type and value_ty.enum_type.value_ty != null;
+        const tag_ty = if (is_tagged) value_ty.enum_type.backing else value_ty;
+        const tag_slot = self.module.ephemeral();
+        if (is_tagged) {
+            const value_struct = value_ty.enum_type.value_ty.?.struct_type;
+            const tag_ptr = try self.reg(try self.makePointer(tag_ty, false));
+            try self.emit(.{ .field_ptr = .{
+                .dst = tag_ptr,
+                .base = .{ .local = slot },
+                .struct_ty = value_struct,
+                .field = 0,
+                .bitfield = null,
+            } });
+            try self.addLocal(tag_slot, "tmp.tag", tag_ty, null);
+            const tag_reg = try self.reg(tag_ty);
+            try self.emit(.{ .load = .{ .dst = tag_reg, .ptr = .{ .reg = tag_ptr }, .ty = tag_ty } });
+            try self.emitValueStore(.{ .ptr = .{ .local = tag_slot }, .value = .{ .reg = tag_reg }, .ty = tag_ty });
+        }
+
         const merge_block = try self.newBlock();
         for (match_stmt.arms) |arm| {
             const pattern = arm.pattern orelse {
@@ -993,13 +1034,40 @@ pub const Lowering = struct {
             };
             const next_arm = try self.newBlock();
             const arm_block = try self.newBlock();
-            const loaded = try self.reg(value_ty);
-            try self.emit(.{ .load = .{ .dst = loaded, .ptr = .{ .local = slot }, .ty = value_ty } });
-            const pattern_value = try self.lowerExpr(pattern);
+            // A tagged arm compares the tag read above; every other match compares
+            // the scrutinee itself. Both go through the same `icmp eq`, so the arm
+            // rule stays one rule.
+            const compare_ptr: ir.Value = if (is_tagged) .{ .local = tag_slot } else .{ .local = slot };
+            const loaded = try self.reg(tag_ty);
+            try self.emit(.{ .load = .{ .dst = loaded, .ptr = compare_ptr, .ty = tag_ty } });
+            // A bound pattern names a variant plus a binding; the payload was
+            // already copied out above, so the test is against the discriminant,
+            // which the field carries. Lowering the pattern as an expression would
+            // take the call path and produce nothing.
+            const pattern_value = if (arm.binding != null)
+                ir.Value{ .int = pattern.kind.call.callee.kind.field.variant_value }
+            else
+                try self.lowerExpr(pattern);
             const cond = try self.reg(try self.simpleType(.bool));
-            try self.emit(.{ .icmp = .{ .dst = cond, .op = .eq, .ty = value_ty, .lhs = .{ .reg = loaded }, .rhs = pattern_value } });
+            try self.emit(.{ .icmp = .{ .dst = cond, .op = .eq, .ty = tag_ty, .lhs = .{ .reg = loaded }, .rhs = pattern_value } });
             try self.emit(.{ .cbr = .{ .cond = .{ .reg = cond }, .then_block = arm_block, .else_block = next_arm } });
             try self.switchBlock(arm_block);
+            // The binding is a local holding a copy of the payload, so the arm
+            // body reads it exactly as it would read any other variable. The copy
+            // is what makes the arm free to keep its own value after the match --
+            // there is no borrow to expire.
+            if (arm.binding) |binding| {
+                if (binding.sym) |binding_sym| {
+                    if (binding.ty) |binding_ty| {
+                        // The variant name is the pattern's own: a binding exists
+                        // only on a `Variant(name)` pattern, which sema has already
+                        // matched to a variant of this enum.
+                        const variant_name = pattern.kind.call.callee.kind.field.name;
+                        try self.addLocal(binding_sym.id, binding_sym.name, binding_ty, null);
+                        try self.lowerVariantPayload(.{ .local = slot }, value_ty, variant_name, binding_sym.id, binding_ty);
+                    }
+                }
+            }
             try self.lowerBlock(arm.body);
             if (!self.isTerminated()) try self.emit(.{ .br = .{ .target = merge_block } });
             try self.switchBlock(next_arm);
@@ -1052,7 +1120,13 @@ pub const Lowering = struct {
             .unary => |unary| try self.lowerUnary(expr, unary),
             .binary => |binary| try self.lowerBinary(expr, binary),
             .assign => |assign| try self.lowerAssign(expr, assign),
-            .call => |call| try self.lowerCall(expr, call),
+            // A variant construction is parsed as a call, so it is recognised
+            // here by the callee sema marked: the field carries the variant's
+            // discriminant, which is what distinguishes it from a real call.
+            .call => |call| if (try self.lowerVariantConstruction(expr, call)) |value|
+                value
+            else
+                try self.lowerCall(expr, call),
             .va_arg => |va_arg| try self.lowerVaArg(expr, va_arg),
             .cast => |cast| try self.lowerCast(expr, cast),
             .field => |field| blk: {
@@ -2150,6 +2224,126 @@ pub const Lowering = struct {
         };
     }
 
+    /// `Enum.Variant(payload)` — builds the `{ tag, payload }` value.
+    ///
+    /// The tag is the variant's discriminant and the payload is written through a
+    /// `field_ptr` into slot 1, so the write lands in the payload union at the
+    /// member the variant names. Both writes go through the ordinary aggregate
+    /// paths; nothing here knows a layout of its own.
+    ///
+    /// Returns null when the expression is not a variant construction, which is
+    /// every ordinary call.
+    /// Copies the payload a variant pattern names out of the matched value into
+    /// the arm's binding local.
+    ///
+    /// The source is the payload union's member for that variant, reached through
+    /// the same `field_ptr` walk a construction uses; the destination is the
+    /// binding's own local. Nothing is aliased, so the payload outlives the match.
+    fn lowerVariantPayload(
+        self: *Lowering,
+        value_dest: ir.Value,
+        value_ty: *types.Type,
+        variant_name: []const u8,
+        binding_id: u32,
+        binding_ty: *types.Type,
+    ) Error!void {
+        const info = value_ty.enum_type;
+        const value_struct = info.value_ty.?.struct_type;
+        const payload_union = info.payload_union.?;
+        const payload_union_ty = try self.typeOfAggregate(payload_union);
+        for (info.variants, 0..) |variant, index| {
+            if (!std.mem.eql(u8, variant.name, variant_name)) continue;
+            const union_ptr = try self.reg(try self.makePointer(payload_union_ty, false));
+            try self.emit(.{ .field_ptr = .{
+                .dst = union_ptr,
+                .base = value_dest,
+                .struct_ty = value_struct,
+                .field = 1,
+                .bitfield = null,
+            } });
+            const member_ptr = try self.reg(try self.makePointer(binding_ty, false));
+            try self.emit(.{ .field_ptr = .{
+                .dst = member_ptr,
+                .base = .{ .reg = union_ptr },
+                .struct_ty = payload_union,
+                .field = @intCast(index),
+                .bitfield = null,
+            } });
+            const loaded = try self.reg(binding_ty);
+            try self.emit(.{ .load = .{ .dst = loaded, .ptr = .{ .reg = member_ptr }, .ty = binding_ty } });
+            try self.emitValueStore(.{ .ptr = .{ .local = binding_id }, .value = .{ .reg = loaded }, .ty = binding_ty });
+            return;
+        }
+    }
+
+    fn lowerVariantConstruction(self: *Lowering, expr: *ast.Expr, call: ast.Expr.Kind.Call) Error!?ir.Value {
+        const callee = call.callee;
+        if (callee.kind != .field) return null;
+        const field = &callee.kind.field;
+        if (!field.is_enum_variant) return null;
+        const value_ty = expr.ty orelse return null;
+        if (value_ty.* != .enum_type) return null;
+        const info = value_ty.enum_type;
+        const value_ty_struct = info.value_ty orelse return null;
+        const value_struct = value_ty_struct.struct_type;
+
+        // The whole value is built in a local and then loaded, so the result is a
+        // first-class value usable anywhere an expression is.
+        const slot = self.module.ephemeral();
+        try self.addLocal(slot, "tmp.variant", value_ty, null);
+        const dest: ir.Value = .{ .local = slot };
+
+        // Member 0 is the tag.
+        const tag_ptr = try self.reg(try self.makePointer(info.backing, false));
+        try self.emit(.{ .field_ptr = .{
+            .dst = tag_ptr,
+            .base = dest,
+            .struct_ty = value_struct,
+            .field = 0,
+            .bitfield = null,
+        } });
+        const tag_value: ir.Value = .{ .int = field.variant_value };
+        try self.emitValueStore(.{ .ptr = .{ .reg = tag_ptr }, .value = tag_value, .ty = info.backing });
+
+        // Member 1 is the payload union; the one argument lands in the variant's
+        // own member of it.
+        if (call.args.len == 1) {
+            const payload_union = info.payload_union.?;
+            const payload_ty = try self.typeOfAggregate(payload_union);
+            for (info.variants, 0..) |variant, index| {
+                if (!std.mem.eql(u8, variant.name, field.name)) continue;
+                const member_ty = variant.payload.?;
+                const union_ptr = try self.reg(try self.makePointer(payload_ty, false));
+                try self.emit(.{ .field_ptr = .{
+                    .dst = union_ptr,
+                    .base = dest,
+                    .struct_ty = value_struct,
+                    .field = 1,
+                    .bitfield = null,
+                } });
+                const member_ptr = try self.reg(try self.makePointer(member_ty, false));
+                try self.emit(.{ .field_ptr = .{
+                    .dst = member_ptr,
+                    .base = .{ .reg = union_ptr },
+                    .struct_ty = payload_union,
+                    .field = @intCast(index),
+                    .bitfield = null,
+                } });
+                if (member_ty.isAggregate()) {
+                    try self.lowerAggregateInto(.{ .reg = member_ptr }, member_ty, call.args[0]);
+                } else {
+                    const value = try self.lowerExpr(call.args[0]);
+                    try self.emitValueStore(.{ .ptr = .{ .reg = member_ptr }, .value = value, .ty = member_ty });
+                }
+                break;
+            }
+        }
+
+        const loaded = try self.reg(value_ty);
+        try self.emit(.{ .load = .{ .dst = loaded, .ptr = dest, .ty = value_ty } });
+        return .{ .reg = loaded };
+    }
+
     fn lowerAggregateInto(self: *Lowering, dest: ir.Value, ty: *types.Type, expr: *ast.Expr) Error!void {
         switch (expr.kind) {
             .struct_init => |initializer| {
@@ -2546,7 +2740,7 @@ fn sizeInBytes(ty: *types.Type) ?usize {
         .float => |bits| @intCast(bits / 8),
         .pointer => 8,
         .slice => 16,
-        .enum_type => |info| sizeInBytes(info.backing),
+        .enum_type => |info| sizeInBytes(info.value_ty orelse info.backing),
 
         // A struct/union/array is laid out in exactly one place — the semantic
         // analyzer's guess, which the classifier and the ABI read too — so the
@@ -3419,7 +3613,9 @@ pub const Emitter = struct {
             }),
             .slice => "%kyn.slice",
             .struct_type => |info| try std.fmt.allocPrint(self.allocator, "%struct.{s}", .{structLlvmName(info)}),
-            .enum_type => |info| try self.typeString(info.backing),
+            // A tagged union's value is `{ tag, payload }`, so it takes the struct
+            // path; a plain enum is its backing integer, unchanged.
+            .enum_type => |info| try self.typeString(info.value_ty orelse info.backing),
             .fn_type, .fn_ptr => "ptr",
             .comptime_int => "i64",
             .comptime_float => "double",

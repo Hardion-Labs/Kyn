@@ -177,6 +177,11 @@ pub const StructInfo = struct {
 pub const Variant = struct {
     name: []const u8,
     value: i128,
+    /// The type this variant carries, or null for a plain variant. A non-null
+    /// payload makes the enum a tagged union whose value is a tag plus a union of
+    /// every payload -- the representation measured against clang for
+    /// `struct { T tag; union { ... } payload; }`.
+    payload: ?*Type = null,
 };
 
 pub const EnumInfo = struct {
@@ -186,6 +191,21 @@ pub const EnumInfo = struct {
     backing: *Type,
     variants: []Variant = &.{},
     complete: bool = false,
+    /// True when at least one variant carries a payload, which makes the value a
+    /// tag plus a union rather than a bare integer. Recorded once at resolution
+    /// so the layout rule is decided in one place and every consumer -- emitter,
+    /// C ABI classifier, `==` rule -- reads the same flag.
+    is_tagged: bool = false,
+    /// The union of the payloads, laid out as the largest member's size and
+    /// alignment. Null unless `is_tagged`; a tagged union with no payload at all
+    /// still gets one, with no members and therefore size and alignment 0.
+    payload_union: ?*StructInfo = null,
+    /// The emitted value's type: a struct of exactly two members, tag then
+    /// payload -- `{0}` the backing integer, `{1}` the payload union. Synthesised
+    /// once at resolution so that every consumer (type spelling, GEP, the C ABI
+    /// classifier, `sizeInBytes`, `aggregateLayoutGuess`) reuses the struct paths
+    /// instead of each learning a second representation. Null unless `is_tagged`.
+    value_ty: ?*Type = null,
 };
 
 pub const FnInfo = struct {
@@ -297,6 +317,10 @@ pub const Type = union(enum) {
     pub fn isAggregate(self: *const Type) bool {
         return switch (self.*) {
             .struct_type, .array, .slice => true,
+            // A tagged union's value is `{ tag, payload }`, so it crosses the
+            // boundary as an aggregate and must be classified like one. A plain
+            // enum is a bare integer and stays a scalar.
+            .enum_type => |info| info.value_ty != null,
             else => false,
         };
     }

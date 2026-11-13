@@ -213,7 +213,7 @@ Kyn v0.1 deliberately implements a small, verified core. The following are **ava
 | 🟡 Relative-path imports | Aliases, module namespaces and `private` supported; packages/re-exports pending |
 | ✅ Slices (`[]T`, `[]const T`) | `&array as []T`, `slice[a..b]`, `.len`, runtime bounds |
 | ❌ Generics or traits | Planned |
-| ✅ `match` over integers, `bool` and enums, with an exhaustive arm list | Implemented |
+| ✅ `match` over integers, `bool`, enums and tagged unions, with an exhaustive arm list | Implemented |
 | ❌ `defer`, `for`, closures or exceptions | Planned |
 | ✅ Variadic `extern` and `export` functions | C default promotions out; context-typed `va_arg()` in |
 | ✅ Unions and packed structs | Overlapping members, no tag; `packed` removes padding and forces the memory class at the C ABI |

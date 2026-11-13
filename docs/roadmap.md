@@ -135,8 +135,16 @@ is selected. Milestones below are directions, not release promises.
 
 ## Next direction
 
+- **Tagged unions are implemented.** A variant may carry a payload (`Circle(f64)`),
+  which makes the value `{ tag, payload }` — measured against clang at 16/8 for
+  `Circle(f64) | Rect(i32)` with the payload at offset 8. `match` binds the payload
+  in an arm (`Shape.Circle(r) => ...`), and the binding is a copy, so an arm may
+  keep it after the match. The discriminant is assigned rather than declared
+  (`E0507`) because it is what the tag holds. At the boundary the value is the
+  struct it is and travels as `{ i32, i64 }`, pinned by `abi/cabi_tagged_union` in
+  both directions.
 - **`match` is implemented** over integers, `bool` and enums, and is the base a
-  tagged union will extend. It lowers to a chain of equality branches on a value
+  tagged union extends. It lowers to a chain of equality branches on a value
   evaluated once, which is the same `icmp eq` that `==` emits. The arm list must
   be exhaustive (`E0495`, `E0496`). A tagged union is the natural next step: it
   needs a payload-carrying enum shape plus a way to bind that payload in an arm,

@@ -1,0 +1,65 @@
+// A tagged union crosses the C ABI as the struct it is: `{ tag, union of payloads }`.
+// Measured against clang: 16 bytes, alignment 8, and it travels as `{ i32, i64 }`
+// -- tag in the first INTEGER register, the payload bitcast into the second.
+enum Shape {
+    Circle(f64),
+    Rect(i32),
+    Empty,
+}
+
+export fn kyn_make_circle(r: f64) Shape { return Shape.Circle(r); }
+export fn kyn_make_rect(w: i32) Shape { return Shape.Rect(w); }
+export fn kyn_make_empty() Shape { return Shape.Empty(); }
+
+// Reads the tag and the payload back out, so a value that arrived intact and one
+// that was mis-transported are distinguishable.
+export fn kyn_tag_of(s: Shape) i32 {
+    match (s) {
+        Shape.Circle(r) => { return 1; },
+        Shape.Rect(w) => { return 2; },
+        _ => { return 3; },
+    }
+}
+
+export fn kyn_payload_of(s: Shape) f64 {
+    match (s) {
+        Shape.Circle(r) => { return r; },
+        Shape.Rect(w) => { return w as f64; },
+        _ => { return -1.0; },
+    }
+}
+
+// C calls in: the struct it builds is read by a match, and the value Kyn builds
+// is read back by C.
+extern fn c_tag_of(s: Shape) i32;
+extern fn c_payload_of(s: Shape) f64;
+extern fn c_make_circle(r: f64) Shape;
+extern fn c_make_rect(w: i32) Shape;
+extern fn report() i32;
+
+fn main() i32 {
+    var score: i32 = 0;
+
+    // Kyn -> C: the tag and the payload both survive the boundary.
+    var c: Shape = kyn_make_circle(2.5);
+    if (c_tag_of(c) == 1) { score += 1; }
+    if (c_payload_of(c) == 2.5) { score += 1; }
+
+    // C -> Kyn: a struct C built is read by a match here.
+    var r: Shape = c_make_circle(3.25);
+    match (r) {
+        Shape.Circle(rr) => { if (rr == 3.25) { score += 1; } },
+        _ => { return 90; },
+    }
+    var w: Shape = c_make_rect(7);
+    if (kyn_payload_of(w) == 7.0) { score += 2; }
+
+    // The payload-less variant keeps the tag C assigns it.
+    var e: Shape = kyn_make_empty();
+    if (c_tag_of(e) == 3) { score += 2; }
+
+    // The measured size and alignment are pinned by the C side, so a change to
+    // either shows up here rather than in a silent ABI disagreement.
+    var rep: i32 = report();
+    return score * 10 + rep;
+}

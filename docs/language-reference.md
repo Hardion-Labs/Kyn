@@ -558,8 +558,48 @@ enum Color: u8 {
 - An enum is a distinct type; it does not implicitly convert to or from its
   backing integer. Use `as`.
 - Values must fit the backing type (`E0408`).
+- A variant may carry a payload (`Circle(f64)`), which makes the enum a tagged
+  union; see §3.11.
 
-### 3.11 `match`
+### 3.11 Tagged unions
+
+A variant may carry a payload, which turns the enum into a **tagged union**:
+
+```kyn
+enum Shape {
+    Circle(f64),
+    Rect(i32),
+    Empty,
+}
+
+var s: Shape = Shape.Circle(1.5);
+match (s) {
+    Shape.Circle(r) => { return r as i32; },
+    Shape.Rect(w)   => { return w; },
+    _               => { return 0; },
+}
+```
+
+- The value is a **tag plus a union of the payloads**: `{ tag, payload }`, laid out
+  as `struct { T tag; union { ... } payload; }`. Measured against clang for
+  `Circle(f64) | Rect(i32)`: 16 bytes, alignment 8, payload at offset 8. The tag is
+  the variant's 0-based index in declaration order.
+- A tagged union's discriminant is **assigned, never declared**: writing
+  `Circle(f64) = 4` is `E0507`, because the tag is what `match` switches on and two
+  variants sharing a value could not be told apart.
+- Construction is `Shape.Circle(1.5)`. A payload-less variant is built with no
+  argument, `Shape.Empty()`. The wrong count or a payload of the wrong type is
+  `E0509`.
+- An arm `Shape.Circle(r)` matches the tag and binds the payload to `r`, typed from
+  the variant. The binding is a **copy**, so the arm may keep or modify it freely
+  and the matched value is unaffected. Binding a payload-less variant is `E0510`.
+- The payload's size and alignment follow the union rule, so an aggregate payload
+  makes the value as large as that member; a payload with no known size is `E0508`.
+- At the C ABI boundary the value is the struct it is: measured, `{ int tag; union
+  { double; int; } }` is 16/8 and travels as `{ i32, i64 }` — the tag in the first
+  INTEGER register and the payload bitcast into the second.
+
+### 3.12 `match`
 
 ```kyn
 match (color) {
@@ -589,7 +629,7 @@ match (color) {
 - An exhaustive match whose arms all return terminates its function, so it can be
   the last statement of a non-`void` function.
 
-### 3.12 Globals
+### 3.13 Globals
 
 ```kyn
 const GREETING: *const u8 = "Kyn";

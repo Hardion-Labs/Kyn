@@ -1,0 +1,7 @@
+// A payload-less variant has nothing to bind, so naming a binding is an error
+// rather than a silently uninitialized local.
+enum Shape { Circle(f64), Empty }
+fn main() i32 {
+    var s: Shape = Shape.Empty();
+    match (s) { Shape.Empty(x) => { return 1; }, _ => { return 2; } }
+}

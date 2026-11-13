@@ -89,8 +89,20 @@ pub const Analyzer = struct {
                 // the flow analysis conservative rather than wrong.
                 try self.checkExpr(match_stmt.value);
                 for (match_stmt.arms) |arm| {
-                    if (arm.pattern) |pattern| try self.checkExpr(pattern);
+                    // A bound pattern is a variant name plus a binding, not an
+                    // expression: `sema` already resolved it and its payload, so
+                    // re-checking it here would report the construction-only rule
+                    // against a pattern that is not a construction.
+                    if (arm.binding == null) {
+                        if (arm.pattern) |pattern| try self.checkExpr(pattern);
+                    }
+                    // A payload binding is written by the match itself before the
+                    // arm runs, so it starts initialized -- and only for its own
+                    // arm, which is why the state is saved and restored per arm.
+                    const saved = if (arm.binding) |binding| if (binding.sym) |sym| sym.id else null else null;
+                    if (saved) |id| try self.state.put(id, true);
                     try self.checkBlock(arm.body);
+                    if (saved) |id| self.state.put(id, false) catch {};
                 }
             },
             .return_stmt => |ret_stmt| {
