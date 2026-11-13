@@ -553,15 +553,16 @@ pub const Lowering = struct {
         rhs: ir.Value,
         rhs_ty: *types.Type,
     ) Error!void {
-        if (!self.checks.shifts or !lhs_ty.isInteger() or !rhs_ty.isInteger()) return;
+        const lhs_info = loweredIntInfo(lhs_ty) orelse return;
+        const rhs_info = loweredIntInfo(rhs_ty) orelse return;
+        if (!self.checks.shifts) return;
         const i128_ty = try self.i128Type();
         const bool_ty = try self.booleanType();
-        const bits: i128 = @intCast(lhs_ty.intInfo().bits);
+        const bits: i128 = @intCast(lhs_info.bits);
 
         var normalized = rhs;
-        if (rhs_ty.* != .int or rhs_ty.int.bits != 128) {
-            const signed = rhs_ty.intInfo().signed;
-            const kind: ir.CastKind = if (signed) .sext else .zext;
+        if (rhs_info.bits != 128) {
+            const kind: ir.CastKind = if (rhs_info.signed) .sext else .zext;
             const dst = try self.reg(i128_ty);
             try self.emit(.{ .cast = .{ .dst = dst, .kind = kind, .from = rhs_ty, .to = i128_ty, .value = rhs } });
             normalized = .{ .reg = dst };
@@ -569,7 +570,7 @@ pub const Lowering = struct {
 
         var cond: u32 = undefined;
         const limit: ir.Value = .{ .int = bits };
-        if (rhs_ty.intInfo().signed) {
+        if (rhs_info.signed) {
             const negative = try self.reg(bool_ty);
             try self.emit(.{ .icmp = .{ .dst = negative, .op = .lt, .ty = i128_ty, .lhs = normalized, .rhs = .{ .int = 0 } } });
             const too_large = try self.reg(bool_ty);
@@ -2125,6 +2126,23 @@ fn signedInt(ty: *types.Type) bool {
     };
 }
 
+/// The width and signedness an integer is *lowered* with. A `comptime_int`
+/// carries neither in the type: it is an unfolded constant. At lowering time it
+/// is a signed 64-bit value — that is what `typeString` names it — so the
+/// overflow and shift checks have to use those numbers. Reading `intInfo()`
+/// directly yields `bits = 0, signed = false`, which made `1 - 2 + 3` emit an
+/// unsigned `usub` that traps on the negative result, and made a shift by a
+/// constant check its amount against zero and always trap.
+fn loweredIntInfo(ty: *types.Type) ?types.IntInfo {
+    return switch (ty.*) {
+        .comptime_int => .{ .bits = 64, .signed = true },
+        .int => |info| info,
+        .char => .{ .bits = 32, .signed = false },
+        .enum_type => |info| loweredIntInfo(info.backing),
+        else => null,
+    };
+}
+
 fn castKind(from: *types.Type, to: *types.Type) ?ir.CastKind {
     if (to.* == .bool) {
         if (from.isInteger() or from.isPointer()) return .int_to_bool;
@@ -2398,7 +2416,7 @@ pub const Emitter = struct {
         switch (inst) {
             .checked_binary => |checked| {
                 const type_name = try self.typeString(checked.ty);
-                const signed = checked.ty.isInteger() and checked.ty.intInfo().signed;
+                const signed = if (loweredIntInfo(checked.ty)) |info| info.signed else false;
                 const base: []const u8 = switch (checked.op) {
                     .add => "add",
                     .sub => "sub",
@@ -3221,4 +3239,84 @@ test "a constant cast folds into the destination category" {
     // fractional part is gone rather than surviving to the outer cast: the
     // chained constant holds 3.0, never 3.9's bit pattern.
     try testing.expect(std.mem.indexOf(u8, ll, "constant double 0x400F333333333333") == null);
+}
+
+test "a folded constant uses the signedness it is lowered with" {
+    const lexer = @import("../lexer.zig");
+    const parser = @import("../parser.zig");
+    const source = @import("../source.zig");
+    const analyzer_mod = @import("../analyzer.zig");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A `comptime_int` has no width or sign in the type system, but at lowering
+    // time it is a signed 64-bit value. Reading `intInfo()` directly yields
+    // `bits = 0, signed = false`, which made every folded `-` emit an unsigned
+    // `usub` — trapping on any negative intermediate — and made a shift by a
+    // constant compare its amount against `0`, so it always trapped.
+    const text =
+        \\fn main() i32 {
+        \\    let a: i32 = 1 - 2 + 3;
+        \\    let b: i32 = 3 | 1 << 2;
+        \\    return a + b;
+        \\}
+    ;
+    var src = try source.Source.init(a, "test.kyn", text);
+    var reporter = diagnostics.Reporter.init(a, &src);
+    var prims = try types.Primitives.init(a);
+    var lx = lexer.Lexer.init(a, &src, &reporter);
+    const tokens = try lx.tokenize();
+    var p = parser.Parser.init(a, tokens, &reporter);
+    const program = try p.parse();
+    var sema = sema_mod.Sema.init(a, &reporter, &prims);
+    try sema.analyze(program);
+    var analyzer_pass = analyzer_mod.Analyzer.init(a, &reporter);
+    try analyzer_pass.analyze(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var module = ir.Module.init(a);
+    var lowering = Lowering.init(a, &reporter, &module, .all);
+    try lowering.lower(program);
+    try testing.expect(!reporter.hasErrors());
+
+    var output: std.Io.Writer.Allocating = .init(a);
+    var emitter = Emitter.init(a, &module);
+    try emitter.emit(&output.writer);
+    const ll = try output.toOwnedSlice();
+
+    // The constant arithmetic is signed, so a negative intermediate is a
+    // defined result rather than an unsigned overflow.
+    try testing.expect(std.mem.indexOf(u8, ll, "ssub.with.overflow.i64(i64 1, i64 2)") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, "usub.with.overflow.i64(i64 1, i64 2)") == null);
+    // And the shift amount is checked against the operand width, not against
+    // zero: a bound of `2` for a 64-bit value is legal.
+    try testing.expect(std.mem.indexOf(u8, ll, "icmp sge i128 ") != null);
+    try testing.expect(std.mem.indexOf(u8, ll, ", 64\n") != null);
+}
+
+test "the lowered integer info names the width a constant is emitted with" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prims = try types.Primitives.init(a);
+
+    // The helper is the single place that answers "how wide and how signed is
+    // this at lowering time", so the answer for a folded constant is pinned.
+    const folded = loweredIntInfo(prims.comptime_int).?;
+    try testing.expectEqual(@as(u16, 64), folded.bits);
+    try testing.expect(folded.signed);
+    // A named type reports its own answer, and `char` stays unsigned.
+    const i8_info = loweredIntInfo(prims.i8).?;
+    try testing.expectEqual(@as(u16, 8), i8_info.bits);
+    try testing.expect(i8_info.signed);
+    const u64_info = loweredIntInfo(prims.u64).?;
+    try testing.expectEqual(@as(u16, 64), u64_info.bits);
+    try testing.expect(!u64_info.signed);
+    const char_info = loweredIntInfo(prims.char).?;
+    try testing.expectEqual(@as(u16, 32), char_info.bits);
+    try testing.expect(!char_info.signed);
+    // A non-integer has no such answer.
+    try testing.expect(loweredIntInfo(prims.f64) == null);
 }

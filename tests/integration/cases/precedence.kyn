@@ -1,0 +1,54 @@
+// Every expression below is written so that a wrong grouping — or a wrong
+// associativity, or an unsigned where the language says signed — changes the
+// answer. The table in `language-reference.md` §5.1 is what each line asserts.
+//
+// The operands come from a function call so the analyzer does not fold them:
+// a warning about a constant condition would say the test is vacuous, and the
+// folded path is covered separately by the `comptime_int` cases below.
+fn seed() i32 { return 1; }
+fn two() i32 { return 2; }
+
+fn main() i32 {
+    let one: i32 = seed();
+    let two_v: i32 = two();
+    let three: i32 = one + two_v;
+    let ten: i32 = three * 3 + 1;
+    let twenty: i32 = one * 20;
+
+    // `*` binds tighter than `+`.
+    if (one + two_v * three != 7) { return 1; }
+    if (two_v * three + one != 7) { return 2; }
+    // Left associativity at one level.
+    if (ten - three - two_v != 5) { return 3; }
+    if (twenty / two_v * 5 != 50) { return 4; }
+    // A shift amount is checked against the operand width, not against zero.
+    let amount: i32 = 4;
+    if (one << amount != 16) { return 5; }
+
+    // The folded forms: a `comptime_int` has no width or sign, and lowering it
+    // as unsigned made `1 - 2 + 3` trap on the negative intermediate while the
+    // same expression over named variables was fine. Each side is kept out of
+    // the analyzer's constant folder by one variable operand, so the failure is
+    // a trap or a wrong value rather than a compile-time warning.
+    if (1 - 2 + three != 2) { return 6; }
+    if (0 - 2 + three != 1) { return 7; }
+    let shift_base: i32 = one;
+    if (shift_base + 2 << 3 != 24) { return 8; }
+    if (shift_base << 2 + 3 != 32) { return 9; }
+    if (shift_base << 2 >> 1 != 2) { return 10; }
+
+    // `&` binds tighter than `^`, which binds tighter than `|`, and `<<` binds
+    // tighter than `|`. The result goes through a variable because a bare
+    // `a | b == c` parses as `a | (b == c)`, which is a type error by design.
+    let bitwise: i32 = 1 | 2 & 3;
+    if (bitwise != 3) { return 11; }
+    let xor_or: i32 = 1 ^ 2 | 4;
+    if (xor_or != 7) { return 12; }
+    let shift_or: i32 = 3 | 1 << 2;
+    if (shift_or != 7) { return 13; }
+
+    // The same arithmetic over named variables, which took the correct signed
+    // path even before the folded one did.
+    if (one - two_v + three != 2) { return 14; }
+    return 42;
+}

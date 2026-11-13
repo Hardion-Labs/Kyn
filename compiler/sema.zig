@@ -2461,6 +2461,26 @@ fn expectSemanticError(text: []const u8, code: []const u8) !void {
     return error.ExpectedDiagnostic;
 }
 
+/// Asserts the program fails with exactly `code` and nothing else: a duplicate
+/// report of the same condition from an earlier phase is invisible to
+/// `expectSemanticError`, which returns on the first match.
+fn expectOnlyError(text: []const u8, code: []const u8) !void {
+    var ctx: SemTest = undefined;
+    try ctx.init(text);
+    defer ctx.deinit();
+    try ctx.run();
+    if (!ctx.reporter.hasErrors()) return error.ExpectedDiagnostic;
+    var seen: usize = 0;
+    for (ctx.reporter.list.items) |diag| {
+        if (!std.mem.eql(u8, diag.code, code)) {
+            std.debug.print("unexpected {s}: {s}\n", .{ diag.code, diag.message });
+            return error.UnexpectedDiagnostic;
+        }
+        seen += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), seen);
+}
+
 fn expectClean(text: []const u8) !void {
     var ctx: SemTest = undefined;
     try ctx.init(text);
@@ -3612,4 +3632,58 @@ test "slice ptr, array len, lvalue and address-of rules" {
         \\    return (Sign.Neg as i32) + (Sign.Pos as i32);
         \\}
     );
+}
+
+test "a local needs a type, an initializer, or both" {
+    // Both forms are complete: a declared type with no value (the slot is
+    // uninitialized, and reading it is the analyzer's `E0501`), and an
+    // initializer with no declared type (the literal materializes).
+    try expectClean(
+        \\fn main() i32 {
+        \\    var slot: i32;
+        \\    slot = 7;
+        \\    let inferred: i64 = 5;
+        \\    return slot + inferred as i32;
+        \\}
+    );
+
+    // Neither is `E0420`, and it is the only diagnostic. The parser used to
+    // report the same condition as `E0216` before the analyzer ever ran, which
+    // both made `E0420` unreachable and gave one rule two codes; asserting the
+    // absence of the other code is what keeps that from coming back.
+    try expectOnlyError(
+        \\fn main() i32 {
+        \\    let empty;
+        \\    return 0;
+        \\}
+    , "E0420");
+    try expectOnlyError(
+        \\fn main() i32 {
+        \\    var empty;
+        \\    return 0;
+        \\}
+    , "E0420");
+}
+
+test "a declaration is visible after itself and not before" {
+    // The scope begins after the declaration, so a later declaration is
+    // reachable and an earlier use of it is not.
+    try expectClean(
+        \\fn main() i32 {
+        \\    let value: i32 = 4;
+        \\    return value;
+        \\}
+    );
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    return later;
+        \\}
+    , "E0427");
+    try expectSemanticError(
+        \\fn main() i32 {
+        \\    let shadowed: i32 = 1;
+        \\    let shadowed: i32 = 2;
+        \\    return shadowed;
+        \\}
+    , "E0421");
 }
