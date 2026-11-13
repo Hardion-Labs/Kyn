@@ -3221,6 +3221,9 @@ assumed feature.
   ReleaseSafe (was 217: five new fixtures), 902 robustness cases, `zig fmt` clean,
   23 documentation links, **142** documented codes (was 139), versions
   `0.1.0-alpha.5`.
+- Git, final for this increment: `dad99f2` on `arena/bd943679-kyn`, pushed;
+  PR #61 → CI green → merged as **`fc3206c`**, and `main` re-validated in a fresh
+  clone of it (135/135 unit, 222/0 integration, fmt clean).
 - Next task: none of the four aggregate extensions remains unimplemented. The
   natural follow-ups are the ones the design lists as out of scope (§8): anonymous
   members, tagged unions, and taking `align(N)` into the ABI classifier so that an
