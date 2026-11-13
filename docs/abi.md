@@ -141,8 +141,11 @@ signature and there is no calling convention here that could receive an
 argument list of unknown shape, so a body is rejected with `E0474`, and so is a
 declaration with no fixed parameter at all (the same rule ISO C applies, and
 without one there would be nothing to anchor the call). `export` is likewise
-rejected, because an exported function is called *by* C and its inbound
-argument list would be unspecified.
+rejected today, because there is no way for a Kyn body to read the list yet.
+Receiving one is designed but not implemented: see
+[the callee-variadics design](design-callee-variadics.md), which specifies
+`export fn` with `...`, a context-typed `va_arg()` expression, implicit
+`va_start`/`va_end`, and the measured `x86_64` System V representation.
 
 ### Function pointers
 
