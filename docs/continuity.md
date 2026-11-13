@@ -3463,3 +3463,51 @@ The last item on the design's out-of-scope list that is a language feature. `mat
 - **Next task:** nothing on the old out-of-scope list remains. The nearest open
   items are `for` (reserved in the lexer, unparsed -- `E0221`), `defer`, closures
   and indirect-call support, all listed as planned in `README.md`.
+
+## §62 — `for` loops, and the documentation debt they exposed
+
+`for` had been a keyword the lexer reserved and the parser never accepted since
+the start: `for (...) { }` produced `E0221 expected an expression, found 'for'`.
+It was the largest remaining hole in the language's control flow.
+
+- **Shape.** C's: `for (init; cond; step) { body }`. The initializer may be a
+  local declaration or an expression, and is parsed by the same `parseLocalVar` a
+  statement uses, so there is no second declaration syntax.
+- **Every clause is optional.** `for (;;)` is an intentional infinite loop exited
+  only by `break`; an omitted condition means "always", spelled by leaving the
+  clause out rather than by a constant `bool` (the language has no truthiness).
+- **The counter is scoped to the whole statement** and gone afterwards -- the one
+  thing this form gives over `while`, so it is part of the form and pinned as
+  `E0427` by a fixture.
+- **`continue` runs the step.** The lowering gives the step its own block so
+  `continue` targets it; putting the increment at the tail of the body would
+  silently skip it, which turns a wrong answer into a non-terminating loop. The
+  value fixture covers exactly that case, because it is the only observable
+  difference between the two lowerings.
+- No new IR: the shape is `while`'s plus one block, reusing `break_stack`/
+  `continue_stack` unchanged.
+
+**Documentation debt found and paid.** The project rule is that no milestone is
+complete until implementation, tests and documentation agree, and three docs
+disagreed with the code -- in both directions:
+
+1. `grammar.ebnf` calls itself authoritative but had **no `match` production**,
+   three increments after `match` shipped. Added, with `for`.
+2. `language-reference.md` asserted "there is no `for`, `switch`, `match`" and
+   listed `match` as unsupported.
+3. `README.md` listed **indirect calls and first-class function values as
+   planned**. They work: a function value, a function-typed parameter and
+   returning a function value were each built and run before the row was changed.
+
+The lesson for the next increment: the continuity record is a *claim*, not
+evidence. The `for` work started from a five-line repro (`E0221`) and the README
+corrections came from running programs, not from reading the table.
+
+- **Gate:** unit **143/143** (was 141), integration **244/0** in Debug and
+  ReleaseSafe (was 240), robustness 902, `zig fmt` clean, 23 documentation links,
+  **150** documented codes (no new code was needed: the failures reuse `E0427`,
+  `E0463` and `E0221`), versions `0.1.0-alpha.5`.
+- Git: `3a13506` on `arena/d217181f-kyn`, pushed.
+- **Next task:** `defer` is the last item in the README's "planned" control-flow
+  row. Closures need an allocation and ownership story that does not exist yet, so
+  `defer` is the smaller coherent step.
