@@ -135,6 +135,13 @@ is selected. Milestones below are directions, not release promises.
 
 ## Next direction
 
+- Unions, bitfields and packed structs now have a **written design**
+  ([design-unions-bitfields-packed.md](design-unions-bitfields-packed.md)): the
+  layout and ABI of each were measured with the project toolchain before it was
+  written, `packed` forces the memory class, a union classifies as the struct of
+  its members, bitfield widths live in the type (`u3`) rather than in a colon
+  syntax, and `align(N)` is deliberately excluded. It is not implemented; the
+  plan and the C-compatible bitfield subset are in the document.
 - Decide whether to add explicit re-export syntax; current unaliased imports expose only the transitive closure of unaliased dependency edges.
 - First-class function values and indirect calls are implemented: `fn(P) R`
   names a signature, a function name decays to a value in value position, the

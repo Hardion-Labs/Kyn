@@ -538,7 +538,10 @@ executable locally; `--target` therefore mainly matters for `emit-obj` and
   supported by the selected target/classifier (including a struct whose only
   field is a slice and singleton `enum` members with 1-bit backings)
   (`E0473`);
-- unions, bitfields, packed structs and explicit alignment;
+- unions, bitfields, packed structs and explicit alignment — designed but not
+  implemented: see
+  [the aggregate-extensions design](design-unions-bitfields-packed.md), which
+  measures the layout and the ABI shape of each and orders the work;
 - calling conventions other than `x86_64` Linux System V;
 - linking against Kyn-specific runtime support (there is none yet).
 
