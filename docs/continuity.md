@@ -3281,6 +3281,10 @@ assumed feature.
 - **Gate:** unit **136/136** (was 135), integration **223/0** in Debug and
   ReleaseSafe (was 222), 902 robustness cases, `zig fmt` clean, 23 documentation
   links, 142 documented codes, versions `0.1.0-alpha.5`.
+- Git, final for this increment: `dd98f5f` (the change) + `755017d` (the IR
+  assertion of the `byval` annotation) on `arena/2b835aa0-kyn`, pushed; PR #63 →
+  CI green → merged as **`5286b6c`**, and `main` re-validated in a fresh clone of
+  it (136/136 unit, 224/0 integration, fmt clean).
 - Next task: the remaining items of design §8 — anonymous struct/union members and
   tagged unions. The ABI-classifier work this document listed as a follow-up is
   done.
