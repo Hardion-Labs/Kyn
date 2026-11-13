@@ -3407,3 +3407,56 @@ half.
 - **Next task: tagged unions** — a payload-carrying enum shape plus binding in an
   arm. `match` is in place; what is missing is the declaration form and the arm
   that names a payload. `for` remains reserved and unparsed.
+
+## §61 — tagged unions with payload binding
+
+The last item on the design's out-of-scope list that is a language feature. `match`
+(§60) was the prerequisite; this adds the payload half.
+
+- **Syntax.** A variant may carry a type: `Circle(f64)`. Construction is
+  `Shape.Circle(1.5)`; a payload-less variant is `Shape.Empty()`. An arm
+  `Shape.Circle(r) => { ... }` matches the tag and binds the payload to `r`.
+  The construction parses as a call over a field access, so no expression kind was
+  added; the binding is read off that same shape, so no pattern syntax was either.
+- **Measured before stated.** clang was asked for `struct { int32_t t; union
+  { double; int32_t; } p; }`: 16 bytes, alignment 8, payload at offset 8,
+  `{ i32, i64 }` at the boundary (tag INTEGER, payload bitcast into the second).
+  Those numbers are what the docs state, what the sema unit test pins, and what
+  the C fixture asserts (`Shape 16/8`).
+- **One representation.** The value is a synthesised `StructInfo` `{ tag, payload }`
+  created at resolution, so type spelling, GEP, `sizeInBytes`,
+  `aggregateLayoutGuess` and the C ABI classifier all reuse the struct paths. The
+  payload union is laid out by the same `placeFields` a named union uses. This is
+  why the whole feature added no second layout rule.
+- **Discriminant assigned, never declared** (`E0507`): it is what the tag holds, so
+  two variants sharing a value could not be distinguished. Construction checks
+  arity and type (`E0509`); `S.C` alone on a payload-carrying variant is `E0509`
+  too; binding a payload-less variant is `E0510`.
+- **The binding is a copy**, taken through the same `field_ptr` walk a construction
+  uses, so an arm may keep or modify it. The payload is only exposed by an arm,
+  which runs only when the tag matches -- the safety argument, in §2.9 of
+  `safety-model.md`.
+- **Two real bugs found and fixed at the root:**
+  1. A tagged enum crossed the C ABI as one struct register: `isAggregate` did not
+     include it, so the classifier took the scalar path and `(i32, i64)` arrived
+     as a single `%struct`. Fixed in `isAggregate` and `aggregateBoundaryClassFor`.
+  2. `S.C` without a call was accepted and produced a silently *zeroed* value.
+     Now `E0509`.
+- **Two diagnosis errors of mine, recorded.** (a) `abi/cabi_tagged_union` first
+  failed as `70` against an expected `90`; the weights I wrote summed to 7, not 9 --
+  the compiler was right. (b) `E0501`–`E0504` were already taken by the analyzer
+  (uninitialized read, constant bounds, division, shift); the new codes are
+  `E0507`–`E0510`, and the collision was caught by `check_diagnostic_docs.py`
+  reporting 146 instead of 150. Check the code space before claiming a number.
+- **Module aliases were broken twice** while wiring the construction, both times by
+  probing `field.base` through `checkExpr` ahead of the alias handling. The fix is
+  to probe the base's *symbol* via `lookupValue`, which has no side effect; the
+  `module_aliases`/`module_export_pair`/`module_extern_dedup` fixtures are what
+  caught it. Do not resolve an expression early to decide a semantic question.
+- **Gate:** unit **141/141** (was 139), integration **240/0** in Debug and
+  ReleaseSafe (was 233), robustness 902, `zig fmt` clean, 23 documentation links,
+  **150** documented codes (was 146), versions `0.1.0-alpha.5`.
+- Git: `3d20b11` on `arena/b605b6a4-kyn`, pushed.
+- **Next task:** nothing on the old out-of-scope list remains. The nearest open
+  items are `for` (reserved in the lexer, unparsed -- `E0221`), `defer`, closures
+  and indirect-call support, all listed as planned in `README.md`.
