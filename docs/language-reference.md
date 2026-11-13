@@ -393,7 +393,7 @@ let version: i32 = 1;
   operations on constants, casts, enum variants, `array.len` on fixed-size
   arrays, string literals, and struct or array initializers whose contents are
   also constant. Function calls, address-of, dereference and non-enum value
-  reads are rejected (`E0419`).
+  reads are rejected (`E0412`).
 - Globals are emitted as LLVM globals with explicit storage; no constructor or
   runtime initialization is generated. Aggregate constants are emitted in the
   same constant section.

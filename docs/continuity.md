@@ -20,8 +20,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§49):** folded constant integers now
-  lower with their real signedness, so literal `-` no longer traps where the
+- **Unreleased work on the current branch (§50):** the remaining documented
+  tables were swept against the real compiler — the slice half of the cast
+  table, the constant-expression rules, and the safety model's static checks
+  (`E0501`/`E0502`/`E0503`/`E0504`/`E0505`/`E0506`, `W0501`, `W0502`). All behave
+  as documented; the one defect was documentation: §3.5 named `E0419` where the
+  compiler emits `E0412`.
+- **Merged (`961ccbc` .. `5e0bdaa`, §49):** folded constant integers now lower
+  with their real signedness, so literal `-` no longer traps where the
   named-variable form works, and a shift by a constant no longer traps always;
   the duplicate `E0216`/`E0420` check is deduplicated in favour of the documented
   `E0420`. Both found by sweeping the documented tables in §5.1 and §4.1.
@@ -2568,3 +2574,83 @@ assumed feature.
   in `/tmp` and is not in the repo), so a future sweep rewrites it from the
   same idea: derive the oracle from the documented table and compare against
   real execution.
+
+## 50. Exhausting the documented tables: slices, constants, static checks (on `arena/785da054-kyn`)
+
+- Base: `main` at `5e0bdaa`; `v0.1.0-alpha.5` remains the published baseline.
+  §49 listed three remaining tables to sweep; this increment swept all three.
+  Unlike §48/§49 it found **no behavioural defect** — the finding is that the
+  documented contracts hold, plus one wrong diagnostic code in the docs.
+- **Slice half of the cast table (§5.7).** Every documented row was probed
+  through `emit-obj`: `*[N]T → []T`, `*[N]T → []const T`, `*const [N]T →
+  []const T`, `[]T → []T`, `[]T → []const T`, `[]const T → []const T` all
+  compile; `*const [N]T → []T`, `[]const T → []T`, element mismatches, the
+  reverse `[]T → *[N]T` and slice→integer all report `E0447`. Runtime behaviour
+  was checked too, not just compilation: a slice obtained from `*[4]i32` writes
+  back into the original array, keeps its length, reads correctly through the
+  const widening, and a `null` array pointer cast to a slice traps (132). A
+  `[0]i32` probe was rejected with `E0424` — zero-length arrays do not exist —
+  which is a correct rejection of my probe, not a defect.
+- **Constant-expression rules (§3.5).** Every documented constant form compiles
+  and evaluates correctly at runtime: literals, unary and binary folds, casts,
+  enum variants, `array.len`, string literals, struct and array initializers,
+  including nested aggregates and a `const` aggregate read into a mutable copy
+  (the copy is a value). Every documented rejection fires: `E0412` for a call,
+  address-of, dereference and non-enum value read in a global initializer, and
+  `E0413` for a missing initializer. Mutability matches the docs — `let`/`const`
+  globals reject assignment and field/element mutation with `E0442`, `var`
+  globals accept both, and `var` global state persists across calls. Crossed
+  the C boundary in both directions: C reads and writes an `export var`, and a
+  Kyn function observes the write; `export let` lands in read-only storage
+  (`R`) while `export var` lands in `D`.
+- **Static checks (safety-model §2).** `E0501` was swept rule by rule: a
+  declared-then-assigned local reads clean, a read before assignment diagnoses,
+  both arms of an `if`/`else` are required, a loop body is assumed to maybe not
+  run, function parameters count as initialized, and compound assignment both
+  reads and initializes (`x += 1` on an uninitialized `x` is `E0501`). `E0502`
+  (constant bounds, including a negative constant start), `E0503` (constant
+  division by zero), `E0504` (constant shift out of range), `E0505` (constant
+  overflow and unary negation), `E0506` (all five documented contexts plus the
+  array-pointer-to-slice cast), `W0501` (after `return`, `break` and
+  `continue`, with an empty statement skipped) and `W0502` (constant `if` and
+  `while` conditions) all behave exactly as documented. The `E0506` limit — a
+  `null` held in a variable is not proven — is documented as "from the
+  expression text" and was verified to be exactly that: the inline form is
+  rejected, the variable form compiles and traps at runtime.
+- **Defect found: one wrong diagnostic code in the docs.** §3.5 said a
+  non-constant global initializer is `E0419`; the compiler emits `E0412`, and
+  `E0419` is the code for a *local of type `void`*, which does fire correctly
+  for its own case. `diagnostics.md` already had both codes right, so only the
+  language reference was wrong. Corrected in the reference rather than changing
+  the compiler, because `E0412` is the more specific and already-documented code.
+- Files changed: `docs/language-reference.md` (the `E0419` → `E0412`
+  correction), `compiler/analyzer.zig` (three unit tests: the five documented
+  `E0506` contexts, the "not proven through a variable" limit, and one `W0501`
+  per terminator), docs (`CHANGELOG.md`, `roadmap.md`, `README.md`).
+- Validation from a clean cache: `zig build` OK; `zig build test` **109/109**
+  (106 → 109); integration **199/0** in Debug and ReleaseSafe (unchanged — this
+  increment added no fixture, because the integration suite already covers these
+  areas and a duplicate case would test the same path twice); `zig fmt --check`
+  clean; docs links 21; documented codes 130 (unchanged); robustness corpus 902
+  clean; versions consistent at `0.1.0-alpha.5`. Cross-compilation still emits
+  the right `e_machine` for x86_64 and aarch64 after the changes.
+- Negative controls, run rather than assumed: disabling the `W0501` emission
+  fails the new terminator test and the pre-existing unreachable-statement test
+  (107/109); disabling one `E0506` site fails the new context test and the
+  pre-existing null-dereference test. A false alarm of my own is worth
+  recording: a probe printed `E0501` but my `grep -m1` picked up an earlier
+  `W0502`, which briefly looked like a missing diagnostic — the check was there.
+- Limitations: this sweep, like §48/§49, compares observable behaviour, so a
+  check that fires for the wrong *reason* while producing the right code would
+  not be caught; the unit tests assert codes rather than spans or messages.
+  `E0506` remains text-based by design. No sanitizer gate exists in this repo.
+- Next task: the callee side of variadics (`va_list` + an exported variadic) or
+  the unions/bitfields/packed-structs decision — both need a written design
+  before implementation, and both are now the only substantial items left on the
+  roadmap. The documented tables have been swept: §5.1, §4.1, §5.7 (both halves),
+  §3.5 and safety-model §2. A future increment should write one of those designs
+  rather than look for another table.
+- Contract kept: no test was modified to pass; a probe that disagreed with the
+  docs was investigated and, where the compiler was right, the probe was
+  discarded (`let x = 5` → `i64`, `[0]i32`, the `grep -m1` false alarm), and
+  where the docs were wrong the docs were corrected (`E0412`).
