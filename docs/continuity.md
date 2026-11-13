@@ -20,7 +20,14 @@ this file if the codebase disagrees; reconcile any discrepancy immediately.
   + Clang/LLVM opaque-pointer IR (`ptr`). Tag and Release were published
   2026-11-09T23:05:28Z; the release-readiness gate passed 17/17 checks for
   that SHA before tagging, and main CI run `42717072114` was green.
-- **Unreleased work on the current branch (§53):** signed division at the widest
+- **Unreleased work on the current branch (§54):** the aggregate extensions now
+  have a **written design** (`docs/design-unions-bitfields-packed.md`) — unions,
+  bitfields and packed structs, not implemented. It measures the layout and ABI
+  shape of each, decides that bitfield widths live in the type (`u3`), that a
+  union carries no tag, and that `packed` means "no padding, align 1" while
+  `align(N)` stays out of the increment; it claims only a measured C-compatible
+  bitfield subset and pins the rest as a deterministic documented rule.
+- **Merged (`5b2e2e5` .. `e04501a`, §53):** signed division at the widest
   minimum. `i128` division no longer panics the compiler (`emitDivisionByZeroTrap`
   built `INT_MIN` as `-(1 << 127)`), and the most negative literal of a signed
   type folds to the value its type denotes instead of trapping as a checked
@@ -2928,3 +2935,68 @@ assumed feature.
   run can sweep it into a commit. Build to `/tmp` with `-o` instead.
 - Next task: the remaining undesigned candidate (unions/bitfields/packed structs)
   or a documented-table sweep; forwarding a variadic list stays out of scope.
+
+## 54. Design for unions, bitfields and packed structs (on `arena/6a7eb579-kyn`)
+
+- Base: `main` at `e04501a`; `v0.1.0-alpha.5` remains the published baseline.
+  §53 closed by naming the undesigned candidate, and §50's rule was that the next
+  substantial increment should **write a design rather than look for another
+  table**. This is that design: `docs/design-unions-bitfields-packed.md`, 12
+  sections, covering all three features in one document because they perturb the
+  same four places.
+- **This is a specification, not an implementation.** No compiler source file
+  changed. Unit and integration counts are therefore unchanged (122/122,
+  204/0); the only gate that moved is the documentation link count, 22 → 23.
+  The four diagnostic codes it allocates (`E0481`–`E0484`) are intentionally
+  **not** in `diagnostics.md`, because that file is checked against the compiler
+  sources and a code no program can produce does not belong there yet (the same
+  rule §51 followed).
+- **Measure first, then write.** Eight declarations were compiled and executed
+  with the project toolchain before any rule was written, and the measured
+  numbers are in the document: unions are `size/align` of their largest member
+  and classify exactly as the struct of their members (`union U{char;int;double}`
+  → `i64` in one register, `union Small{char}` → `i8`, `union Big{double[3]}` →
+  `sret`/`byval`); a packed struct is `size=5, align=1` and forces
+  `sret`/`byval` even when small; bitfield runs share a storage unit
+  (`{k:3;t:5}` → 4 bytes, `{a:20;b:20}` → 8, `{a:4;b:6}` over `unsigned char`
+  → 2); and the claimed C-compatible bitfield subset
+  (`{unsigned a:3; b:5; c:12}`) is one `i32` that passes as `i32`.
+- **The design was re-checked after being written, and that changed it twice.**
+  The first draft asserted that a non-bitfield member *ends* a bitfield run;
+  `struct Mix { unsigned a:3; char c; unsigned b:5; }` measures **4 bytes**, not
+  8, so the rule was replaced with the layered statement now in §4.1 and pinned
+  by six measured declarations. The `E0482` description was also corrected from
+  a "packed context" rule that does not exist to what the check can actually
+  see (a zero width, or a width with no storage unit). Both corrections are
+  recorded in the document's §11, not just here.
+- **Every claim about current behaviour was verified in this tree:**
+  `union U { … }` is `E0204`, `packed struct` is not a production, `a: u3` is
+  `E0422`, `E0481`–`E0484` are unused, `E0403` covers structs only, `IntInfo`
+  already carries an arbitrary `bits: u16` (so `u5` needs no new type
+  machinery), `memberBoundaryBits` already maps a sub-32-bit member to its
+  transport width, and `collectAggregateLeaves` already takes an explicit
+  `base_offset` (so unions need no new leaf walk).
+- **Three decisions worth carrying forward:** (1) bitfield width lives in the
+  **type** as `uN`/`iN`, not in C's colon syntax, because `IntInfo` already holds
+  a width and a colon would attach storage to a declaration that the type system
+  cannot see; (2) a union has **no tag** — a tag would be a sum type, which is a
+  separate unscheduled feature; (3) `packed` is one modifier meaning "no padding,
+  align 1", with **`align(N)` deliberately excluded** from this increment
+  because the two interact (the larger alignment wins) and deserve their own
+  rules and diagnostics.
+- **The only genuinely new algorithm** is the bitfield storage-unit rule. C
+  leaves bitfield layout implementation-defined, so the design does not claim C
+  compatibility in general: it specifies a total, deterministic rule, claims a
+  measured C-compatible subset (adjacent, ≤32 bits, one signedness), and puts
+  the rest behind a documented rule with a fixture that pins it. That is the
+  honest version of the feature and the reason the document says so twice.
+- Gate: `zig build` OK; 122/122 unit; 204/0 integration; `zig fmt --check` clean;
+  23 documentation links (22 → 23); 133 documented codes (unchanged);
+  versions `0.1.0-alpha.5`.
+- Next task: **implement this design in the order of its §10** — type model
+  (`is_union`/`is_packed`, layout branches), parser and resolver (`union`,
+  `packed`, `uN` widths, `E0481`–`E0484`), leaf walk and classifier (union
+  members at offset 0, bitfield runs as one storage-unit leaf, packed forced to
+  memory), backend (packed `<{ }>`, `byval`/`sret` alignment, mask-and-shift bit
+  access), then the three ABI fixtures and the documentation pass. Step 4 cannot
+  land without step 5, as with every ABI change here.

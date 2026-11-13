@@ -273,6 +273,7 @@ See [Diagnostic codes](docs/diagnostics.md) for the stable codes.
 | [🏗️ Compiler Architecture](docs/compiler-architecture.md) | Frontend, IR and backend |
 | [🛠️ Build System](docs/build-system.md) | `kyn-build` and incremental builds |
 | [📥 Callee Variadics](docs/design-callee-variadics.md) | Design of receiving a C variable argument list |
+| [🧩 Aggregate Extensions](docs/design-unions-bitfields-packed.md) | Design of unions, bitfields and packed structs |
 | [🔎 Diagnostics](docs/diagnostics.md) | Stable diagnostic codes |
 | [🚦 Release Checklist](docs/release-checklist.md) | Release readiness gate |
 | [🧭 Continuity Record](docs/continuity.md) | Validated technical state, contracts & next step |
