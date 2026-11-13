@@ -3078,6 +3078,11 @@ assumed feature.
   not implemented; a union has no tag, so reading a non-live member is undefined
   behaviour and is recorded in `safety-model.md` §3; the packed layout and its
   ABI are specified for `x86_64` Linux only, like the rest of the aggregate ABI.
+- Git, final for this increment: `a17047c` on `arena/4ba95935-kyn`, pushed before
+  the turn ended; PR #57 → CI green → merged as **`f690e98`**, and `main`
+  re-validated in a fresh clone of it (131/131 unit, 210/0 integration, fmt
+  clean, 23 documentation links, 135 documented codes, both union fixtures
+  present).
 - Next task: the bitfield half — `uN`/`iN` width types, the storage-unit run rule
   of design §4.1 (`E0482`/`E0483`), a bitfield run as one leaf of the storage
   unit's width in the classifier, and mask-and-shift access in the backend — then
